@@ -423,13 +423,13 @@ les worktrees, la santé et le nettoyage, le vault.
 |---|---|---|---|
 | **P0 Socle D:** ✅ | `git init` des sources sur D: ; Rust GNU + MinGW portable sur D: ; `cargo check` et tests ; variables d'env (§8). Voir §12. | S | — |
 | **P1 Nettoyage** ✅ | §9 ; corriger les 4 incohérences de l'instantané (§12) ; adapter `dev-aidp` (skills pro absents) pour qu'aidp se développe lui-même ; `setup-gamedev.ps1` côté skill (hook, agents, config) qui remplace `setup-perso.ps1` ; bascule d'`AIDP_SKILL_ROOT` vers `D:\AIDP\skill` ; build release installé dans `D:\AIDP\bin` ; `aidp doctor` profil gamedev ; `validate --all`, tests unitaires et d'intégration, `clippy -D warnings` verts | M | P0 |
-| **P2 Issues GitHub** | G1 à G7 ; migration des labels existants ; `routing.yaml` du jeu | M | P1 |
-| **P3 Flows et pipelines** | `game-code`, `game-art`, `game-map`, `game-doc` ; pipelines §4.2 ; ressource `unity-editor` ; le daemon remplace `/issue-queue` (gardée en secours) | L | P2 |
-| **F0 Front squelette** | §7.4 : projet Vite, client API, SSE, barre du haut, route `--ui-dir` du daemon | S | P1 |
-| **F1 Front MVP** | §7.4 : Board, Issue, Inbox (merge en un clic), Budget lecture seule ; routes daemon `runs/:id/files`, champs de `GET /api/tickets` | M | F0, P2 (en parallèle de P3) |
-| **P4 Unity dans la boucle** | Compile gate ; package PlaytestDriver dans PixelHood (sondes, commandes, scénarios, runner PlayMode, pont fichier, preuves) ; `unity-test` réécrit ; `map-test` | L | P3 |
-| **P5 Tokens** | T1 à T7 | M | P3 |
-| **F2 Front complet** | §7.4 : Preuves, pages Unity et Réglages, édition des plafonds et de la politique de modèles, galerie art ; routes `unity/*`, `settings/*`, `pixellab/balance` | M | F1, P4, P5 |
+| **P2 Issues GitHub** ✅ | G1 à G7 ; migration des labels existants ; `routing.yaml` du jeu | M | P1 |
+| **P3 Flows et pipelines** ✅ | `game-code`, `game-art`, `game-map`, `game-doc` ; pipelines §4.2 ; ressource `unity-editor` ; le daemon remplace `/issue-queue` (gardée en secours) | L | P2 |
+| **F0 Front squelette** ✅ | §7.4 : projet Vite, client API, SSE, barre du haut, route `--ui-dir` du daemon | S | P1 |
+| **F1 Front MVP** ✅ | §7.4 : Board, Issue, Inbox (merge en un clic), Budget lecture seule ; routes daemon `runs/:id/files`, champs de `GET /api/tickets` | M | F0, P2 (en parallèle de P3) |
+| **P4 Unity dans la boucle** ✅ (code ; à éprouver dans l'éditeur) | Compile gate ; package PlaytestDriver dans PixelHood (sondes, commandes, scénarios, runner PlayMode, pont fichier, preuves) ; `unity-test` réécrit ; `map-test` | L | P3 |
+| **P5 Tokens** ✅ (T1–T6) | T1 à T7 | M | P3 |
+| **F2 Front complet** ✅ | §7.4 : Preuves, pages Unity et Réglages, édition des plafonds et de la politique de modèles, galerie art ; routes `unity/*`, `settings/*`, `pixellab/balance` | M | F1, P4, P5 |
 | **P7 Options** | Deuxième lane Unity en worktree, enregistrement de repro depuis le front, feel-check Desktop, mode nuit | M | F2 |
 
 Chaque lot devient une issue du dépôt aidp, réalisée avec `dev-aidp` (Rust) ou `dev-studio` (front) :
@@ -554,3 +554,33 @@ Binaire installé : `D:\AIDP\bin\aidp.exe` (16,8 Mo, ancien : 24,9 Mo gardé en
 - `setup-gamedev.ps1` lancé le 2026-11-06 : `AIDP_SKILL_ROOT=D:\AIDP\skill`, doctor vert. Claude
   Code garde volontairement l'ancienne copie (`~/.claude/skills/ai-dev-pipeline-v7` et
   `~/.claude/commands`, 81 fichiers d'écart) : pas de jonction pour l'instant.
+
+### P2 à P6, F0 à F2 — réalisés du 2026-11-06 au 2026-11-07
+
+Travail parallèle par sous-agents (Sonnet, effort bas), un worktree et une cible de build par agent,
+contrats partagés `D:\AIDP\contracts\gamedev-contracts.md` (C1 à C11), fusions `--no-ff` dans
+`gamedev/p1-cleanup`.
+
+| Lot | Livré |
+|---|---|
+| **P2** | Sync `gh issue list` → `TODO/<repo>/GH-<n>.md`, un seul label d'état `aidp:*`, routage `flow:`, bloqueurs, ordre de dequeue, triage `CA-n`, actions `gh.issue_label` / `gh.issue_comment` / `gh.pr_ready`, `POST /api/tickets/sync`, template `issue-refine`. Labels de `Litybe/PixelHood` migrés (11 créés, 5 issues relabellisées). |
+| **P3** | Verrou `resource: unity-editor` (FIFO, `waiting_external`, `GET /api/unity/status`, `POST /api/unity/lock/release`) ; sorties `steps.<id>.outputs.*` depuis `result.json` ; gabarits `{{ }}` dans `with` ; pipelines `unity-implement|review|fix|test`, `art-produce|review|fix|import`, `map-produce|review|fix|test`, `doc-write|review|fix` ; recette `unity-verify.md` ; flows `game-code`, `game-art`, `game-map`, `game-doc` ; test e2e de `game-code` (provider `fake`, mock GitHub). |
+| **P4** | Package `com.aidp.playtest` (`Litybe/aidp-unity`) : clavier et manette virtuels, sondes et commandes par attribut, scénarios JSON, `CompileGate`, `PlaytestBridge`, `TestGate`, pont fichier sans polling, enregistreur de repro ; sondes et commandes PixelHood (PR Litybe/PixelHood#247, draft). |
+| **P5** | Coût par ticket, pied de rapport C7 dans les commentaires, plafonds par route avec gate « continuer ? », budget Pixellab, politique de modèles route × stage, mode nuit, seuil 7 j. |
+| **P6** | RAG et mémoire (`aidp-memory`, SQLite FTS5 + graphe graphify, sans embeddings) : CLI `aidp rag` / `aidp memory`, routes `/api/memory` et `/api/rag`, ingestion des `memory-proposals.json` en fin de run, réindexation après merge ; pipelines qui lisent `memory context` et proposent leurs leçons. Essai réel : 1 798 fichiers, 11 871 extraits, recherche ~85 ms. |
+| **F0–F2** | `aidp-studio` (`Litybe/aidp-studio`) servi par `aidp gateway serve --ui-dir` : Board, Issue (timeline, session, artefacts, preuves), Inbox, Unity, Budget, Réglages (`/api/settings/routing|budget|models`), Mémoire, Art. JS initial 102 Ko gzip, 0 polling, invalidations SSE regroupées, tas ~7 Mo. |
+
+**Vérifications** (aidp `895f19e`) : fmt, clippy `-D warnings`, 2 169 tests unitaires, 858/858
+d'intégration, doc-tests ; `validate --all` 27/27, `flow validate` des 5 flows ; front 111 tests ;
+jeu compilé en batchmode sans erreur. Binaire installé dans `D:\AIDP\bin` (`aidp-p1.exe` gardé),
+`setup-gamedev.ps1` et doctor verts. Daemon démarré sur le vault réel, **dispatcher en pause**,
+projet PixelHood enregistré, 3 issues synchronisées.
+
+**Publication** : dépôts privés `Litybe/aidp`, `Litybe/aidp-skill` (instantanés sans l'historique
+local, via `D:\AIDP\sync-github.sh`), `Litybe/aidp-studio`, `Litybe/aidp-unity`.
+
+**Restes** : P7 (deuxième lane Unity, repro depuis le front, mode nuit avancé) ; T7 ; serveur
+`aidp mcp memory` ; rattrapage d'ingestion des runs finis daemon éteint ; embeddings (reportés) ;
+`cargo hakari verify` ; sondes PlaytestDriver à éprouver dans l'éditeur ; label `aidp:need-fix` à
+supprimer à la main ; les issues sans `aidp:ready` (`blocked: not-ready`) tombent dans la colonne
+« Bloquées » du Board.
