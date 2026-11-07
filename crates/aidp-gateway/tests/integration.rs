@@ -10,6 +10,8 @@ mod flow_shutdown;
 mod game_code_flow;
 mod http_contract;
 mod http_hardening;
+mod manual_run_http;
+mod manual_run_native;
 mod mcp_configurations;
 mod mcp_providers;
 mod mcp_resume;

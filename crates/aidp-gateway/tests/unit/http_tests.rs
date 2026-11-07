@@ -1007,6 +1007,34 @@ fn overrides_replace_template_and_track_only_when_given() {
     assert_eq!(routed.track, Some(Track::Quick));
 }
 
+/// The `flow` field is read, and replaces the routed flow of the ticket.
+#[test]
+fn flow_override_replaces_the_routed_flow() {
+    let overrides = StartOverrides::from_body(&json!({ "flow": " game-code " })).unwrap();
+    assert_eq!(overrides.flow.as_deref(), Some("game-code"));
+    let mut routed = routed_ticket();
+    routed.flow = Some("delivery".to_string());
+    overrides.apply(&mut routed);
+    assert_eq!(routed.flow.as_deref(), Some("game-code"));
+}
+
+/// A template without a flow means "pipeline only": the routed flow is dropped.
+#[test]
+fn template_override_alone_drops_the_routed_flow() {
+    let mut routed = routed_ticket();
+    routed.flow = Some("delivery".to_string());
+    StartOverrides {
+        template: Some(DEV_AIDP_TEMPLATE.to_string()),
+        ..StartOverrides::default()
+    }
+    .apply(&mut routed);
+    assert_eq!(routed.flow, None);
+    let mut untouched = routed_ticket();
+    untouched.flow = Some("delivery".to_string());
+    StartOverrides::default().apply(&mut untouched);
+    assert_eq!(untouched.flow.as_deref(), Some("delivery"));
+}
+
 /// The listen address joins the IP and the port for both families.
 #[test]
 fn socket_addr_joins_ip_and_port() {
@@ -1248,4 +1276,53 @@ fn template_start_with_workflow_engine_keeps_the_session_path() {
     let engine = crate::models::constants::engine::ENGINE_WORKFLOW.to_string();
     let adjusted = crate::client::with_template_engine(json!({}), Some(engine.clone()));
     assert_eq!(adjusted[FIELD_ENGINE_KEY], Value::String(engine));
+}
+
+#[test]
+fn own_origins_for_wildcard_bind_list_loopback_and_detected_lan_addresses() {
+    let lan: IpAddr = "192.168.1.20".parse().unwrap();
+    let lan6: IpAddr = "fd00::20".parse().unwrap();
+    let origins = own_origins(3001, "0.0.0.0".parse().unwrap(), &[lan, lan6]);
+    assert_eq!(
+        origins,
+        vec![
+            "http://127.0.0.1:3001",
+            "http://localhost:3001",
+            "http://[::1]:3001",
+            "http://192.168.1.20:3001",
+            "http://[fd00::20]:3001",
+        ]
+    );
+}
+
+#[test]
+fn own_origins_for_a_specific_bind_ignore_detected_addresses() {
+    let lan: IpAddr = "192.168.1.20".parse().unwrap();
+    let other: IpAddr = "10.0.0.5".parse().unwrap();
+    let origins = own_origins(4000, lan, &[other]);
+    assert!(origins.contains(&"http://192.168.1.20:4000".to_string()));
+    assert!(!origins.iter().any(|o| o.contains("10.0.0.5")));
+    let loopback_only = own_origins(4000, "127.0.0.1".parse().unwrap(), &[other]);
+    assert_eq!(loopback_only.len(), 3);
+    assert!(!own_origins(4000, lan, &[])
+        .iter()
+        .any(|o| o == "*" || o == "null"));
+}
+
+#[test]
+fn a_non_loopback_bind_needs_a_long_ui_token() {
+    let any: IpAddr = "0.0.0.0".parse().unwrap();
+    let lan: IpAddr = "192.168.1.20".parse().unwrap();
+    let loopback: IpAddr = "127.0.0.1".parse().unwrap();
+    let long = "a".repeat(MIN_LAN_TOKEN_LEN);
+    let short = "a".repeat(MIN_LAN_TOKEN_LEN - 1);
+    assert!(check_lan_bind_token(loopback, "").is_ok());
+    assert!(check_lan_bind_token(any, &long).is_ok());
+    assert!(check_lan_bind_token(lan, &long).is_ok());
+    for bind in [any, lan] {
+        for token in ["", short.as_str()] {
+            let e = check_lan_bind_token(bind, token).unwrap_err().to_string();
+            assert!(e.contains("AIDP_UI_TOKEN"), "{e}");
+        }
+    }
 }

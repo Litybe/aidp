@@ -304,6 +304,11 @@ impl NativeRunManager {
         })
     }
 
+    /// Skill root holding the pipeline templates, when one is configured.
+    pub fn skill_root(&self) -> Option<&Path> {
+        self.deps.skill_root.as_deref()
+    }
+
     pub(super) fn deps(&self) -> &Arc<NativeDeps> {
         &self.deps
     }

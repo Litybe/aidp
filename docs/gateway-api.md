@@ -30,13 +30,15 @@ A supported contract does not imply every provider accepts every policy. Unsuppo
 
 | Route | Result |
 |---|---|
-| `GET /api/catalog/templates` | Parsed templates with `stageCount`, `inputCount`, and `source` |
+| `GET /api/catalog/templates` | Parsed templates with `stageCount`, `inputCount`, `source` and `inputs` (see below) |
 | `GET /api/catalog/templates/:id` | `{parsed, raw}` for one template |
 | `POST /api/catalog/templates` | Validate and create `{id, content}`; existing identifiers return `409` |
 | `PUT /api/catalog/templates/:id` | Validate and replace an existing template from `{content}` |
 | `POST /api/catalog/templates/validate` | `{valid, errors}` for `{content}`, without writing |
 | `GET /api/catalog/flows` | Parsed flow definitions |
 | `GET /api/catalog/flows/:id` | `{parsed, raw}` for one flow |
+
+Each template of `GET /api/catalog/templates` carries `inputs`, an object keyed by input name whose values are `{ required: bool, kind: string, values: string[], default: any|null, description: string }`; a front builds the launch form from it. `required: true` with no `default` must be given to start the template.
 
 Catalog routes use the configured skill root and the normal gateway access gate.
 Identifiers cannot escape that root. Template schema and dependency cycles are checked before writing.
@@ -241,8 +243,11 @@ and cache policy stay those of the original file, which must exist.
 
 The access gate of the next section runs first: a loopback caller gets the UI without a token, an
 off-loopback caller needs `AIDP_UI_TOKEN` like for any route. A browser sends an `Origin` header on
-`POST`, so a UI that mutates needs its own origin in `AIDP_ALLOWED_ORIGINS` (for example
-`http://127.0.0.1:3001`).
+`POST`. The daemon always accepts its own origin (`http://127.0.0.1:<port>`,
+`http://localhost:<port>`, `http://[::1]:<port>` for the port it listens on), so a UI served with
+`--ui-dir` needs no setting. In development, the Vite server (`npm run dev`, `http://127.0.0.1:5173`)
+proxies `/api` with `changeOrigin: false` and never rewrites `Origin`: start the daemon with
+`AIDP_ALLOWED_ORIGINS=http://127.0.0.1:5173`.
 
 ## Auth and read-only mode — Lot 5a
 
@@ -318,11 +323,30 @@ LOC-26 closes the browser-facing holes left by Lot 5a: cross-site request forger
 loopback exemption, a wildcard CORS origin, and tokens leaking through URLs.
 
 **Allowed origins.** `AIDP_ALLOWED_ORIGINS` (comma-separated, default empty) is carried by
-`HttpConfig.allowed_origins`.
+`HttpConfig.allowed_origins`. The daemon adds its own origins for the port it really listens on
+(`http://127.0.0.1:<port>`, `http://localhost:<port>`, `http://[::1]:<port>`); no wildcard, no
+`null`, no other port.
 
 - A `POST`, `PUT`, `PATCH` or `DELETE` whose `Origin` header is not in that list gets `403`, even
-  from loopback. An empty list rejects every explicit `Origin` on a mutating method.
+  from loopback. With an empty list only the daemon's own origins are accepted.
 - A request with no `Origin` header (the `aidp gateway` CLI, `curl`) is unaffected.
+
+**LAN access (phone on the local network).** `aidp gateway serve --bind 0.0.0.0 --ui-dir <build>`
+with `AIDP_UI_TOKEN` set.
+
+- The daemon refuses to start on a non-loopback `--bind` when `AIDP_UI_TOKEN` is empty or shorter
+  than 32 characters.
+- Its own origins also include `http://<ip>:<port>` for the bound address, or, when listening on
+  `0.0.0.0` / `::`, for the source address the OS picks for an outbound IPv4 and IPv6 route (the
+  machine's LAN address). Any other interface address must be listed in `AIDP_ALLOWED_ORIGINS`.
+- The static front (`--ui-dir`: `index.html`, `assets/*`, favicon, `GET`/`HEAD` outside `/api`) is
+  served without a token, off-loopback too: it holds no data. Every `/api/*` route still needs the
+  token off-loopback: `Authorization: Bearer <token>` or `X-Aidp-Token: <token>`, never the query
+  string.
+- `EventSource` cannot send headers: `POST /api/events/token` (authenticated) returns
+  `{ "token": "...", "expiresIn": <seconds> }`, a single-use token to pass as
+  `GET /api/events?es=<token>`.
+- Windows firewall: allow `aidp.exe` on the **Private** profile only, never Public or Domain.
 
 **CORS.** `Access-Control-Allow-Origin: *` is gone.
 
@@ -1160,6 +1184,18 @@ Shape: `{ flowKey, status, phase, stepId, iteration, startedAt }` where `status`
 `startedAt` the flow start (`null` when unknown).
 
 `POST /api/tickets/:key/start` also accepts `service`, `template` and `track`; `aidp ticket start --service|--template|--track` sends them and the daemon applies them before it queues the ticket. `aidp gateway serve --bind` takes an IP address (`IpAddr`), not a host name, and gateway commands default to `--format json-pretty`.
+
+#### Manual launch
+
+`POST /api/tickets/:key/start` body `{ service?, flow?, template?, track?, force? }`:
+
+- `flow`: id of a flow of `GET /api/catalog/flows`; it replaces the flow of the routing for this ticket (persisted on the note). An unknown id answers `400 { error: "unknown flow `x`", code }` and nothing changes.
+- `template`: pipeline only. Without `flow`, the ticket's routed flow is dropped and the pipeline runs alone.
+- `track`: `quick`, `standard` or `deep`; `service`: an existing vault service.
+- `force: true`: a manual launch. A `blocked` ticket (`not-ready`, `needs-refine`, `needs-routing`, ...) is queued anyway, and the dispatcher pause and a budget wait are waived for this one ticket. The slot ceiling and the one session per project rule still apply (`409 start refused: no-slot` / `project-busy`). Without `force`, a paused dispatcher answers `423`.
+- Success: `200` with the dispatcher tick report `{ launched: [key], skipped, slotsUsed, slotsMax, ... }` plus, when they exist, `flowKey` (the flow run driving the ticket, equal to the ticket key) and `runId` (the native run of a pipeline launch). The ticket becomes `in-progress` and its GitHub state label follows through the usual sync.
+
+`POST /api/runs/start` body `{ project?, template, inputs?, track? }` starts a native run of a pipeline with no ticket, as `POST /api/runs` does, and answers `202 { runId }` (no `sessionId`: a native run owns its stage sessions). `project` is an id or a name; when omitted the only registered project is used (`400` when several are registered, `404` when it is unknown). `inputs` is an object checked against the template's declared inputs (defaults applied, required and allowed values enforced); `track` is stored as the `track` input. `400 { error, code }` for a missing or unknown `template`, a fragment, `inputs` that is not an object, an invalid `track`, or a missing required input. The usual `run.started` event is published on `/api/events`.
 
 A manual transition (`/status`, `/cancel`) publishes `ticket.status` with `{key, status, from, to,
 reason, actor}`, like the dispatcher's own transitions; a ticket moved to `cancelled` then has

@@ -123,6 +123,8 @@ const ENV_HOOK_TOKEN: &str = "AIDP_HOOK_TOKEN";
 const ENV_UI_TOKEN: &str = "AIDP_UI_TOKEN";
 const ENV_READ_ONLY: &str = "AIDP_READ_ONLY";
 const ENV_MAX_BODY_BYTES: &str = "AIDP_MAX_BODY_BYTES";
+/// Minimum `AIDP_UI_TOKEN` length to listen off-loopback.
+const MIN_LAN_TOKEN_LEN: usize = 32;
 const ENV_ALLOWED_ORIGINS: &str = "AIDP_ALLOWED_ORIGINS";
 const QUERY_ES: &str = "es";
 const QUERY_SINCE: &str = "since";
@@ -155,6 +157,7 @@ const SERVICE_REQUIRED_MESSAGE: &str = "service is required";
 const SERVICE_FIELD: &str = "service";
 const TEMPLATE_FIELD: &str = "template";
 const TRACK_FIELD: &str = "track";
+const FLOW_FIELD: &str = "flow";
 const SUMMARY_REQUIRED_MESSAGE: &str = "summary is required";
 const STATUS_REQUIRED_MESSAGE: &str = "status is required";
 const PATH_REQUIRED_MESSAGE: &str = "path is required";
@@ -214,7 +217,8 @@ pub struct App {
     pub read_only: bool,
     pub max_body_bytes: usize,
     /// Exact `Origin` values allowed to send mutating requests and to receive CORS headers
-    /// (`AIDP_ALLOWED_ORIGINS`, comma-separated). Empty: every explicit Origin is refused.
+    /// (`AIDP_ALLOWED_ORIGINS`, comma-separated), plus the daemon's own loopback origins for
+    /// its listening port, added at startup. Any other explicit Origin is refused.
     pub allowed_origins: Vec<String>,
     /// Single-use tokens minted by `POST /api/events/token` for `EventSource`, which cannot
     /// send headers. Consumed on first use, valid [`SSE_TOKEN_TTL`].
@@ -670,7 +674,7 @@ pub fn serve_on_embedded(
 
 fn serve_on_with_auth(
     listener: TcpListener,
-    config: HttpConfig,
+    mut config: HttpConfig,
     require_loopback_token: bool,
     environment: crate::models::runtime_environment::RuntimeEnvironment,
 ) -> anyhow::Result<ServeHandle> {
@@ -679,6 +683,13 @@ fn serve_on_with_auth(
     let shutdown = Arc::new(crate::shutdown::Shutdown::new());
 
     let port = listener.local_addr()?.port();
+    let bound_ip = listener.local_addr()?.ip();
+    let lan_ips = if bound_ip.is_unspecified() {
+        detect_lan_ips()
+    } else {
+        Vec::new()
+    };
+    add_own_origins(&mut config.allowed_origins, port, bound_ip, &lan_ips);
     let gateway_url = format!(
         "{}:{port}",
         if listener.local_addr()?.is_ipv6() {
@@ -1022,6 +1033,7 @@ pub fn serve(
         warn!("AIDP_HOOK_TOKEN not set — inbound webhooks (/api/hooks/:id) are disabled");
     }
     let ui_token = std::env::var(ENV_UI_TOKEN).unwrap_or_default();
+    check_lan_bind_token(bind, &ui_token)?;
     if ui_token.is_empty() {
         warn!("AIDP_UI_TOKEN not set — off-loopback callers get 401 on every route");
     }
@@ -1048,7 +1060,9 @@ pub fn serve(
     let allowed_origins =
         parse_allowed_origins(&std::env::var(ENV_ALLOWED_ORIGINS).unwrap_or_default());
     if allowed_origins.is_empty() {
-        warn!("AIDP_ALLOWED_ORIGINS not set — mutating requests carrying an Origin get 403");
+        info!(
+            "AIDP_ALLOWED_ORIGINS not set — only the daemon's own origins (loopback, plus the LAN address when bound off-loopback; port {port}) may send mutating requests with an Origin; set it to also allow a dev server such as http://127.0.0.1:5173"
+        );
     }
     let vault_root = aidp_core::vault::resolve_global()
         .map(|vault| vault.root)
@@ -1107,6 +1121,69 @@ fn log_max_inflight_requests_override() {
             "{MAX_INFLIGHT_REQUESTS_ENV}={raw:?} is not a positive count — using the default {MAX_INFLIGHT_REQUESTS}"
         ),
     }
+}
+
+/// The daemon's own origins for the port it really listens on: the three loopback names, the
+/// bound address when it is a specific non-loopback one, and `detected` (the machine's LAN
+/// addresses) when it listens on `0.0.0.0` / `::`. A UI served by the daemon itself sends one
+/// of these on its `POST`s. No wildcard, no `null`, no other port.
+fn own_origins(port: u16, bound: IpAddr, detected: &[IpAddr]) -> Vec<String> {
+    let mut origins = vec![
+        format!("http://127.0.0.1:{port}"),
+        format!("http://localhost:{port}"),
+        format!("http://[::1]:{port}"),
+    ];
+    let lan: Vec<IpAddr> = if bound.is_unspecified() {
+        detected.to_vec()
+    } else {
+        vec![bound]
+    };
+    for ip in lan {
+        if ip.is_loopback() || ip.is_unspecified() || ip.is_multicast() {
+            continue;
+        }
+        origins.push(match ip {
+            IpAddr::V4(v4) => format!("http://{v4}:{port}"),
+            IpAddr::V6(v6) => format!("http://[{v6}]:{port}"),
+        });
+    }
+    origins
+}
+
+/// Adds the daemon's own origins to the configured list, without duplicates.
+fn add_own_origins(allowed: &mut Vec<String>, port: u16, bound: IpAddr, detected: &[IpAddr]) {
+    for origin in own_origins(port, bound, detected) {
+        if !allowed.contains(&origin) {
+            allowed.push(origin);
+        }
+    }
+}
+
+/// Local addresses used to reach the LAN: the source address the OS picks for an outbound
+/// IPv4 and IPv6 route (a connected UDP socket, nothing is sent). Other interfaces are
+/// covered by `AIDP_ALLOWED_ORIGINS`.
+fn detect_lan_ips() -> Vec<IpAddr> {
+    let probes: [(&str, &str); 2] = [("0.0.0.0:0", "192.0.2.1:9"), ("[::]:0", "[2001:db8::1]:9")];
+    probes
+        .iter()
+        .filter_map(|(local, remote)| {
+            let socket = std::net::UdpSocket::bind(local).ok()?;
+            socket.connect(remote).ok()?;
+            socket.local_addr().ok().map(|a| a.ip())
+        })
+        .filter(|ip| !ip.is_loopback() && !ip.is_unspecified())
+        .collect()
+}
+
+/// Refuses a non-loopback bind unless `AIDP_UI_TOKEN` is at least [`MIN_LAN_TOKEN_LEN`] long.
+fn check_lan_bind_token(bind: IpAddr, token: &str) -> anyhow::Result<()> {
+    if !bind.is_loopback() && token.chars().count() < MIN_LAN_TOKEN_LEN {
+        anyhow::bail!(
+            "refusing to listen on {bind}: a non-loopback --bind needs AIDP_UI_TOKEN of at least {MIN_LAN_TOKEN_LEN} characters (it is {} now)",
+            token.chars().count()
+        );
+    }
+    Ok(())
 }
 
 /// `AIDP_ALLOWED_ORIGINS` split on `,`, trimmed, empties dropped.
@@ -1356,7 +1433,14 @@ fn handle(app: Arc<App>, mut req: Request) {
             crate::models::constants::mcp_configuration::RUNTIME_SEGMENT,
             crate::models::constants::mcp_configuration::CONFIGURATIONS_SEGMENT,
         ];
-    let decision = if es_invalid
+    // The UI build holds no data: it is served without a token, off-loopback too. Every
+    // `/api/*` route keeps the gate below.
+    let static_public = matches!(method, Method::Get | Method::Head)
+        && app.static_ui.root().is_some()
+        && !crate::static_ui::is_api_path(&path);
+    let decision = if static_public {
+        Gate::Allow
+    } else if es_invalid
         || (confidential_configuration
             && (app.ui_token.is_empty() || !ct_eq(&given, &app.ui_token)))
     {
@@ -2261,6 +2345,7 @@ pub(crate) struct StartOverrides {
     pub service: Option<String>,
     pub template: Option<String>,
     pub track: Option<Track>,
+    pub flow: Option<String>,
 }
 
 impl StartOverrides {
@@ -2280,6 +2365,7 @@ impl StartOverrides {
             track: field(TRACK_FIELD)
                 .map(|value| value.parse::<Track>())
                 .transpose()?,
+            flow: field(FLOW_FIELD),
         })
     }
 
@@ -2287,6 +2373,11 @@ impl StartOverrides {
     pub fn apply(&self, ticket: &mut Ticket) {
         if let Some(template) = &self.template {
             ticket.template = Some(template.clone());
+            // A template alone means "pipeline only": the routed flow must not win over it.
+            ticket.flow = None;
+        }
+        if let Some(flow) = &self.flow {
+            ticket.flow = Some(flow.clone());
         }
         if let Some(track) = self.track {
             ticket.track = Some(track);
@@ -2427,6 +2518,9 @@ fn route(
         return Ok(Reply::Json(status, reply));
     }
     if let Some((status, reply)) = crate::unity_routes::handle(app, m, path, &q, &body) {
+        return Ok(Reply::Json(status, reply));
+    }
+    if let Some((status, reply)) = crate::manual_run::handle(app, m, path, &body) {
         return Ok(Reply::Json(status, reply));
     }
     if let Some((status, reply)) = crate::memory_routes::handle(app, m, path, &q, &body) {
@@ -3160,12 +3254,21 @@ fn route(
             let force = body["force"].as_bool().unwrap_or(false);
             let overrides = match StartOverrides::from_body(&body)
                 .and_then(|parsed| parsed.check_service(&store).map(|()| parsed))
-            {
+                .and_then(|parsed| match &parsed.flow {
+                    Some(flow) => {
+                        crate::manual_run::check_flow(app.sessions.configured_skill_root(), flow)
+                            .map(|()| parsed)
+                    }
+                    None => Ok(parsed),
+                }) {
                 Ok(parsed) => parsed,
                 Err(e) => return Ok(api_err(&e)),
             };
             match manual_start_ticket(app, &store, key, force, &overrides) {
-                Ok(StartOutcome::Ok(v)) => Reply::Json(HTTP_OK, v),
+                Ok(StartOutcome::Ok(mut v)) => {
+                    crate::manual_run::attach_launch(&store, key, &mut v);
+                    Reply::Json(HTTP_OK, v)
+                }
                 Ok(StartOutcome::Refused { status, message }) => err(status, message),
                 Err(e) => err(HTTP_CONFLICT, e),
             }

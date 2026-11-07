@@ -32,6 +32,7 @@ pub mod ids;
 pub mod inbox;
 pub mod launch_gates;
 pub mod launcher;
+pub mod manual_run;
 pub mod mcp_configurations;
 pub mod memory_ingest;
 pub mod memory_routes;

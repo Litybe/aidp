@@ -7,7 +7,8 @@
 //! tests print a notice and return.
 
 use aidp_gateway::crypto::hmac_sha256_hex;
-use aidp_gateway::http::{serve_on, HttpConfig, ServeHandle};
+use aidp_gateway::http::{serve_on, serve_on_with_environment, HttpConfig, ServeHandle};
+use aidp_gateway::models::runtime_environment::RuntimeEnvironment;
 use aidp_testkit::TempWorkspace;
 use serde_json::{json, Value};
 use std::fs;
@@ -354,5 +355,126 @@ fn sse_token_is_single_use() {
 
     let (again, _) = open_sse(&d, &t);
     assert!(again.contains(" 401"), "second open: {again}");
+    d.handle.stop();
+}
+
+// 3b. The daemon's own origins (real port) are accepted even with an empty list.
+#[test]
+fn own_origin_post_is_accepted_with_real_port() {
+    let (vault, _) = vault_with_config("ag-own");
+    let d = boot_loopback("ag-owns", vault, "", "");
+    let port = d.handle.port();
+    for host in ["127.0.0.1", "localhost", "[::1]"] {
+        let origin = format!("http://{host}:{port}");
+        let r = send(
+            ureq::post(&d.url("/dispatcher/resume")).set("Origin", &origin),
+            "",
+        );
+        assert_eq!(r.status(), 200, "own origin {origin}");
+        assert_eq!(
+            r.header("Access-Control-Allow-Origin"),
+            Some(origin.as_str())
+        );
+    }
+    d.handle.stop();
+}
+
+// 3c. Other port, other host, null and scheme variants stay refused; the explicit list still works.
+#[test]
+fn near_miss_origins_stay_forbidden_and_list_still_works() {
+    let (vault, _) = vault_with_config("ag-near");
+    let d = boot_loopback("ag-nears", vault, "", "");
+    let port = d.handle.port();
+    let other_port = if port == 65535 { port - 1 } else { port + 1 };
+    let refused = [
+        format!("http://127.0.0.1:{other_port}"),
+        format!("http://localhost:{other_port}"),
+        format!("http://example.com:{port}"),
+        format!("https://127.0.0.1:{port}"),
+        format!("http://127.0.0.1:{port}.evil.example"),
+        "null".to_string(),
+        "*".to_string(),
+    ];
+    for origin in &refused {
+        let r = send(
+            ureq::post(&d.url("/dispatcher/resume")).set("Origin", origin),
+            "",
+        );
+        assert_eq!(r.status(), 403, "origin {origin} must be refused");
+    }
+    let r = send(
+        ureq::post(&d.url("/dispatcher/resume")).set("Origin", ALLOWED),
+        "",
+    );
+    assert_eq!(r.status(), 200, "explicit list entry still accepted");
+    d.handle.stop();
+}
+
+fn boot_remote_with_ui(tag: &str, ui: &str) -> Option<(Daemon, IpAddr)> {
+    let ip = non_loopback_ip().or_else(|| {
+        eprintln!("skipped: LAN tests are off (set AIDP_TEST_LAN=1)");
+        None
+    })?;
+    let (vault_root, _) = vault_with_config(tag);
+    let ws = Box::leak(Box::new(TempWorkspace::new(&format!("{tag}-ui"))));
+    let ui_dir = ws.child("ui");
+    fs::create_dir_all(ui_dir.join("assets")).unwrap();
+    fs::write(ui_dir.join("index.html"), "<html></html>").unwrap();
+    fs::write(ui_dir.join("assets").join("app.js"), "console.log(1)").unwrap();
+    let listener = TcpListener::bind((ip, 0)).ok()?;
+    let port = listener.local_addr().ok()?.port();
+    let config = HttpConfig {
+        state_dir: state_dir(tag),
+        vault_root,
+        hook_token: String::new(),
+        ui_token: ui.to_string(),
+        read_only: false,
+        allowed_origins: vec![],
+    };
+    let environment = RuntimeEnvironment {
+        ui_dir: Some(ui_dir),
+        ..Default::default()
+    };
+    let handle = serve_on_with_environment(listener, config, environment).ok()?;
+    let host = format!("{ip}:{port}");
+    Some((
+        Daemon {
+            handle,
+            base: format!("http://{host}/api"),
+            host,
+        },
+        ip,
+    ))
+}
+
+// LAN: the static front needs no token, /api does, and the LAN origin of the daemon is its own.
+#[test]
+fn lan_static_front_is_public_and_api_is_not() {
+    let Some((d, ip)) = boot_remote_with_ui("ag-lan", "t".repeat(32).as_str()) else {
+        return;
+    };
+    let token = "t".repeat(32);
+    let root = format!("http://{}", d.host);
+    assert_eq!(
+        call(ureq::get(&format!("{root}/")).set("Host", &d.host)).status(),
+        200
+    );
+    assert_eq!(
+        call(ureq::get(&format!("{root}/assets/app.js"))).status(),
+        200
+    );
+    assert_eq!(call(ureq::get(&d.url("/health"))).status(), 401);
+    assert_eq!(
+        call(ureq::get(&d.url("/health")).set("X-Aidp-Token", &token)).status(),
+        200
+    );
+    let origin = format!("http://{}", d.host);
+    let r = send(
+        ureq::post(&d.url("/dispatcher/resume"))
+            .set("Origin", &origin)
+            .set("X-Aidp-Token", &token),
+        "",
+    );
+    assert_eq!(r.status(), 200, "own LAN origin {origin} on {ip}");
     d.handle.stop();
 }
