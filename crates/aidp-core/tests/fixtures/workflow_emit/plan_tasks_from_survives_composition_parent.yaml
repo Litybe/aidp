@@ -1,0 +1,9 @@
+version: 5
+id: planparent
+settings: { max_stages_per_pass: 1 }
+stages:
+  - name: phase
+    type: pipeline
+    uses: planchild
+    outputs:
+      - { name: changed-files, from: build.changed-files }

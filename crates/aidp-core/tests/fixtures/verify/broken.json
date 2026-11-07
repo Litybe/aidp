@@ -1,0 +1,7 @@
+{
+  "changed_files": [
+    "src/handlers/alert-handler.ts",
+    "src/validators/payload-validator.ts"
+  ,
+  "summary": "the trailing comma above and the missing closing bracket for changed_files make this invalid JSON on purpose"
+}

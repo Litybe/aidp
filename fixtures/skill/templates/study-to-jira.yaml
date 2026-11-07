@@ -1,0 +1,38 @@
+version: 5
+id: study-to-jira
+description: Étude → tickets Jira — investigate a topic, decompose the recommendation into stories, review, then create Jira tickets.
+inputs:
+  topic: { required: true, kind: string, description: "The architectural or feasibility question to investigate before decomposing it into Jira stories." }
+settings:
+  knowledge_graph:
+    enabled: true
+    refresh: never
+    code_only: true
+stages:
+  - name: study
+    agent: analyzer
+    skills: [study-synthesis]
+    inputs: { topic: "{{ inputs.topic }}" }
+    outputs: [study.md]
+    gate: true
+
+  - name: decompose
+    agent: planner
+    skills: [ticket-decomposition]
+    needs: [study]
+    outputs: [stories.json]
+
+  - name: review
+    agent: reviewer
+    skills: [code-review-aidp]
+    needs: [decompose]
+    outputs: [findings.json]
+    gate: true
+
+  - name: create_tickets
+    agent: executor
+    skills: [create-ticket]
+    needs: [review]
+    scope: { mode: production }
+    inputs: { stories: "{{ stages.decompose.outputs.stories }}" }
+    outputs: [created-tickets.json]

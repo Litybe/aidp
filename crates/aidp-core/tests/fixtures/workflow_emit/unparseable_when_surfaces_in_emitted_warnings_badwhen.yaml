@@ -1,0 +1,10 @@
+version: 5
+id: badwhen
+stages:
+  - name: first
+    agent: analyzer
+    outputs: [x.md]
+  - name: second
+    agent: executor
+    needs: [first]
+    when: "{{ inputs.count > 'not-a-number' }}"

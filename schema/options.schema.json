@@ -1,0 +1,107 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/ai-dev-pipeline/schema/options.schema.json",
+  "title": "Options artifact (analyzer stage with options-synthesis specialisation)",
+  "description": "Structured options produced by an `analyzer` stage with options-synthesis specialisation during a study pipeline. Consumed by a downstream `analyzer` stage to write the final study document.",
+  "type": "object",
+  "required": ["options"],
+  "additionalProperties": true,
+  "properties": {
+    "schema_version": { "type": "integer", "enum": [1], "default": 1 },
+    "study_type": {
+      "type": ["string", "null"],
+      "enum": [null, "tech_choice", "architecture", "feasibility", "migration"]
+    },
+    "summary": {
+      "type": ["string", "null"],
+      "description": "Short human-readable synthesis of the option space."
+    },
+    "recommended_option_id": {
+      "type": ["string", "null"],
+      "description": "id of the option the agent recommends, or null when the decision is deferred to the downstream `analyzer` stage that synthesises the study."
+    },
+    "criteria": {
+      "type": "array",
+      "description": "Ordered list of evaluation criteria used in the trade-off matrix.",
+      "items": {
+        "type": "object",
+        "required": ["id", "label"],
+        "additionalProperties": false,
+        "properties": {
+          "id": { "type": "string", "pattern": "^[a-z][a-z0-9_-]*$" },
+          "label": { "type": "string", "minLength": 1 },
+          "weight": { "type": ["number", "null"], "minimum": 0 }
+        }
+      },
+      "default": []
+    },
+    "options": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 6,
+      "items": { "$ref": "#/$defs/option" }
+    }
+  },
+  "$defs": {
+    "option": {
+      "type": "object",
+      "required": ["id", "title"],
+      "additionalProperties": true,
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]*$"
+        },
+        "title": { "type": "string", "minLength": 1 },
+        "description": { "type": ["string", "null"] },
+        "fit_score": {
+          "type": ["number", "null"],
+          "minimum": 0,
+          "maximum": 10,
+          "description": "Aggregate fit score (0-10) against the weighted criteria."
+        },
+        "pros": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "default": []
+        },
+        "cons": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "default": []
+        },
+        "risks": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "default": []
+        },
+        "trade_offs": {
+          "type": "object",
+          "description": "Map of criterion id -> per-option rating (number 0-10, letter grade, or free text).",
+          "additionalProperties": {
+            "type": ["string", "number", "null"]
+          },
+          "default": {}
+        },
+        "sources": {
+          "type": "array",
+          "description": "Citations that back this option (URLs, Confluence page ids, ADRs).",
+          "items": {
+            "type": "object",
+            "required": ["ref"],
+            "additionalProperties": false,
+            "properties": {
+              "ref": { "type": "string", "minLength": 1 },
+              "kind": {
+                "type": "string",
+                "enum": ["url", "confluence", "adr", "jira", "file", "other"]
+              },
+              "note": { "type": ["string", "null"] }
+            }
+          },
+          "default": []
+        }
+      }
+    }
+  }
+}

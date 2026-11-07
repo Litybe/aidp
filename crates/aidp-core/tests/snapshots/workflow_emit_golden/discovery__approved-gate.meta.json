@@ -1,0 +1,12 @@
+{
+  "error": null,
+  "warnings": [
+    "skill dropped, no knowledge graph for this run: graphify-context removed from stage gather"
+  ],
+  "gates": [
+    "ideate"
+  ],
+  "awaiting_plan": null,
+  "awaiting_composite": null,
+  "plan_schedules": []
+}

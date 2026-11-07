@@ -1,0 +1,23 @@
+version: 5
+id: planned-skills
+settings: { max_correction_iterations: 2 }
+stages:
+  - name: plan
+    agent: planner
+    model: opus
+    outputs: [plan.json, plan.md]
+  - name: implement
+    agent: executor
+    model: sonnet
+    needs: [plan]
+    scope: { mode: repo_wide }
+    skills: [skill-a-x1, skill-b-x1]
+    plan_tasks:
+      from: "{{ stages.plan.outputs.plan }}"
+      max: 3
+      skills_by_kind: { code: [skill-a-x1], tests: [skill-b-x1] }
+    outputs: [changed-files.json]
+  - name: review
+    agent: reviewer
+    needs: [implement]
+    outputs: [findings.json]

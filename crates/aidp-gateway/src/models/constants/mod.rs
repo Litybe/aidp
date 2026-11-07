@@ -1,0 +1,48 @@
+//! Every named constant this crate shares, one file per concept.
+
+pub mod agent_jobs;
+pub mod aidp;
+pub mod autonomy;
+pub mod catalog;
+pub mod claude_permissions;
+pub mod dispatcher_pause;
+pub mod engine;
+pub mod flow_actions;
+pub mod flow_execution;
+pub mod flow_external;
+pub mod flow_facts;
+pub mod flow_inputs;
+pub mod flow_probes;
+pub mod flow_shutdown;
+pub mod launch_policy;
+pub mod native_permissions;
+pub mod native_shutdown;
+pub mod pixellab;
+pub mod plan_slots;
+pub mod plan_task_prompt;
+pub mod pr_detail_events;
+pub mod pr_fix;
+pub mod pr_fix_keys;
+pub mod pr_fix_limits;
+pub mod pr_fix_messages;
+pub mod pr_fix_permissions;
+pub mod pr_fix_recipe;
+pub mod pr_status_keys;
+pub mod pr_workspace_holder;
+pub mod process;
+pub mod question_reply;
+pub mod runtime_api;
+pub mod session_profile;
+pub mod session_resume;
+pub mod skill_paths;
+pub mod static_ui;
+pub mod task_isolation;
+pub mod task_scope;
+pub mod ticket_cost;
+pub mod ticket_flow;
+
+pub mod mcp;
+pub mod mcp_configuration;
+
+pub mod flow_manual;
+pub mod settings;

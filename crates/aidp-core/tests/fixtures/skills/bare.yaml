@@ -1,0 +1,5 @@
+version: 5
+id: bare
+stages:
+  - name: code
+    agent: executor

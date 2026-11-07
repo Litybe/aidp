@@ -1,0 +1,14 @@
+{
+  "error": null,
+  "warnings": [
+    "skill dropped, no knowledge graph for this run: graphify-context removed from stage design__identify_test_data",
+    "skill dropped, no knowledge graph for this run: graphify-context removed from stage design__build_test_kit"
+  ],
+  "gates": [
+    "run__deploy_dev",
+    "run__evaluate"
+  ],
+  "awaiting_plan": null,
+  "awaiting_composite": null,
+  "plan_schedules": []
+}

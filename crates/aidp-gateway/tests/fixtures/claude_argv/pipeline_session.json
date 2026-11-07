@@ -1,0 +1,30 @@
+{
+  "program": "claude",
+  "args": [
+    "-p",
+    "--output-format",
+    "stream-json",
+    "--input-format",
+    "stream-json",
+    "--verbose",
+    "--permission-mode",
+    "acceptEdits",
+    "--model",
+    "opus",
+    "--effort",
+    "high",
+    "--max-budget-usd",
+    "5",
+    "--permission-prompt-tool",
+    "stdio"
+  ],
+  "cwd": "<project>",
+  "piped_stdin": true,
+  "piped_stdout": true,
+  "piped_stderr": true,
+  "envs": {
+    "AIDP_AUTO_APPROVE_GATES": "plan",
+    "AIDP_BIN": "<aidp-bin>",
+    "PATH": "<path>"
+  }
+}

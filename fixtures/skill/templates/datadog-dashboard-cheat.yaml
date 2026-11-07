@@ -1,0 +1,44 @@
+version: 5
+id: datadog-dashboard-cheat
+description: >
+  Draft a Datadog dashboard create/update for squad Cheat only. It produces a
+  ready-to-apply dashboard.json + apply-guide.md that a human runs manually,
+  after a guardrail review that blocks any dashboard not tagged team:cheat.
+policy:
+  - "The Datadog MCP here is read-only (search_datadog_dashboards, get_datadog_dashboard): this pipeline never calls a write endpoint itself, dry-run only."
+inputs:
+  action: { required: true, kind: enum, values: [create, update], description: "Create a brand-new dashboard, or update an existing one identified by dashboard_id." }
+  dashboard_id: { required: false, kind: string }
+  objective: { required: true, kind: string, description: "What this dashboard must let someone answer at a glance (e.g. the cheat signal or SLO it tracks) — drives which widgets get drafted." }
+  dashboard_title: { required: false, kind: string }
+stages:
+  - name: discover_existing
+    agent: analyzer
+    skills: [datadog-dashboard-authoring]
+    inputs:
+      action: "{{ inputs.action }}"
+      dashboard_id: "{{ inputs.dashboard_id }}"
+      objective: "{{ inputs.objective }}"
+      dashboard_title: "{{ inputs.dashboard_title }}"
+    outputs: [context.md]
+
+  - name: plan_widgets
+    agent: planner
+    skills: [datadog-dashboard-authoring]
+    needs: [discover_existing]
+    outputs: [dashboard-plan.md]
+
+  - name: draft_dashboard_json
+    agent: executor
+    skills: [datadog-dashboard-authoring]
+    needs: [plan_widgets]
+    scope: { mode: stage_dir_only }
+    outputs: [dashboard.json, apply-guide.md]
+
+  - name: review_guardrail
+    agent: reviewer
+    model: opus   # delibere : gate sur un dashboard de garde-fou triche - un faux negatif coute cher en prod
+    skills: [datadog-dashboard-authoring]
+    needs: [draft_dashboard_json]
+    outputs: [review-report.md]
+    gate: true

@@ -1,0 +1,66 @@
+{
+  "data": {
+    "r0": {
+      "pullRequests": {
+        "nodes": [
+          {
+            "number": 12,
+            "updatedAt": "2026-09-12T10:00:00Z",
+            "headRefOid": "sha12",
+            "isDraft": false,
+            "mergeable": "MERGEABLE",
+            "reviewDecision": null,
+            "commits": {
+              "nodes": []
+            }
+          }
+        ]
+      }
+    },
+    "r1": {
+      "pullRequests": {
+        "nodes": []
+      }
+    },
+    "r2": {
+      "pullRequests": {
+        "nodes": []
+      }
+    },
+    "r3": {
+      "pullRequests": {
+        "nodes": []
+      }
+    },
+    "r4": {
+      "pullRequests": {
+        "nodes": []
+      }
+    },
+    "r5": {
+      "pullRequests": {
+        "nodes": []
+      }
+    },
+    "r6": {
+      "pullRequests": {
+        "nodes": []
+      }
+    },
+    "r7": {
+      "pullRequests": {
+        "nodes": []
+      }
+    },
+    "r8": {
+      "pullRequests": {
+        "nodes": []
+      }
+    },
+    "r9": {
+      "pullRequests": {
+        "nodes": []
+      }
+    }
+  }
+}

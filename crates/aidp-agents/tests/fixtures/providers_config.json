@@ -1,0 +1,12 @@
+{
+  "vault": "C:/CODE/AIDP",
+  "providers": {
+    "default": "claude",
+    "claude": {
+      "program": "claude",
+      "args": [],
+      "models": { "opus": "claude-opus-5-5", "sonnet": "claude-sonnet-5-5" }
+    },
+    "other": { "program": "other-cli", "args": ["--json"] }
+  }
+}

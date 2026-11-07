@@ -1,0 +1,40 @@
+version: 5
+id: ticket-create
+description: Decompose an epic / PRD into Jira stories and create them.
+inputs:
+  source: { required: true, kind: string, description: "Path to PRD or epic key" }
+  project_key: { required: true, kind: string, description: "Jira project key the decomposed stories are created under (e.g. \"PIXEL\")." }
+  parent_epic: { required: false, kind: string }
+settings:
+  knowledge_graph:
+    enabled: true
+    refresh: never
+    code_only: true
+stages:
+  - name: analyze
+    agent: analyzer
+    skills: [graphify-context, analyze-jira-ticket-aidp]
+    inputs: { source: "{{ inputs.source }}" }
+    outputs: [analysis.md]
+
+  - name: decompose
+    agent: planner
+    skills: [ticket-decomposition, writing-clearly-and-concisely]
+    needs: [analyze]
+    with: { mode: decomposition }
+    outputs: [stories.json]
+    gate: true
+
+  - name: create
+    agent: executor
+    skills: [create-ticket]
+    needs: [decompose]
+    scope: { mode: stage_dir_only }
+    inputs: { stories: "{{ stages.decompose.outputs.stories }}", project: "{{ inputs.project_key }}", parent: "{{ inputs.parent_epic }}" }
+    outputs: [created-tickets.json]
+
+  - name: review
+    agent: reviewer
+    skills: [code-review-aidp, writing-clearly-and-concisely]
+    needs: [create]
+    outputs: [findings.json]

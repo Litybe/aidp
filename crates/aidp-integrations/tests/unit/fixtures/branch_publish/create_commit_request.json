@@ -1,0 +1,25 @@
+{
+  "query": "mutation($input: CreateCommitOnBranchInput!) { createCommitOnBranch(input: $input) { commit { oid } } }",
+  "variables": {
+    "input": {
+      "branch": {
+        "repositoryNameWithOwner": "acme/widgets",
+        "branchName": "feat/PIXEL-1"
+      },
+      "message": {
+        "headline": "feat(PIXEL-1): add the widget",
+        "body": "Explain why the widget exists."
+      },
+      "expectedHeadOid": "base123",
+      "fileChanges": {
+        "additions": [
+          { "path": "src/widget.rs", "contents": "aGVsbG8=" },
+          { "path": "docs/widget.md", "contents": "ZG9j" }
+        ],
+        "deletions": [
+          { "path": "old.txt" }
+        ]
+      }
+    }
+  }
+}

@@ -1,0 +1,108 @@
+version: 5
+id: run-tests-dev
+description: >
+  Exécute un kit de test (produit par test-scenarios) sur l'environnement dev —
+  déploiement optionnel via GitHub Actions, puis exécution scénario par scénario
+  (HTTP, Mongo, SQS) et rapport pass/fail. Consomme run-manifest.json
+  (et le régénère s'il manque).
+inputs:
+  ticket_id:   { required: true,  kind: string, description: "Cle du ticket Jira de l'US dont les scenarios sont executes sur dev - nomme le run et les artefacts." }
+  kit_dir:     { required: true,  kind: string, description: "Dossier du kit (http/, mongo/, sqs/, execution-guide.md)." }
+  run_manifest: { required: false, kind: string, description: "Chemin de run-manifest.json ; régénéré depuis le kit si absent." }
+  branch:      { required: false, kind: string, description: "Branche à déployer/tester (feat/<TICKET>)." }
+  deploy:      { required: false, kind: bool,   default: false, description: "Déclencher un déploiement dev avant de tester." }
+  deploy_workflow: { required: false, kind: string, description: "Workflow GitHub Actions à déclencher (sinon deploy.workflow du dev-target.json)." }
+
+stages:
+  # 1. Vérifie que dev est joignable et que la config/CLIs/env sont prêts.
+  - name: prepare_dev
+    agent: executor
+    skills: [dev-target-config]
+    outputs: [dev-readiness.json]
+    scope: { mode: stage_dir_only }
+    with:
+      instructions: >-
+        Exécute `aidp dev check --ping --workspace-root <racine du repo>` et écris
+        sa sortie JSON dans dev-readiness.json. Si `ok` est false, résume
+        précisément les checks en échec et leurs `fix`. Ne fabrique PAS
+        .aidp/dev-target.json toi-même : s'il manque, renvoie status: blocked avec
+        le format attendu et les variables AIDP_DEV_* à exporter (setup unique).
+
+  # 2. Déploiement dev optionnel (workflow_dispatch + attente). Gate humain avant
+  #    de toucher dev. Skippé statiquement si deploy=false.
+  - name: deploy_dev
+    agent: executor
+    skills: [deploy-dev]
+    needs: [prepare_dev]
+    when: "{{ inputs.deploy }}"
+    gate: true
+    inputs:
+      branch: "{{ inputs.branch }}"
+      workflow: "{{ inputs.deploy_workflow }}"
+    outputs: [deploy.json]
+    scope: { mode: stage_dir_only }
+
+  # 3. Garantit un run-manifest.json exploitable et publie la liste des scénarios
+  #    comme signal de fan-out.
+  - name: ensure_manifest
+    agent: planner
+    model: sonnet   # delibere : recopie ou reconstruction mecanique d'un manifest existant, aucune conception - sonnet suffit
+    skills: [dev-test-runner]
+    needs: [prepare_dev]
+    inputs:
+      ticket_id: "{{ inputs.ticket_id }}"
+      kit_dir: "{{ inputs.kit_dir }}"
+      run_manifest: "{{ inputs.run_manifest }}"
+    outputs: [run-manifest.json]
+    scope: { mode: stage_dir_only }
+    with:
+      instructions: >-
+        Si `run_manifest` est fourni et valide (schema/run-manifest.schema.json),
+        recopie-le tel quel dans run-manifest.json. Sinon, reconstruis-le depuis
+        kit_dir (execution-guide.md + fichiers http/mongo/sqs) : pour
+        chaque scénario, la liste ORDONNÉE des steps {order, phase, kind, artifact
+        (relatif à kit_dir), queue?, expect}. Renseigne `kit_dir` (absolu) dans le
+        manifest. Ton enveloppe DOIT poser signals.scenarios = le tableau EXACT
+        des ids de scénarios (ex. ["SC-1","SC-2"]) — un id par shard, rien d'autre.
+
+  # 4. Exécute chaque scénario sur dev (un shard par scénario).
+  - name: run_scenarios
+    agent: executor
+    skills: [dev-test-runner]
+    needs: [ensure_manifest, deploy_dev]
+    fan_out:
+      from: "{{ stages.ensure_manifest.signals.scenarios }}"
+      max: 8
+      merge_hint: >
+        Consolide les résultats des shards : liste chaque results/SC-x.json avec
+        son statut, écris results-index.json (chemin + statut par scénario), et
+        signale le nombre pass/fail/error.
+    outputs: [results-index.json]
+    scope: { mode: stage_dir_only }
+    with:
+      instructions: >-
+        Le label du shard EST l'id du scénario à jouer. Lis run-manifest.json
+        (sortie de ensure_manifest, via les upstream outputs) et kit_dir. Déroule
+        les steps du scénario dans l'ordre via `aidp http|mongo|sqs
+        ... --workspace-root <racine>`, capture observed, compare à expect, et
+        écris results/<SC>.json conforme à schema/test-run-result.schema.json.
+        Exécute TOUJOURS les steps cleanup, même après un échec.
+
+  # 5. Verdict agrégé. Reviewer → signals.has_blocking_findings gate le run.
+  - name: evaluate
+    agent: reviewer
+    model: opus   # delibere : verdict pass/fail agrege sur dev, un faux negatif est couteux a rattraper - opus pour la rigueur du jugement
+    skills: [dev-test-runner, writing-clearly-and-concisely]
+    needs: [run_scenarios]
+    inputs:
+      ticket_id: "{{ inputs.ticket_id }}"
+    outputs: [test-report.md, results.json]
+    gate: true
+    with:
+      instructions: >-
+        Lis results-index.json et chaque results/SC-x.json. Écris results.json
+        conforme à schema/test-report.schema.json (totals, scenarios[], et
+        has_blocking_findings = true dès qu'un scénario est fail OU error), et
+        test-report.md lisible : par scénario — critère d'acceptation, statut,
+        steps en échec avec l'écart observed vs expected et l'evidence. Pose
+        signals.has_blocking_findings identique au champ du rapport.

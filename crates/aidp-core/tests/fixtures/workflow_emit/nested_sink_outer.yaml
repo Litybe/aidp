@@ -1,0 +1,5 @@
+version: 5
+id: outersink
+stages:
+  - { name: c, type: pipeline, uses: midsink }
+  - { name: after, agent: executor, needs: [c] }

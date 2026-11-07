@@ -1,0 +1,20 @@
+version: 5
+id: feature-writer-planned
+stages:
+  - name: feature_note
+    agent: documenter
+    knowledge: feature
+  - name: plan
+    agent: planner
+    model: opus
+    needs: [feature_note]
+    outputs: [plan.json, plan.md]
+  - name: implement
+    agent: executor
+    model: sonnet
+    needs: [plan]
+    scope: { mode: repo_wide }
+    plan_tasks:
+      from: "{{ stages.plan.outputs.plan }}"
+      max: 3
+    outputs: [changed-files.json]

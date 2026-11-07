@@ -1,0 +1,117 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://aidp.local/schema/plan.v1.json",
+  "title": "aidp plan — executable task graph (aidp-plan.v1)",
+  "description": "The machine-readable plan a `planner` stage writes as `plan.json`. One object per task to realize, each carrying its own self-contained prompt, instructions and write set. `aidp workflow emit` consumes this file to compile the tail of the Workflow: tasks become parallel sub-agent dispatches ordered by `needs`, with extra dependencies inserted automatically wherever two tasks would write the same file. Keep it honest — a task's `files` are the contract that makes parallel execution safe.",
+  "type": "object",
+  "required": ["tasks"],
+  "additionalProperties": true,
+  "properties": {
+    "schema": {
+      "type": "string",
+      "enum": ["aidp-plan.v1"],
+      "description": "Contract marker. Optional, but write it — it pins the shape for future revisions."
+    },
+    "summary": {
+      "type": "string",
+      "description": "One short paragraph: what this plan achieves overall."
+    },
+    "jira_keys": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "The user stories this plan covers."
+    },
+    "shared_files": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Files that several tasks would need to touch (DI registration, module wiring, csproj/serverless entries, .sln). NEVER list these in a task's `files`: no task may edit them. Each task describes the change it needs in `follow_ups`, and the merge sub-agent applies them all once, at the end."
+    },
+    "risks": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "open_questions": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "tasks": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/definitions/task" }
+    }
+  },
+  "definitions": {
+    "task": {
+      "type": "object",
+      "required": ["id", "title", "kind", "prompt", "files"],
+      "additionalProperties": true,
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,31}$",
+          "description": "Short stable identifier, unique in the plan (e.g. T1, T2). Referenced by other tasks' `needs`."
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "description": "One line, imperative: what this task delivers."
+        },
+        "kind": {
+          "type": "string",
+          "enum": ["code", "tests", "docs", "infra", "chore"],
+          "description": "Routes the task to the consuming stage. A pipeline stage may claim a subset via `plan_tasks.kinds`; by default one stage claims them all."
+        },
+        "prompt": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The task's OWN instruction, written for a sub-agent that sees only this text plus the artifact paths of the stage. Self-contained: state the change, the design decisions already made, the patterns/utilities to reuse (with paths), and what NOT to do. Do not write 'as described above' — there is no above."
+        },
+        "instructions": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Ordered concrete steps for this task. One step = one verifiable change."
+        },
+        "needs": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Ids of tasks that MUST finish first (real data/API dependencies only). Do NOT add ordering just to avoid write collisions — declare `files` and aidp serializes those automatically. Every id listed here must exist and the graph must be acyclic."
+        },
+        "files": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string", "minLength": 1 },
+          "description": "The task's WRITE SET: every repo-relative file it will create or modify. This is what makes parallelism safe — two tasks sharing a file are serialized by aidp instead of racing. Never list a `shared_files` entry here. Be exact; a missing path is a lost race."
+        },
+        "reads": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Files the task should read for context (never written)."
+        },
+        "verification": {
+          "type": "string",
+          "description": "How to check this task alone is correct (command to run, test to add/execute)."
+        },
+        "acceptance": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Acceptance criteria this task satisfies, traceable to the US."
+        },
+        "jira_keys": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "The US this task contributes to (useful when the run covers several unitary stories)."
+        },
+        "risk": {
+          "type": "string",
+          "enum": ["low", "medium", "high"]
+        },
+        "outputs": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Artifacts this task writes into the stage directory (optional; the stage's declared outputs stay the merge step's job)."
+        },
+        "notes": { "type": "string" }
+      }
+    }
+  }
+}

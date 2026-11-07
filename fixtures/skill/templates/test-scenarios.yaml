@@ -1,0 +1,251 @@
+version: 5
+id: test-scenarios
+description: Conçoit les scénarios de test d'une US pour l'env de dev — cas de test, données, scripts exécutables (HTTP, Mongo, SQS) et résultats attendus.
+inputs:
+  ticket_id: { required: true, kind: string, description: "Cle du ticket Jira de l'US a tester. Mappe par le `with:` du stage composite `design` de test-us-e2e.yaml : la retirer d'ici fait echouer compose::expand sur cet input enfant non declare." }
+stages:
+  - name: analyze_us
+    agent: analyzer
+    skills: [analyze-jira-ticket-aidp]
+    outputs: [us-analysis.md]
+
+  - name: design_scenarios
+    agent: planner
+    needs: [analyze_us]
+    outputs: [scenarios.md]
+    with:
+      instructions: >-
+        Pour CHAQUE scénario, structure obligatoire : id (SC-1, SC-2, ...), critère
+        d'acceptation couvert, préconditions, déclencheur exact (endpoint HTTP /
+        message SQS-SNS / job planifié), données d'entrée, résultat attendu
+        OBSERVABLE (état DB, message publié, réponse HTTP, log) et le moyen de
+        vérification. Couvre les cas nominaux, les cas limites et les
+        non-régressions.
+        RÈGLE ABSOLUE, non négociable : chaque scénario doit être totalement
+        INDÉPENDANT des autres — aucune dépendance d'ordre d'exécution, aucun
+        scénario qui suppose qu'un autre a déjà tourné, et surtout AUCUNE
+        requête/déclencheur qui affecte les données de plusieurs scénarios à
+        la fois (ni les données d'autres profils/entités de l'env de dev sans
+        rapport avec le test). Si un déclencheur naturel du système (ex. un
+        job planifié/batch, une requête à filtre large) ne peut PAS être scopé
+        à une seule entité, ne le propose pas comme scénario "normal" : dis-le
+        explicitement (limitation connue, à traiter à part) plutôt que de
+        fabriquer un scénario qui, exécuté, impacterait d'autres scénarios ou
+        d'autres données dev. Un cas déjà rencontré et à éviter : plusieurs
+        scénarios partageant le même déclencheur de job de clôture, qui a
+        affecté 634 profils dev sans rapport avec les tests.
+
+  - name: identify_test_data
+    agent: analyzer
+    skills: [graphify-context]
+    needs: [analyze_us]
+    outputs: [test-data.md]
+    with:
+      instructions: >-
+        Inventorie les données CONCRÈTES nécessaires aux tests, tirées du code réel
+        (cite les fichiers sources) : valeurs exactes d'enums et constantes ;
+        collections Mongo avec les vrais noms de champs Bson ; queues SQS /
+        topics SNS avec le contrat JSON exact des messages
+        (noms de champs snake_case, versions) ; routes HTTP réelles des controllers
+        (méthode, path, headers, body) ; feature flags et la valeur requise par
+        scénario ; identifiants/fixtures de l'env de dev.
+        INDÉPENDANCE (rappel, cf design_scenarios) : attribue à CHAQUE scénario
+        son propre identifiant d'entité dédié (user_id/review_id/order_id...)
+        — jamais un identifiant ni une fixture partagés entre deux scénarios.
+        Si les mêmes contraintes de sélection (ex. filtre d'un job planifié)
+        risquent de faire correspondre plusieurs scénarios ou des données dev
+        tierces à la même requête, note-le explicitement comme risque
+        d'isolation plutôt que de le passer sous silence.
+
+  - name: build_test_kit
+    agent: executor
+    skills: [graphify-context, postman-cli]
+    needs: [design_scenarios, identify_test_data]
+    outputs: [execution-guide.md, run-manifest.json, kit_dir]
+    scope: { mode: stage_dir_only }
+    with:
+      instructions: >-
+        Produis dans le stage dir le kit d'exécution COMPLET et directement
+        EXÉCUTABLE des scénarios de scenarios.md, avec les données de
+        test-data.md : http/SC-x.http (requêtes HTTP prêtes à jouer — vraies
+        routes, headers, bodies) ; mongo/SC-x-setup.js et mongo/SC-x-verify.js
+        (scripts mongosh — vraies collections et champs Bson) ;
+        sqs/SC-x-message.json plus la commande aws sqs send-message
+        complète (payload conforme au contrat réel du message) ; setup/
+        feature-flags.md (flags à positionner et comment). execution-guide.md
+        mappe chaque scénario sur une séquence ordonnée : setup → injection des
+        données → déclencheur → vérification (commande/requête ET résultat attendu
+        écrit à côté) → cleanup. Paramètre l'env de dev via un bloc de variables
+        ({{base_url}}, {{mongo_uri}}, {{queue_url}}, ...) documenté en tête du
+        guide. Objectif : un agent doit pouvoir exécuter chaque scénario sans
+        jamais relire le code source.
+        PROVISIONNEMENT UTILISATEUR (step exécutable DEPUIS LA PAGE) : pour CHAQUE
+        scénario qui a besoin d'un joueur réellement KYC-validé, émets un descripteur
+        users/SC-x-user.json = { "count": 1, "regulator": "<zone, défaut FR>",
+        "env": "dev" } ET, dans run-manifest.json, un step
+        { order: 1, phase: "setup", kind: "user", artifact: "users/SC-x-user.json",
+        expect: null } placé AVANT les autres steps du scénario. Ce step est joué
+        depuis la page test-plan.html (bouton « Exécuter », comme http/mongo/sqs) et
+        crée le joueur via `aidp user create-valid` ; sa sortie JSON contient
+        users[0].user.userId / userName / password. Référence ces valeurs via des
+        placeholders DÉDIÉS au scénario dans TOUS ses artefacts (http, mongo, sqs) et
+        dans le bloc de variables du guide : {{user_id_SC-x}} (et {{user_name_SC-x}} /
+        {{user_password_SC-x}} si utile). N'écris JAMAIS un userId en dur ni ne
+        partage un id entre deux scénarios (RÈGLE D'ISOLATION — un user dédié par SC).
+        Un scénario qui teste justement un compte NON validé n'a PAS de step user :
+        il suit le type de compte décrit dans test-data.md.
+        ISOLATION, non négociable : CHAQUE artefact (SC-x.http, SC-x-setup.js,
+        SC-x-message.json, ...) est PROPRE à son scénario — jamais un fichier
+        partagé/réutilisé tel quel par plusieurs scénarios (ex. un seul
+        `trigger-closures-only.json` déclenché par 6 scénarios différents :
+        c'est exactement le bug déjà rencontré, où ce job a aussi affecté 634
+        profils dev sans rapport). Si le système sous test n'expose qu'un
+        déclencheur large (job planifié, requête à filtre non scopable par
+        id), le kit doit soit : (a) rendre chaque copie du déclencheur
+        spécifique au scénario (payload/filtre incluant l'id dédié du
+        scénario, si le contrat du message le permet), soit (b) marquer
+        clairement ce step comme NON ISOLÉ dans execution-guide.md et dans
+        run-manifest.json (ex. un champ `isolated: false` ou une note), pour
+        qu'un exécutant sache qu'il affectera plus que ce seul scénario avant
+        de le lancer. Ne fabrique jamais un scénario "propre en apparence" qui
+        cache un effet de bord partagé.
+        Émets AUSSI run-manifest.json (contrat machine-readable, conforme à
+        schema/run-manifest.schema.json) : pour CHAQUE scénario, la liste
+        ORDONNÉE de ses steps { order, phase (setup|trigger|verify|cleanup),
+        kind (http|mongo|sqs|user — `user` = step de provisionnement joueur en
+        phase setup, artifact = users/SC-x-user.json), artifact (chemin RELATIF au
+        stage dir, ex. http/SC-1.http), queue (pour sqs), isolated (booléen, défaut true
+        — pose false explicitement pour le step non isolé décrit ci-dessus),
+        expect (résultat attendu observable : {status}, {contains},
+        {rows_min}, {equals}, {json_path,eq}, ou null pour setup/cleanup) }.
+        Ce fichier est consommé tel quel par la pipeline run-tests-dev — il
+        DOIT référencer exactement les artefacts que tu viens d'écrire.
+        Enfin, pose outputs.kit_dir = le chemin ABSOLU de ce stage dir (le
+        dossier où tu écris http/, mongo/, sqs/, run-manifest.json) :
+        c'est la racine à laquelle les chemins `artifact` du manifest sont
+        relatifs, transmise à run-tests-dev.
+
+  - name: write_test_plan
+    agent: executor
+    skills: [writing-clearly-and-concisely]
+    needs: [design_scenarios, build_test_kit]
+    outputs: [test-plan.md, test-plan.html]
+    scope: { mode: stage_dir_only }
+    with:
+      instructions: >-
+        Assemble le plan de test final test-plan.md. Format OBLIGATOIRE, pour
+        CHAQUE test, dans cet ordre : `## Test SC-x — <titre>` (+ critère
+        d'acceptation, flags requis) puis trois sections : `### Procédure de
+        test` — l'ordonnancement NUMÉROTÉ des actions (setup → injection →
+        déclencheur → vérification → cleanup), chaque action avec sa commande
+        d'exécution exacte et le chemin relatif de l'artefact du kit ;
+        `### Données input` — les requêtes/scripts du test INLINE dans des blocs
+        de code (scripts mongo, requêtes HTTP importables dans Postman,
+        payloads SQS/SNS) — copie le contenu des fichiers du kit,
+        ne les paraphrase pas ; `### Résultats attendus` — le résultat observable
+        attendu de CHAQUE requête de vérification (valeurs exactes, statut HTTP,
+        doc Mongo attendu), placé à côté de la commande correspondante.
+        Produis AUSSI test-plan.html : la même information en page interactive
+        AUTONOME (HTML+CSS+JS inline, aucune ressource externe) — navigation par
+        test, sections Procédure/Données/Résultats repliables, boutons « copier »
+        sur chaque bloc de code, cases à cocher de progression par étape, bloc
+        variables d'env éditable en tête qui substitue les {{placeholders}} dans
+        les commandes affichées. Chaque step a une case à cocher « fait » ET un
+        chevron de repli manuel indépendant : cocher « fait » replie
+        automatiquement le corps du step (commande, éditeur, résultat — tout
+        sauf l'en-tête avec la case et les chips) pour garder la lecture
+        compacte une fois traité ; décocher le redéplie ; le chevron permet de
+        redéplier/replier manuellement sans toucher à la case (pour relire un
+        step déjà fait sans perdre son statut). L'état replié se réapplique au
+        rechargement de la page pour les steps déjà marqués faits.
+        Si ce panneau de variables est repliable/
+        togglable, donne-lui sa PROPRE ligne/zone de mise en page (CSS grid-
+        area ou flex distinct), jamais la même ligne/zone que la sidebar ou le
+        contenu du test : un panneau togglable qui partage une grid-row avec du
+        contenu toujours visible se superpose dessus à l'ouverture (bug déjà
+        rencontré). Vérifie qu'ouvrir le panneau ne masque jamais la navigation
+        ni le test affiché. Embarque les données du kit dans
+        `<script id="kit-data" type="application/json">` (un objet avec au moins
+        run_id, variables[], et scenarios[] où chaque step a order/phase/kind/
+        artifact/command/expected) — le JS de la page lit ce bloc, jamais un
+        fetch externe.
+        Intègre le contrat d'exécution AIDP Viewer : au chargement, lis
+        `new URLSearchParams(location.search)` pour `projectId`, `runId` — si
+        les deux sont présents (le viewer les injecte dans la query string
+        quand il charge ce fichier en <iframe>), affiche, pour chaque step
+        exécutable, un bloc « Contenu à exécuter » avec un `<textarea>`
+        éditable pré-rempli du contenu du step (`substitute(step.content)`),
+        directement au-dessus du bouton « Exécuter » — jamais seulement dans
+        « Données input », qui est une section séparée qu'on peut ne pas voir
+        avant de cliquer. Persiste les éditions par step dans localStorage
+        (clé par scénario+ordre, jamais par défaut re-écrasée par un
+        changement de variable une fois éditée manuellement) avec un bouton
+        « Réinitialiser » par step pour revenir au contenu substitué courant,
+        et un indicateur visuel (ex. « · modifié ») quand une édition existe.
+        Le bouton « Exécuter » poste **la valeur courante du textarea**
+        (édité ou non) en tant que champ `content` en plus de `{ stageName,
+        kind, artifact, command, phase, vars }` — le serveur exécute ce
+        contenu depuis un fichier temporaire plutôt que l'artefact du kit
+        (l'édition ne modifie jamais les fichiers du kit).
+        Affiche `{argv, exit, stdout, stderr}` ou `{error}` sous le step, mis
+        en forme lisiblement (jamais un dump brut d'une seule ligne) :
+        badge de statut coloré (succès vert / échec rouge / dry-run neutre) ;
+        pour `mongo`, si `stdout` parse comme JSON `{ok, exit_code, stdout,
+        stderr, parsed}` (l'enveloppe du runner), affiche séparément la sortie
+        du script, puis `parsed` indenté proprement (`JSON.stringify(...,
+        null, 2)`) s'il existe, puis les erreurs mongosh le cas échéant ;
+        pour `http`, si `stdout` parse comme `{count, requests:[...]}`,
+        affiche par requête : méthode + URL, une puce de statut colorée
+        (2xx vert, 3xx neutre, 4xx ambre, 5xx rouge), le temps écoulé, et le
+        corps (`body_json` indenté si présent, sinon `body` brut) ; si le
+        parse JSON échoue (erreur CLI en texte brut, ex. variable d'env
+        manquante), affiche `stdout`/`stderr` bruts dans des blocs séparés et
+        clairement étiquetés plutôt que de tout concaténer.
+        Sans ces paramètres (page ouverte hors du viewer), reste en lecture
+        seule sans afficher de bouton ni de textarea éditable — ne référence
+        aucun serveur local ni aucune dépendance externe au fichier.
+        ATTENTION — piège de stage : ce fichier est écrit par LE STAGE
+        write_test_plan, mais les artefacts qu'il référence (http/, mongo/,
+        sqs/) vivent dans le dossier du stage build_test_kit, un stage
+        DIFFÉRENT. Le `stageName` de la query string (injecté par le viewer)
+        reflète où CE fichier html est servi (write_test_plan) — l'utiliser
+        directement pour `stageName` dans le POST enverrait un nom de stage
+        FAUX et le serveur répondrait "artefact introuvable ou hors du kit".
+        Donc : embarque dans le JSON de `<script id="kit-data">` un champ
+        explicite `"kit_stage": "build_test_kit"` (le nom du stage qui a
+        réellement écrit les artefacts — copie-le depuis le nom du stage
+        `build_test_kit` de ce pipeline, ne le déduis jamais de l'URL), et
+        utilise CE champ (`kit_stage`), jamais le `stageName` de l'URL, comme
+        valeur de `stageName` dans le corps de la requête POST.
+        `sqs` est exécutable comme `http`/`mongo` : un step est « exécutable »
+        s'il a un `command` contenant `--queue` (un step qui n'est qu'une
+        référence de payload sans commande d'envoi reste en lecture seule,
+        pas de bouton). Le serveur lit la queue directement dans `command` —
+        rien à dériver côté page.
+        `user` est AUSSI exécutable depuis la page (bouton « Exécuter », comme
+        http/mongo/sqs) : un step kind:"user" (phase setup, artifact
+        users/SC-x-user.json) provisionne un joueur valide via `aidp user
+        create-valid` — le serveur lance le runner à partir du descripteur, rien à
+        dériver côté page. APRÈS son exécution, parse la sortie JSON (stdout →
+        users[0]) et RÉINJECTE automatiquement les identifiants du joueur dans les
+        variables DÉDIÉES au scénario : {{user_id_SC-x}} = users[0].user.userId (et
+        {{user_name_SC-x}} / {{user_password_SC-x}}). Mets à jour le panneau de
+        variables ET persiste-les en localStorage, afin que les steps
+        trigger/verify suivants du MÊME scénario substituent le vrai userId sans
+        copier-coller manuel. Affiche le résultat lisiblement : badge de statut
+        (users[0].status = valid vert / partial ou error rouge), le userId créé, et
+        le statut de chaque document (ex. PASSPORT=VALIDATED, PROOFOFADDRESS=
+        VALIDATED). Si ok=false ou users[0].status != "valid", signale-le en rouge
+        et N'ÉCRASE PAS les variables avec un joueur inutilisable.
+        Credentials AWS : jamais via `~/.aws` monté
+        dans le conteneur (bloqué par les règles de permission de
+        l'utilisateur) — elles viennent de variables d'env `AWS_ACCESS_KEY_ID`
+        / `AWS_SECRET_ACCESS_KEY` / `AWS_SESSION_TOKEN` (credentials
+        temporaires exportées via `aws configure export-credentials`, dans le
+        `.env` gitignoré du serveur, jamais dans dev-target.json). Rappel à
+        garder visible sur la page (ex. près des variables) : certains
+        déclencheurs SQS/SNS (ex. un job de clôture planifié) agissent sur
+        TOUTE la base dev partagée, pas seulement le jeu de données du
+        scénario (confirmé sur PIXEL-5448 : un déclenchement a affecté 634
+        profils dev sans rapport avec le test) — ce n'est pas bloqué,
+        l'utilisateur assume ce risque à chaque clic.

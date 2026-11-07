@@ -1,0 +1,53 @@
+{
+  "error": null,
+  "warnings": [
+    "skill dropped, no knowledge graph for this run: graphify-context removed from stage collect",
+    "skill dropped, no knowledge graph for this run: graphify-context removed from stage plan",
+    "skill dropped, no knowledge graph for this run: graphify-context removed from stage fix"
+  ],
+  "gates": [],
+  "awaiting_plan": null,
+  "awaiting_composite": null,
+  "plan_schedules": [
+    {
+      "compiled_at": "<TIMESTAMP>",
+      "max_parallel": 4,
+      "plan_path": "<WORKSPACE>/.aidp/pipelines/_no-ticket/20260101-000000-golden/plan/plan.json",
+      "stage": "fix",
+      "tasks": [
+        {
+          "files": [
+            "src/Feature.cs"
+          ],
+          "id": "T1",
+          "kind": "code",
+          "status": "pending",
+          "title": "Implement the feature",
+          "wave": 0
+        },
+        {
+          "deps": [
+            "T1"
+          ],
+          "files": [
+            "tests/FeatureTests.cs"
+          ],
+          "id": "T2",
+          "kind": "tests",
+          "status": "pending",
+          "title": "Test the feature",
+          "wave": 1
+        }
+      ],
+      "waves": [
+        [
+          "T1"
+        ],
+        [
+          "T2"
+        ]
+      ],
+      "width": 1
+    }
+  ]
+}

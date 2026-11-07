@@ -1,0 +1,19 @@
+[
+  {
+    "filename": "src/a.rs",
+    "status": "modified",
+    "additions": 2,
+    "deletions": 1,
+    "sha": "aaa",
+    "patch": "@@ -10,3 +10,4 @@\n ctx10\n-del11\n+add11\n+add12\n ctx12"
+  },
+  {
+    "filename": "src/new_name.rs",
+    "previous_filename": "src/old_name.rs",
+    "status": "renamed",
+    "additions": 1,
+    "deletions": 0,
+    "sha": "bbb",
+    "patch": "@@ -1,2 +1,3 @@\n keep\n+added\n keep2"
+  }
+]

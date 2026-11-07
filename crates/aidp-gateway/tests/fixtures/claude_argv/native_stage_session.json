@@ -1,0 +1,23 @@
+{
+  "program": "claude",
+  "args": [
+    "-p",
+    "--output-format",
+    "stream-json",
+    "--input-format",
+    "stream-json",
+    "--verbose",
+    "--permission-mode",
+    "auto",
+    "--add-dir",
+    "run-dir"
+  ],
+  "cwd": "<project>",
+  "piped_stdin": true,
+  "piped_stdout": true,
+  "piped_stderr": true,
+  "envs": {
+    "AIDP_BIN": "<aidp-bin>",
+    "PATH": "<path>"
+  }
+}

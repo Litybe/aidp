@@ -1,0 +1,13 @@
+version: 5
+id: loop-body-unknown-dep
+stages:
+  - name: gate
+    agent: reviewer
+  - name: correction
+    type: loop
+    when: "{{ stages.gate.outputs.findings.has_blocking_findings }}"
+    max_iterations: 2
+    body:
+      - name: refix
+        agent: executor
+        needs: [ghost]

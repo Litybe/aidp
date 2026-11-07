@@ -1,0 +1,294 @@
+---
+source: crates/aidp-cli/tests/it_compile.rs
+expression: redacted
+---
+version: 5
+id: dev-composed
+name: ''
+description: |
+  Demo of pipeline composition — implement a ticket, then reuse the standalone `audit` pipeline as a single `type: pipeline` stage instead of re-declaring its explore/audit/report stages.
+kind: pipeline
+policy: []
+inputs:
+  feature:
+    required: false
+    kind: string
+    values: []
+    default: null
+    description: Optional feature/epic label; feeds run::feature_key, which names the git branch and the vault run folder in place of deriving them from the ticket list.
+  jira_keys:
+    required: false
+    kind: list
+    values: []
+    default: []
+    description: Une ou plusieurs US Jira de la MEME feature, en tableau JSON (ex. ["PIXEL-1","PIXEL-2"])
+  prompt:
+    required: false
+    kind: string
+    values: []
+    default: ''
+    description: ''
+  stack:
+    required: false
+    kind: enum
+    values:
+    - auto
+    - generic
+    - rust
+    - csharp
+    - lambda-ts
+    default: auto
+    description: Language stack of the repo, which picks the implement stage's language skills via skills_by. auto (default) lets aidp run init detect it from marker files (Cargo.toml, *.sln / *.csproj, serverless.* + package.json); generic keeps the multi-stack skill set.
+  target_path:
+    required: false
+    kind: string
+    values: []
+    default: src
+    description: ''
+settings:
+  max_correction_iterations: 2
+  max_stage_retries: 0
+  emit_effort: false
+  verify_scope: true
+  budget_floor_tokens: 50000
+  on_item_failure: pause
+  tool_enforcement: off
+stages:
+- name: prepare_branch
+  description: ''
+  policy: []
+  agent: executor
+  skills:
+  - git-branch-setup
+  needs: []
+  inputs:
+    branch: feat/{{ feature }}
+    jira_keys: '{{ inputs.jira_keys }}'
+  outputs:
+  - branch.json
+  with: {}
+  when: 'true'
+  body: []
+- name: discover_prompt
+  description: ''
+  policy: []
+  agent: analyzer
+  skills:
+  - graphify-context
+  - writing-clearly-and-concisely
+  needs:
+  - prepare_branch
+  inputs:
+    request: '{{ inputs.prompt }}'
+    task: |
+      The demand for this run is the free-text `request` above - there is no Jira ticket. Write prompt_context.md as the requirements note a planner would otherwise get from a ticket, with these sections: (1) Demand - the request restated in one paragraph, plus the verbatim request quoted so nothing is lost in your restatement; (2) Scope - what is in, and an explicit OUT-OF-SCOPE list; a prompt is looser than a ticket, so bounding it is the main value you add here; (3) Acceptance criteria - testable, numbered, derived from the request, each one checkable against code or a test; (4) Assumptions - every gap you filled to make the request actionable, one line each, flagged as an assumption and NOT as a fact; (5) Open questions - what a human must answer, and what you decided to assume in the meantime so the run is not blocked; (6) Affected area - the components and paths the request most likely touches, found via the code graph, so the planner starts from a map rather than from a blank page. Invent no requirement the request does not support. If the request is too vague to bound, say so in one line at the top of the note and still produce the best-effort sections - `plan.md` and the PR gate are where a human stops the run, not this stage.
+  outputs:
+  - prompt_context.md
+  with: {}
+  when: '{{ inputs.prompt }}'
+  body: []
+- name: plan
+  description: ''
+  policy: []
+  agent: planner
+  skills:
+  - ticket-to-plan-aidp
+  needs:
+  - prepare_branch
+  - discover_prompt
+  inputs:
+    jira_keys: '{{ inputs.jira_keys }}'
+    prompt_context: '{{ stages.discover_prompt.outputs.prompt_context }}'
+    task: |
+      The demand is in exactly ONE of `jira_keys` (Jira-driven run) or `prompt_context` (prompt-driven run). When `jira_keys` is empty (`[]`) there is no ticket to read and `prompt_context` IS the requirements note: plan from it, and carry its acceptance criteria, assumptions and open questions through into plan.json / plan.md verbatim rather than re-deriving them - on a prompt-driven run they are the only contract the implementation and the audit have. The other mode's stage was skipped at compile time, so neither its file nor the stage directory listed for it under `## Needs (upstream stage_dirs)` exists, which is expected, not an error.
+  outputs:
+  - plan.json
+  - plan.md
+  with: {}
+  body: []
+- name: implement
+  description: ''
+  policy: []
+  agent: executor
+  skills: []
+  skills_by:
+    input: stack
+    map:
+      csharp:
+      - csharp-dev-aidp
+      - feature-testing-aidp
+      lambda-ts:
+      - lambda-ts-dev-aidp
+      - feature-testing-aidp
+      rust:
+      - rust-dev-aidp
+      - rust-testing-aidp
+    default:
+    - csharp-dev-aidp
+    - lambda-ts-dev-aidp
+    - feature-testing-aidp
+  needs:
+  - plan
+  inputs: {}
+  outputs:
+  - changed-files.json
+  with: {}
+  scope:
+    mode: repo_wide
+    allowed: []
+    denied: []
+    writes: []
+    reads: []
+  plan_tasks:
+    from: '{{ stages.plan.outputs.plan }}'
+    max: 4
+    kinds: []
+    merge_hint: |
+      Apply every shared-file change the tasks deferred to you (wiring, imports, module/DI registration), then build/compile the project and run the FULL test suite once. Fix cross-task breakage and write the consolidated changed-files.json covering every task.
+  body: []
+- name: qa__explore
+  description: ''
+  policy: []
+  composite_entry: qa
+  agent: analyzer
+  skills:
+  - graphify-context
+  needs:
+  - implement
+  inputs:
+    path: '{{ inputs.target_path }}'
+  outputs:
+  - exploration.md
+  with: {}
+  body: []
+- name: qa__dim_correctness
+  description: ''
+  policy: []
+  agent: reviewer
+  skills:
+  - graphify-context
+  - code-review-aidp
+  - code-audit-rubric
+  needs:
+  - qa__explore
+  inputs:
+    axis: correctness
+    path: '{{ inputs.target_path }}'
+  outputs:
+  - findings.json
+  with: {}
+  body: []
+- name: qa__dim_security
+  description: ''
+  policy: []
+  agent: reviewer
+  skills:
+  - graphify-context
+  - code-review-aidp
+  - code-audit-rubric
+  needs:
+  - qa__explore
+  inputs:
+    axis: security
+    path: '{{ inputs.target_path }}'
+  outputs:
+  - findings.json
+  with: {}
+  body: []
+- name: qa__dim_perf
+  description: ''
+  policy: []
+  agent: reviewer
+  skills:
+  - graphify-context
+  - code-review-aidp
+  - code-audit-rubric
+  needs:
+  - qa__explore
+  inputs:
+    axis: performance
+    path: '{{ inputs.target_path }}'
+  outputs:
+  - findings.json
+  with: {}
+  body: []
+- name: qa__dim_maintainability
+  description: ''
+  policy: []
+  agent: reviewer
+  skills:
+  - graphify-context
+  - code-review-aidp
+  - code-audit-rubric
+  needs:
+  - qa__explore
+  inputs:
+    axis: maintainability
+    path: '{{ inputs.target_path }}'
+  outputs:
+  - findings.json
+  with: {}
+  body: []
+- name: qa__verify
+  description: ''
+  policy: []
+  agent: reviewer
+  model: opus
+  skills:
+  - graphify-context
+  - code-audit-rubric
+  needs:
+  - qa__dim_correctness
+  - qa__dim_security
+  - qa__dim_perf
+  - qa__dim_maintainability
+  inputs: {}
+  outputs:
+  - confirmed.json
+  - scores.json
+  with: {}
+  body: []
+- name: qa__report
+  description: ''
+  policy: []
+  agent: executor
+  skills:
+  - writing-clearly-and-concisely
+  needs:
+  - qa__verify
+  inputs: {}
+  outputs:
+  - audit-report.md
+  with: {}
+  gate: true
+  scope:
+    mode: stage_dir_only
+    allowed: []
+    denied: []
+    writes: []
+    reads: []
+  body: []
+- name: pr
+  description: ''
+  policy:
+  - Open the PR with `aidp gh pr-create --draft` only when the stage input pr_draft is true; otherwise open a regular PR.
+  agent: executor
+  skills:
+  - git-push
+  - writing-clearly-and-concisely
+  needs:
+  - qa__report
+  inputs:
+    audit_report: '{{ stages.qa__report.outputs.audit-report }}'
+    pr_draft: '{{ settings.pr_draft }}'
+  outputs:
+  - pr.json
+  with: {}
+  gate: true
+  scope:
+    mode: stage_dir_only
+    allowed: []
+    denied: []
+    writes: []
+    reads: []
+  body: []

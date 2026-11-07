@@ -1,0 +1,5 @@
+version: 5
+id: ctx-test
+stages:
+  - name: build
+    agent: executor

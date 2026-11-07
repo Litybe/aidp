@@ -1,0 +1,8 @@
+{"data":{"viewer":{"login":"me"},"repository":{"pullRequest":{
+"number":8,"url":"u","title":"Abandoned","state":"CLOSED","isDraft":false,
+"headRefName":"feat/X-3","headRefOid":"fff000","baseRefName":"master","mergeable":"UNKNOWN","reviewDecision":"APPROVED",
+"author":{"login":"dev"},
+"latestOpinionatedReviews":{"nodes":[]},"reviewRequests":{"nodes":[]},
+"commits":{"nodes":[{"commit":{"statusCheckRollup":null}}]},
+"reviewThreads":{"nodes":[]}}}}
+}

@@ -1,0 +1,120 @@
+4358694eeb098c6708ae914a10562ce722bbbc34chore: pin lockfile version2026-03-05T09:00:00+01:00
+package-lock.json
+
+2a5bd02710e975a7fbb92da876655950fbd5e70ddocs: refresh contributing guide2026-03-04T17:20:00+01:00
+CONTRIBUTING.md
+
+e5353879bd69bfddcb465dad176ff52db8319d6fchore: update changelog2026-03-04T11:05:00+01:00
+CHANGELOG.md
+
+96d63be07ffb831476be9ace9430c843fc2ec13afix: reports api pagination edge case2026-03-03T16:40:00+01:00
+src/reports/g1.rs
+src/reports/g2.rs
+src/reports/g3.rs
+src/reports/h1.rs
+src/reports/h2.rs
+src/reports/h3.rs
+src/reports/h4.rs
+src/reports/h5.rs
+src/reports/h6.rs
+src/reports/h7.rs
+
+57f881b232ae914b5be7acf911dd651f03aa8628feat: add pagination to reports API2026-03-03T14:10:00+01:00
+src/reports/g1.rs
+src/reports/g2.rs
+src/reports/g3.rs
+src/reports/g4.rs
+src/reports/g5.rs
+src/reports/g6.rs
+src/reports/g7.rs
+src/reports/g8.rs
+src/reports/g9.rs
+src/reports/g10.rs
+
+57afe5f5a666f7fe1f6bbe6f38f5bfbfe452fe5cfix: correct rate limiter overflow2026-03-02T18:05:00+01:00
+src/auth/limiter.rs
+src/auth/config.rs
+src/auth/middleware.rs
+src/auth/newfile1.rs
+src/auth/newfile2.rs
+
+074360eac0216641727f1780a6dfc7e81625f4dbfeat: add rate limiter for auth service2026-03-02T15:30:00+01:00
+src/auth/limiter.rs
+src/auth/config.rs
+src/auth/middleware.rs
+src/auth/types.rs
+src/auth/errors.rs
+
+486766b6ea4c4039937db945d26b80c982a4cc26Revert "feat: add experimental cache layer"2026-03-01T20:00:00+01:00
+src/cache/layer.rs
+
+727f615f0f8102fb623e0eaf6b8338e401b42cdcfeat: add experimental cache layer2026-03-01T09:15:00+01:00
+src/cache/layer.rs
+
+c96cc68a88c8873293b6763aedd443b7ee5b003cfix: adjust d scoring thresholds2026-02-28T12:00:00+01:00
+src/d/model.rs
+src/d/scoring.rs
+
+a9905b1fec3fd96878bed292754de64de0079aaefeat: minor improvement to logging2026-02-27T10:00:00+01:00
+src/misc/logging.rs
+
+44805fa6d1f0bede6441265b485cb0fdff8c55a6chore: bump lodash to 4.17.212026-02-27T11:00:00+01:00
+package.json
+
+64176640f9201620e2647a53fb8055e6ddf1d19erefactor: extract helper function alpha2026-02-27T12:00:00+01:00
+src/misc/helpers.rs
+
+0173eaaf96eb9e79f0f22eb60bfbd57fe499b82dchore: update eslint config2026-02-26T10:00:00+01:00
+.eslintrc.json
+
+1fe5ad0797f0b600121ca59c5520a10b404fabd0feat: add tooltip to settings page2026-02-26T11:00:00+01:00
+src/misc/tooltip.rs
+
+052fad6fc826b0c7b19fc7a1bee42831df396030chore: bump ci runner image2026-02-26T12:00:00+01:00
+.github/workflows/ci.yml
+
+022fdce3c3acaf4bc1acbfb1152cfee330b69cf2refactor: rename internal constant beta2026-02-25T10:00:00+01:00
+src/misc/constants.rs
+
+dbe9136e7c733ea06b6283a0a226036038d673e3chore: tidy up gitignore2026-02-25T11:00:00+01:00
+.gitignore
+
+f8cebdbe84171bd5f01db3ca29e124048a70a77afeat: add loading spinner2026-02-25T12:00:00+01:00
+src/misc/spinner.rs
+
+8defe0014e898f44893873cfc9e327328422fef8chore: bump typescript version2026-02-24T10:00:00+01:00
+package.json
+
+9fa4455c2989b9708cbd92e7f3bd81fe0cfe1debrefactor: simplify config loader2026-02-24T11:00:00+01:00
+src/misc/config_loader.rs
+
+e24275b2500af280a7b70f49d69692e3540a4f79chore: update prettier config2026-02-24T12:00:00+01:00
+.prettierrc
+
+00da01dd793780e9c81bbe9952eaeb106ec428f5feat: add empty state illustration2026-02-23T10:00:00+01:00
+src/misc/empty_state.rs
+
+4a80959351ae8d1d840771614504a026c6b743f1chore: bump jest version2026-02-23T11:00:00+01:00
+package.json
+
+6b1a24717b564e0b9c0fc1bcade2177ce1820107refactor: split large module gamma2026-02-23T12:00:00+01:00
+src/misc/module_gamma.rs
+
+a3be2fdd10ccc6cf39f3c24d2e757114dbf06592chore: update readme badges2026-02-22T10:00:00+01:00
+README.md
+
+01d101682960d83afc5124b4d256ba7f04e4c74dfeat: add keyboard shortcut hint2026-02-22T11:00:00+01:00
+src/misc/shortcut.rs
+
+a137fe5018c043fd03b4e2154d9c77a6a7211f92chore: bump webpack version2026-02-22T12:00:00+01:00
+package.json
+
+90812f7326a30350b3774dc5ad1584776413a8ccrefactor: extract shared type delta2026-02-21T10:00:00+01:00
+src/misc/types_delta.rs
+
+c5ef4b0236d08f391ec768d174179cf96ff10983chore: update license year2026-02-21T11:00:00+01:00
+LICENSE
+
+2d2e67641c40945eef886d5424a0387bc8f9e1fdfeat: add outcome scoring for D scenario2026-02-01T08:00:00+01:00
+src/d/model.rs
+src/d/scoring.rs

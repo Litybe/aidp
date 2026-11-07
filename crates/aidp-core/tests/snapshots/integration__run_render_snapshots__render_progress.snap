@@ -1,0 +1,14 @@
+---
+source: crates/aidp-core/tests/run_render_snapshots.rs
+expression: render_progress(&deterministic_state())
+---
+# Run 20260101-000000-abcd — render-snapshots
+
+- last workflow status: done (2/4 stages)
+
+| Stage | Status | Started | Finished | Duration | Tokens |
+|---|---|---|---|---|---|
+| context | success | 2026-01-01T00:00:00+00:00 | 2026-01-01T00:05:00+00:00 | 3.4s | 1.2k |
+| plan | success | 2026-01-01T00:00:00+00:00 | 2026-01-01T00:05:00+00:00 | 1m 02s | 18.5k |
+| implement | cancel | 2026-01-01T00:00:00+00:00 | 2026-01-01T00:05:00+00:00 | 3m 10s | 1.2M |
+| review | skipped | 2026-01-01T00:00:00+00:00 | 2026-01-01T00:05:00+00:00 | 0ms | 0 |

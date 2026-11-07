@@ -1,0 +1,9 @@
+{
+  "stage": "pr",
+  "status": "completed",
+  "pr_url": "https://github.com/acme/app/pull/41",
+  "pr_number": 41,
+  "repository": "acme/app",
+  "branch": "feat/LOC-7",
+  "commit_sha": "aaaaaaa"
+}

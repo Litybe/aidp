@@ -1,0 +1,55 @@
+{
+  "run_id": "",
+  "pipeline_path": "",
+  "pipeline_id": "",
+  "workspace_root": "",
+  "run_dir": "",
+  "started_at": "",
+  "inputs": {},
+  "plan": [],
+  "stages": [
+    {
+      "name": "context",
+      "status": "success",
+      "started_at": null,
+      "finished_at": null,
+      "duration_ms": 3400,
+      "tokens_used": 1200,
+      "stage_dir": "",
+      "outputs": {
+        "context": "/ws/context/context.md"
+      },
+      "summary": "context gathered",
+      "follow_ups": [
+        "check the ADR"
+      ]
+    },
+    {
+      "name": "plan",
+      "status": "success",
+      "started_at": null,
+      "finished_at": null,
+      "duration_ms": 2100,
+      "tokens_used": 800,
+      "stage_dir": "",
+      "outputs": {},
+      "summary": "plan drafted, one open question",
+      "follow_ups": [
+        "confirm the rollout order"
+      ]
+    },
+    {
+      "name": "implement",
+      "status": "cancel",
+      "started_at": null,
+      "finished_at": null,
+      "duration_ms": 9000,
+      "tokens_used": 5000,
+      "stage_dir": "",
+      "outputs": {},
+      "summary": "build failed on the merge step"
+    }
+  ],
+  "loops": {},
+  "last_workflow_status": "done"
+}

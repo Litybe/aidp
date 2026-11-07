@@ -1,0 +1,68 @@
+---
+source: crates/aidp-cli/tests/cli_surface.rs
+expression: normalized
+---
+ai-dev-pipeline v7 helper: compiles pipelines into Workflow scripts and manages runs, the vault, tickets and flows
+
+Usage: <BIN> [OPTIONS] <COMMAND>
+
+Commands:
+  validate     Validate a pipeline YAML (schema + composition: refs, cycles, inputs)
+  pipeline     Discover pipelines: `list` them, `show` one, or `expand` its compositions
+  run          Run lifecycle: init, start, state, summary, reconcile, resume anchors
+  scope        Scope checking
+  agents       Discover registered agents
+  skills       Resolve a skill name
+  skill-rules  Check the stage diff against the rules of the loaded skills
+  topo         Topo-sort a pipeline
+  progress     Render run progress (markdown)
+  gate         Gate lifecycle: approve/abort/pending. Persists the decision then hands back exactly what the driver needs to act on it
+  gh           GitHub verbs (pull requests, checks, review threads, workflow runs) through the `gh` CLI
+  project      Facts about a project directory (stack detection)
+  mock         Run the local mock HTTP server
+  workflow     v7 engine: compile a run into a Claude Code Workflow script
+  vault        v7: the Obsidian vault that holds everything pipelines produce
+  knowledge    v7: the per-project knowledge base — its two layers, and the create-or-update decision for a feature note
+  gateway      The resident control plane: headless claude sessions, automations (cron / webhook / event), HTTP API + SSE for the viewer
+  ticket       The local ticket backlog under `<vault>/TODO/`, only ever written by `<BIN>`: an agent must never hand-edit a ticket's status or frontmatter
+  flow         Ticket flows: validate a definition, start and drive a run through the daemon
+  rag          RAG over the project corpus: index and search BIBLE, docs, C# code, runs and tickets
+  memory       Project memory: lessons and decisions injected into pipeline stages
+  doctor       Self-check: binary, templates, agents, hooks, schemas, vault
+  status       List runs found in the vault, and under `.aidp/pipelines/` in the current workspace
+  setup        Setup helpers (cross-platform JSON merge for hooks, etc.)
+  cost         Cost measurement: per-run breakdown, JSONL ledger, counterfactual and anomaly detection. Never changes a `model:` or makes a routing decision
+  git          Git history as a differed signal: commit outcomes (revert, hotfix, success) derived from history, never from the reply envelope
+  findings     Deterministic findings.json merge: fold N axis reviews into one canonical verdict mechanically instead of via a synthesis model
+  help         Print this message or the help of the given subcommand(s)
+
+Options:
+      --workspace-root <PATH>
+          Workspace to act on instead of the current directory
+
+      --vault <PATH>
+          Obsidian vault to use instead of `AIDP_VAULT`, `~/.aidp/config.json` or auto-detection
+
+      --no-vault
+          Ignore any vault and keep artefacts in the repo (`.aidp/pipelines/`)
+
+      --format <FORMAT>
+          Output format. Each command keeps its own default when omitted
+
+          Possible values:
+          - json-compact: One compact JSON document on a single line
+          - json-pretty:  One indented JSON document
+          - ndjson:       One compact JSON value per line
+          - text:         Human-readable text
+          - footer:       The one-line cost footer of a report, for `<BIN> cost ticket`; text elsewhere
+
+  -v, --verbose...
+          More diagnostics on stderr; repeat for more (`-vv`)
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+  -V, --version
+          Print version
+
+Exit codes: 0 success, 1 internal, 2 hook wake, 3 not found, 4 policy refusal, 5 upstream failure, 6 negative verdict, 7 usage. See the "Exit codes" section of README.md.

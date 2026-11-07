@@ -1,0 +1,11 @@
+version: 5
+id: provider-fixture
+description: Fixture declaring agent providers.
+settings:
+  providers:
+    executor: claude
+stages:
+  - name: work
+    agent: executor
+    provider: fake
+    outputs: [result.md]

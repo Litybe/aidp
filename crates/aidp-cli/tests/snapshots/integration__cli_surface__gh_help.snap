@@ -1,0 +1,66 @@
+---
+source: crates/aidp-cli/tests/cli_surface.rs
+expression: normalized
+---
+GitHub verbs (pull requests, checks, review threads, workflow runs) through the `gh` CLI
+
+Usage: <BIN> gh [OPTIONS] <COMMAND>
+
+Commands:
+  pr-create              gh pr create
+  pr-ready               Mark a PR ready for review, or back to draft with --undo. Emits {changed, draft}
+  pr-update-branch       Rebase a PR branch onto its base through GitHub. Emits {head_sha}
+  pr-merge               Squash-merge a PR whose merge gate is open, pinned to a head sha
+  labels-migrate         Migrate a repository's labels to the aidp vocabulary: create the missing labels, `aidp:need-fix` to `aidp:fixing`, `aidp:done` with an open PR to `aidp:awaiting-merge`. Dry run unless `--apply`. Emits the plan
+  thread-reply           Reply on a review thread by GraphQL node id
+  pr-fix                 Ask the daemon to start an autonomous fix session on selected review threads and comment points. Emits the daemon's answer
+  thread-resolve         Resolve review threads; exits 6 when any thread failed. Emits one {id, ok, error?} per thread
+  pr-view                gh pr view --json (projection: number, url, title, state, mergeable)
+  pr-diff                gh pr diff (returns text)
+  pr-resolve             Resolve the PR in play: the argument, else the current branch PR. Emits {number, url, title, state, head_ref, base_ref, head_sha, is_draft, repo} or {found:false}
+  pr-checks              Every check run on a PR, bucketed. Emits {conclusion, failing[], pending[], all[]}
+  pr-status              Merge readiness of a PR: checks, review, threads and a gate verdict. Emits the status document; the exit code is 0 whatever the verdict
+  squad-repos            The squad's repositories. Emits {repos, degraded}
+  squad-prs              Open pull requests of the squad with their lanes and my review state. Emits {fetched_at, me, repos, prs, degraded}
+  pr-review-threads      Unresolved review threads on a PR, with the GraphQL node IDs a reply needs. Emits {total, unresolved, threads[]} with startLine, comments[], lastBy, addressed and waitingOnReviewer per thread
+  pr-comments            Conversation comments and review bodies of a PR, split into points. Emits one {id, author, bot, kind, points[]} per comment
+  pr-detail              Everything a PR page shows: status, reviews, commits, threads and comments
+  pr-files               One page of the files a PR changes, with their patches. Emits {page, per_page, files[]}
+  pr-file-diff           The unified diff of one file of a PR (returns text)
+  comment-create         Post a conversation comment on a PR. Emits {id, url}
+  pr-comment             Post a conversation comment on a PR. Emits {id, url}
+  comment-edit           Replace the text of a conversation comment. Emits {id, url}
+  comment-delete         Delete a conversation comment
+  review-comment-create  Post one inline comment on the PR head commit, outside any review. Emits {id, url}
+  review-comment-edit    Replace the text of an inline review comment. Emits {id, url}
+  review-comment-delete  Delete an inline review comment
+  review-submit          Submit a review and all its inline comments in one request. Emits {id, state, url, comment_count}
+  review-post            Post review findings as inline comments, idempotent per run and pass. Emits {posted, reviewId, threads[]}
+  thread-reopen          Reply on a review thread, then reopen it. Emits {threadId, replied, unresolved}
+  help                   Print this message or the help of the given subcommand(s)
+
+Options:
+      --workspace-root <PATH>
+          Workspace to act on instead of the current directory
+
+      --vault <PATH>
+          Obsidian vault to use instead of `AIDP_VAULT`, `~/.aidp/config.json` or auto-detection
+
+      --no-vault
+          Ignore any vault and keep artefacts in the repo (`.aidp/pipelines/`)
+
+      --format <FORMAT>
+          Output format. Each command keeps its own default when omitted
+
+          Possible values:
+          - json-compact: One compact JSON document on a single line
+          - json-pretty:  One indented JSON document
+          - ndjson:       One compact JSON value per line
+          - text:         Human-readable text
+          - footer:       The one-line cost footer of a report, for `<BIN> cost ticket`; text elsewhere
+
+  -v, --verbose...
+          More diagnostics on stderr; repeat for more (`-vv`)
+
+  -h, --help
+          Print help (see a summary with '-h')

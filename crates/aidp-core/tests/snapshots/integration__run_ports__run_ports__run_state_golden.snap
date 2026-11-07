@@ -1,0 +1,33 @@
+---
+source: crates/aidp-core/tests/run_ports.rs
+expression: normalized
+---
+{
+  "feature": "_no-ticket",
+  "inputs": {},
+  "knowledge_root": "<WORKSPACE>/.aidp/knowledge",
+  "loops": {},
+  "pipeline_id": "run-ports-golden",
+  "pipeline_path": "<WORKSPACE>/.aidp/pipelines/_no-ticket/FIXED-0001/effective-pipeline.yaml",
+  "plan": [
+    [
+      "discover"
+    ]
+  ],
+  "run_dir": "<WORKSPACE>/.aidp/pipelines/_no-ticket/FIXED-0001",
+  "run_id": "FIXED-0001",
+  "stages": [
+    {
+      "duration_ms": null,
+      "finished_at": null,
+      "name": "discover",
+      "outputs": {},
+      "stage_dir": "<WORKSPACE>/.aidp/pipelines/_no-ticket/discover",
+      "started_at": null,
+      "status": "pending",
+      "tokens_used": null
+    }
+  ],
+  "started_at": "2026-01-01T00:00:00+00:00",
+  "workspace_root": "<WORKSPACE>"
+}

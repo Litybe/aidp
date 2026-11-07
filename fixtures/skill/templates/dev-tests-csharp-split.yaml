@@ -1,0 +1,201 @@
+version: 5
+id: dev-tests-csharp-split
+kind: fragment
+description: >
+  Reusable test-WRITING phase for Pixelhood C#/.NET dev pipelines, split into two
+  dedicated stages that run in parallel:
+    * `tests_unit`     — xUnit unit tests (per use-case / handler / validator,
+      Fakes/ test doubles, AAA, Moq + Shouldly);
+    * `tests_reqnroll` — Reqnroll BDD functional/integration tests
+      (Features/*.feature + StepDefinitions), bootstrapping the
+      `cheat.<PROJECT>.functional.tests` project and its Support/ harness when
+      the repo has none.
+  Same deliverable as `dev-tests-csharp` (one consolidated changed-files.json),
+  but the two test categories are two STAGES instead of two shards of one
+  `fan_out:` stage. What that buys: one stage_dir, one artifact set, one skill
+  list and one cost line per category — each category visible on its own in the
+  vault index and in the cost ledger, and each with its own `when:` / `model:`
+  knob if a composing pipeline ever needs to skip or upgrade just one of them.
+  Both writer stages declare no `needs`, so they are this sub-pipeline's ENTRY
+  points: the composing stage's `needs` (e.g. `[implement]`) cascades onto both
+  and, being adjacent and mutually independent, the v7 emitter groups them into
+  ONE `parallel()` block.
+  A third stage, `tests_suite`, is not a third test category: it is the merge
+  step the framework needs. The .sln / shared .csproj entries are files two
+  parallel writers must not both touch, `dotnet test` has to be run once over
+  the whole solution, and the review phase downstream reads ONE
+  changed-files.json.
+  Writes tests only — never production code. Reqnroll is .NET-only, so this
+  sub-pipeline is C#-specific by design; TypeScript / stack-agnostic dev
+  pipelines keep their own test phase.
+inputs:
+  # The upstream implementation stage's changed-files.json — the exact write set
+  # to cover. Optional: when the composing pipeline maps nothing (or an empty
+  # value), both writers fall back to the working-tree diff against the base
+  # branch, which is what `dev-tests-csharp` has always done.
+  #
+  # NEVER reference either input in a `when:` guard. An unmapped input has its
+  # default substituted at composition time, and an empty string makes a guard
+  # unparseable — which fails OPEN (see the `prompt` sentinel in
+  # `dev-discovery.yaml`). These are prose inputs, read by the sub-agents only.
+  changed_files: { required: false, kind: string, default: "" }
+  # context.md from the discovery phase: the acceptance criteria the Reqnroll
+  # scenarios must map onto one-for-one, and the business rules the unit tests
+  # must pin down. Optional, same fallback rule.
+  context: { required: false, kind: string, default: "" }
+settings:
+  # Match the KG config used by the other composable sub-pipelines so a graph is
+  # used when present but never built on a run. Non-blocking if graphify absent.
+  knowledge_graph:
+    enabled: true
+    refresh: never
+    code_only: true
+stages:
+  # --- Writer 1 of 2. No `needs` → composition entry stage (see the header):
+  # the composite parent's `needs` / `when` / `gate` cascades onto it, and it is
+  # emitted in the same `parallel()` block as `tests_reqnroll`.
+  #
+  # The two writers are file-disjoint by construction — the unit test project(s)
+  # on one side, the `cheat.<PROJECT>.functional.tests` project on the other —
+  # which is what makes running them in ONE shared working tree safe. No
+  # `isolation: worktree` on purpose: the merge stage below has to see both
+  # writers' files in the same tree to build and run the suite.
+  - name: tests_unit
+    agent: executor
+    skills: [graphify-context, feature-testing-aidp, csharp-dev-aidp]
+    scope: { mode: tests }
+    inputs:
+      changed_files: "{{ inputs.changed_files }}"
+      context: "{{ inputs.context }}"
+      task: >
+        Write the xUnit UNIT tests for the change this run just implemented, and
+        nothing else — no production code, no Gherkin/BDD test.
+
+        WHAT TO COVER. Read `changed_files` for the exact write set; when it is
+        empty, take the working-tree diff against the base branch as the write
+        set. For every use-case, handler, validator and domain rule it touches:
+        the happy path, EVERY business rule and threshold (one test per rule,
+        named after the rule), every guard clause, and the error paths. Derive
+        the cases from the acceptance criteria in `context` when it is given,
+        from the code otherwise — and when a criterion is not testable at the
+        unit level, say so in `follow_ups` instead of writing a test that only
+        looks like it covers it.
+
+        HOW. Conventions come from `feature-testing-aidp` (test boundary, AAA,
+        naming, edge and error paths) and `csharp-dev-aidp` (Fakes/ test doubles,
+        Moq + Shouldly, file-scoped namespaces): follow them rather than the
+        style of whatever test file you happen to open first. Assert behaviour
+        and values, never just "did not throw".
+
+        PARALLEL WRITER. `tests_reqnroll` is writing the Reqnroll functional
+        suite AT THE SAME TIME in the SAME working tree. Stay inside the unit
+        test project(s). Do NOT touch the `cheat.<PROJECT>.functional.tests`
+        tree, the .sln, or any .csproj shared with it — if you need a new package
+        or a new project registered, list it under `follow_ups` and leave the
+        shared file to `tests_suite`.
+
+        PROVE IT, THEN STOP. Run only your own project's tests
+        (`dotnet test <unit test project>`) so you know they compile and pass;
+        `tests_suite` runs the whole solution once. Write changed-files.json
+        (schema/changed-files.schema.json) listing every test file you created or
+        modified, with any package you needed under `new_dependencies`.
+    outputs: [changed-files.json]
+
+  # --- Writer 2 of 2. Also `needs`-free → second entry stage, so this one and
+  # `tests_unit` are the parallel pair a composing pipeline gets.
+  #
+  # This is the stage that tests the feature END TO END, which is exactly why a
+  # composed test phase belongs AFTER the whole implementation rather than task
+  # by task: a BDD scenario needs the complete feature wired and building, not
+  # one plan task's slice of it.
+  - name: tests_reqnroll
+    agent: executor
+    skills: [graphify-context, reqnroll-testing-aidp, csharp-dev-aidp]
+    scope: { mode: tests }
+    inputs:
+      changed_files: "{{ inputs.changed_files }}"
+      context: "{{ inputs.context }}"
+      task: >
+        Write the Reqnroll (Gherkin/BDD) FUNCTIONAL & INTEGRATION tests for the
+        feature this run just implemented, and nothing else — no production code,
+        no unit test.
+
+        WHAT TO COVER. One `Features/*.feature` per business capability, one
+        scenario per acceptance criterion in `context` — map them ONE-FOR-ONE and
+        name the criterion in the scenario title, so an unmapped criterion is
+        visible instead of quietly missing. Read `changed_files` for the write
+        set the feature landed in; when it is empty, take the working-tree diff
+        against the base branch. Drive the service through its real entry points
+        (HTTP endpoint, event handler) and assert the observable outcome:
+        response, persisted document, published event.
+
+        WHERE. ALWAYS the solution's functional-test project
+        `cheat.<PROJECT>.functional.tests`, where `<PROJECT>` is the
+        service/solution name (for the `cheat.alerts` solution:
+        `cheat.alerts.functional.tests`) — reuse it if it exists. If the repo has
+        no Reqnroll suite yet, BOOTSTRAP one per `reqnroll-testing-aidp` rather
+        than skipping this stage: create that project, add the Reqnroll,
+        Reqnroll.xUnit, Testcontainers.MongoDb and WireMock.Net packages,
+        `reqnroll.json`, and the Support/ harness (Hooks, WebAppFactory,
+        WebAppFixture, WireMockSetup) with real isolation between scenarios.
+
+        PARALLEL WRITER. `tests_unit` is writing the xUnit suite AT THE SAME TIME
+        in the SAME working tree. Stay inside
+        `cheat.<PROJECT>.functional.tests`. Do NOT edit the .sln — registering a
+        project you just bootstrapped is `tests_suite`'s job, so say so in
+        `follow_ups` — and do not touch any unit test project.
+
+        PROVE IT, THEN STOP. Run your own project's tests so you know the harness
+        comes up and the scenarios pass; `tests_suite` runs the whole solution
+        once. Write changed-files.json (schema/changed-files.schema.json) listing
+        every file you created or modified, with the Reqnroll / Testcontainers /
+        WireMock packages under `new_dependencies`.
+    outputs: [changed-files.json]
+
+  # --- Merge step, and the sub-pipeline's only terminal stage: it `needs` both
+  # writers → it breaks the parallel group and runs once after the fan-out, and a
+  # composing pipeline's `needs: [<this composite>]` resolves to THIS stage. It
+  # owns exactly what the two parallel writers deliberately left alone: the
+  # shared solution files, the full-solution test run, and the consolidated
+  # changed-files.json the review phase reads.
+  - name: tests_suite
+    agent: executor
+    skills: [csharp-dev-aidp, feature-testing-aidp, reqnroll-testing-aidp]
+    needs: [tests_unit, tests_reqnroll]
+    scope: { mode: tests }
+    inputs:
+      unit_changes: "{{ stages.tests_unit.outputs.changed-files }}"
+      reqnroll_changes: "{{ stages.tests_reqnroll.outputs.changed-files }}"
+      task: >
+        Merge step of the test phase. The two writer stages ran in parallel and
+        each deliberately left the SHARED files to you. In order:
+
+        1. REGISTER what they bootstrapped. Add any new test project to the .sln
+        — this stage is the only one in the phase allowed to edit it — and
+        confirm `dotnet build` discovers it. Apply the shared-file items the
+        writers listed under `follow_ups` (a package version in
+        Directory.Packages.props, a shared test .csproj entry).
+
+        2. RUN THE FULL SUITE ONCE: `dotnet test` over the whole solution, every
+        test project included, the `cheat.<PROJECT>.functional.tests` Reqnroll
+        project among them.
+
+        3. FIX WHAT THE WRITERS COULD NOT SEE, TESTS ONLY: cross-project
+        breakage, a Reqnroll harness that does not come up under the full run,
+        and coverage the two writers duplicated (delete the weaker duplicate,
+        never both). If the suite is red because the PRODUCTION code is wrong, do
+        NOT bend the test to make it pass and do NOT edit production code: leave
+        the failing assertion as it is, record the failure under
+        `pre_existing_issues` in changed-files.json with the expected vs observed
+        value, and name it in test-report.md. The review phase reads that report
+        and the correction loop fixes the code — that is the design, and a
+        weakened assertion defeats it.
+
+        4. WRITE THE ARTIFACTS. changed-files.json
+        (schema/changed-files.schema.json) covering BOTH writers' files plus your
+        own — merge `unit_changes` and `reqnroll_changes` rather than re-deriving
+        the list from the diff — with `build_status` set. And test-report.md:
+        what was added per category, the suite result (total / passed / failed /
+        skipped), the acceptance criteria that ended up with no test, and what is
+        still not covered.
+    outputs: [changed-files.json, test-report.md]

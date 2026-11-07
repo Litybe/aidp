@@ -1,0 +1,11 @@
+version: 5
+id: vault-leak-repo-wide
+description: Single repo_wide stage, used only by the LOC-46 CLI e2e vault-leak
+  exit-code tests to prove a Pipelines/... path is a leak, not a scope
+  violation, even under the most permissive scope mode.
+inputs: {}
+stages:
+  - name: implement
+    agent: executor
+    scope:
+      mode: repo_wide

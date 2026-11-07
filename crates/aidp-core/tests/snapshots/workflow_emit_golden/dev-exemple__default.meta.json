@@ -1,0 +1,12 @@
+{
+  "error": null,
+  "warnings": [],
+  "gates": [],
+  "awaiting_plan": {
+    "plan_path": "<WORKSPACE>/.aidp/pipelines/golden-value/20260101-000000-golden/plan/plan.json",
+    "producer": "plan",
+    "stage": "implementation"
+  },
+  "awaiting_composite": null,
+  "plan_schedules": []
+}

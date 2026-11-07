@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "run_id": "run-c6-fixture",
+  "iter": 0,
+  "generated_at": "2026-09-09T10:00:00Z",
+  "severity_counts": { "blocking": 1, "major": 0, "minor": 0, "info": 0 },
+  "has_blocking_findings": true,
+  "findings": [
+    {
+      "id": "F-1",
+      "severity": "blocking",
+      "category": "correctness",
+      "file": "src/foo.rs",
+      "line": 42,
+      "title": "Off-by-one in the pagination cursor",
+      "description": "The cursor is advanced before the boundary check, dropping the last page's first row.",
+      "suggestion": "Advance the cursor after the boundary check.",
+      "related_ids": []
+    }
+  ]
+}

@@ -1,0 +1,38 @@
+{
+  "branch": "fix/pr-comments",
+  "launch_tail": [
+    "--disallowedTools",
+    "AskUserQuestion",
+    "Bash(git push --force*)",
+    "Bash(git push -f*)",
+    "Bash(git push --force-with-lease*)",
+    "Bash(git push origin master*)",
+    "Bash(git push origin main*)",
+    "Bash(git push --delete*)",
+    "Bash(git push origin :*)",
+    "Bash(gh pr merge*)",
+    "Bash(gh pr close*)",
+    "Bash(rm -rf*)",
+    "Edit(~/.aidp/**)",
+    "Write(~/.aidp/**)",
+    "Read(**/.env*)",
+    "Read(~/.ssh/**)",
+    "Read(~/.aws/**)",
+    "Bash(git push origin +*)",
+    "Bash(git push --mirror*)",
+    "Bash(git push --all*)",
+    "Bash(git push --tags*)",
+    "Bash(git push --prune*)",
+    "--allowedTools",
+    "Bash(git push)",
+    "Bash(git push origin fix/pr-comments)",
+    "Bash(git push origin HEAD:fix/pr-comments)"
+  ],
+  "extra_deny": [
+    "Bash(git push origin +*)",
+    "Bash(git push --mirror*)",
+    "Bash(git push --all*)",
+    "Bash(git push --tags*)",
+    "Bash(git push --prune*)"
+  ]
+}

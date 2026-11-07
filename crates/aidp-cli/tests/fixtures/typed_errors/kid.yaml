@@ -1,0 +1,5 @@
+id: kid
+name: Kid
+stages:
+  - name: b
+     agent: x

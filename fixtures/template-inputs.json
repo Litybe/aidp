@@ -1,0 +1,161 @@
+{
+  "audit": {
+    "target_path": "src/sample"
+  },
+  "cartography-cheat": {
+    "repo_path": "sample-repo",
+    "service": "sample-service"
+  },
+  "datadog-dashboard-cheat": {
+    "action": "create",
+    "objective": "sample objective"
+  },
+  "dev": {
+    "jira_keys": [
+      "PIXEL-1"
+    ]
+  },
+  "dev-aidp": {
+    "feature": "sample-feature",
+    "prompt": "sample prompt"
+  },
+  "dev-exemple": {
+    "feature": "sample-feature",
+    "prompt": "sample prompt"
+  },
+  "dev-aidp-viewer": {
+    "feature": "sample-feature",
+    "prompt": "sample prompt"
+  },
+  "dev-angular": {
+    "jira_keys": [
+      "PIXEL-1"
+    ]
+  },
+  "dev-composed": {
+    "jira_keys": [
+      "PIXEL-1"
+    ]
+  },
+  "dev-csharp": {
+    "jira_keys": [
+      "PIXEL-1"
+    ]
+  },
+  "dev-csharp-cheat-stack": {
+    "jira_keys": [
+      "PIXEL-1"
+    ]
+  },
+  "dev-csharp-short": {
+    "jira_keys": [
+      "PIXEL-1"
+    ]
+  },
+  "dev-discovery": {
+    "jira_keys": [
+      "PIXEL-1"
+    ]
+  },
+  "dev-from-audit": {
+    "audit_report": "sample-audit-report.md",
+    "jira_keys": [
+      "PIXEL-1"
+    ]
+  },
+  "dev-from-audit-lambda-ts": {
+    "audit_report": "sample-audit-report.md",
+    "jira_keys": [
+      "PIXEL-1"
+    ]
+  },
+  "dev-lambda-ts": {
+    "jira_keys": [
+      "PIXEL-1"
+    ]
+  },
+  "dev-lambda-tsgit": {
+    "jira_keys": [
+      "PIXEL-1"
+    ]
+  },
+  "dev-local": {
+    "feature_file": "sample.feature"
+  },
+  "dev-model-mix": {
+    "jira_keys": [
+      "PIXEL-1"
+    ]
+  },
+  "cheat-local-dev": {
+    "feature": "sample-feature",
+    "jira_keys": [
+      "PIXEL-1"
+    ]
+  },
+  "dev-tests-csharp": {},
+  "dev-tests-csharp-split": {},
+  "discovery": {
+    "brief": "sample brief"
+  },
+  "cheat-stack-test": {
+    "change_context": "sample change context"
+  },
+  "func-doc": {
+    "feature": "sample-feature"
+  },
+  "gdpr-anonymisation-test": {
+    "local_real_service": "cheat-profile-service"
+  },
+  "gha-fix": {},
+  "knowledge-init": {},
+  "knowledge-read": {},
+  "knowledge-update": {},
+  "pr-comments": {},
+  "refacto-pr-lambda-ts": {},
+  "review": {},
+  "verify-review": {
+    "pass": "2",
+    "previous_run": "golden-run"
+  },
+  "run-tests-dev": {
+    "kit_dir": "sample-kit",
+    "ticket_id": "PIXEL-1"
+  },
+  "sonar-fix": {},
+  "study": {
+    "topic": "sample topic"
+  },
+  "study-to-jira": {
+    "topic": "sample topic"
+  },
+  "tech-doc": {
+    "service_path": "src/sample-service"
+  },
+  "test-csharp": {
+    "jira_keys": [
+      "PIXEL-1"
+    ]
+  },
+  "test-scenarios": {
+    "ticket_id": "PIXEL-1"
+  },
+  "test-us-e2e": {
+    "ticket_id": "PIXEL-1"
+  },
+  "ticket-create": {
+    "project_key": "PIXEL",
+    "source": "sample-source"
+  },
+  "dev-flow": {
+    "jira_keys": [
+      "PIXEL-1"
+    ],
+    "stack": "rust"
+  },
+  "correction-after-test-dev": {
+    "prompt": "sample test report",
+    "feature": "sample-feature",
+    "stack": "rust"
+  }
+}

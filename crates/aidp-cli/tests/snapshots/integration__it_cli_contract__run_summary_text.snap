@@ -1,0 +1,13 @@
+---
+source: crates/aidp-cli/tests/it_cli_contract.rs
+expression: "normalize_summary_text(&stdout_of(&text), &run.run_id)"
+---
+# Summary <RUN_ID>
+
+- pipeline: dev
+- stages success: 0/22
+- cancel: 0
+- skipped: 0
+- total duration: 0ms
+- total tokens: 0
+- run_dir: <RUN_DIR>

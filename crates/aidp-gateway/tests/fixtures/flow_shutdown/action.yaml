@@ -1,0 +1,6 @@
+id: shutdown-test
+version: 1
+steps:
+  - id: action
+    kind: action
+    use: owned-process

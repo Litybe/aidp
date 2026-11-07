@@ -1,0 +1,240 @@
+{
+  "viewer": {
+    "login": "me"
+  },
+  "repository": {
+    "pullRequest": {
+      "number": 123,
+      "url": "https://github.com/o/r/pull/123",
+      "title": "Add thing",
+      "state": "OPEN",
+      "isDraft": false,
+      "headRefName": "feat/X-1",
+      "headRefOid": "abc123",
+      "baseRefName": "master",
+      "mergeable": "MERGEABLE",
+      "reviewDecision": null,
+      "author": {
+        "login": "dev"
+      },
+      "latestOpinionatedReviews": {
+        "nodes": [
+          {
+            "author": {
+              "login": "alice"
+            },
+            "state": "APPROVED",
+            "submittedAt": "2026-09-28T10:00:00Z"
+          }
+        ]
+      },
+      "reviewRequests": {
+        "nodes": [
+          {
+            "requestedReviewer": {
+              "login": "bob"
+            }
+          },
+          {
+            "requestedReviewer": {
+              "name": "core-team"
+            }
+          }
+        ]
+      },
+      "commits": {
+        "nodes": [
+          {
+            "commit": {
+              "statusCheckRollup": {
+                "contexts": {
+                  "nodes": [
+                    {
+                      "__typename": "CheckRun",
+                      "name": "build",
+                      "status": "COMPLETED",
+                      "conclusion": "FAILURE",
+                      "detailsUrl": "u1",
+                      "startedAt": "2026-09-28T09:00:00Z"
+                    },
+                    {
+                      "__typename": "CheckRun",
+                      "name": "build",
+                      "status": "COMPLETED",
+                      "conclusion": "SUCCESS",
+                      "detailsUrl": "u2",
+                      "startedAt": "2026-09-28T09:30:00Z"
+                    },
+                    {
+                      "__typename": "CheckRun",
+                      "name": "test",
+                      "status": "IN_PROGRESS",
+                      "conclusion": null,
+                      "detailsUrl": "u3",
+                      "startedAt": "2026-09-28T09:31:00Z"
+                    },
+                    {
+                      "__typename": "CheckRun",
+                      "name": "lint",
+                      "status": "COMPLETED",
+                      "conclusion": "FAILURE",
+                      "detailsUrl": "u4",
+                      "startedAt": "2026-09-28T09:32:00Z"
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        ]
+      },
+      "reviewThreads": {
+        "pageInfo": {
+          "hasNextPage": false,
+          "endCursor": null
+        },
+        "nodes": [
+          {
+            "id": "human-root",
+            "isResolved": false,
+            "isOutdated": false,
+            "comments": {
+              "totalCount": 1,
+              "nodes": [
+                {
+                  "id": "human-root-comment",
+                  "author": {
+                    "login": "alice"
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "id": "own-root",
+            "isResolved": false,
+            "isOutdated": false,
+            "comments": {
+              "totalCount": 1,
+              "nodes": [
+                {
+                  "id": "own-root-comment",
+                  "author": {
+                    "login": "me"
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "id": "author-root",
+            "isResolved": false,
+            "isOutdated": false,
+            "comments": {
+              "totalCount": 1,
+              "nodes": [
+                {
+                  "id": "author-root-comment",
+                  "author": {
+                    "login": "dev"
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "id": "own-reply",
+            "isResolved": false,
+            "isOutdated": false,
+            "comments": {
+              "totalCount": 2,
+              "nodes": [
+                {
+                  "id": "own-reply-comment",
+                  "author": {
+                    "login": "me"
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "id": "author-reply",
+            "isResolved": false,
+            "isOutdated": false,
+            "comments": {
+              "totalCount": 2,
+              "nodes": [
+                {
+                  "id": "author-reply-comment",
+                  "author": {
+                    "login": "dev"
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "id": "human-followup",
+            "isResolved": false,
+            "isOutdated": false,
+            "comments": {
+              "totalCount": 3,
+              "nodes": [
+                {
+                  "id": "human-followup-comment",
+                  "author": {
+                    "login": "alice"
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "id": "resolved",
+            "isResolved": true,
+            "isOutdated": false,
+            "comments": {
+              "totalCount": 1,
+              "nodes": [
+                {
+                  "id": "resolved-comment",
+                  "author": {
+                    "login": "alice"
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "id": "outdated",
+            "isResolved": false,
+            "isOutdated": true,
+            "comments": {
+              "totalCount": 1,
+              "nodes": [
+                {
+                  "id": "outdated-comment",
+                  "author": {
+                    "login": "alice"
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      },
+      "reviews": {
+        "nodes": [
+          {
+            "author": {
+              "login": "copilot-pull-request-reviewer[bot]"
+            },
+            "state": "COMMENTED",
+            "submittedAt": "2026-10-15T13:07:01Z"
+          }
+        ]
+      }
+    }
+  }
+}

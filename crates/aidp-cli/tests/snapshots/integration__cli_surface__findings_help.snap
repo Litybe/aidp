@@ -1,0 +1,37 @@
+---
+source: crates/aidp-cli/tests/cli_surface.rs
+expression: normalized
+---
+Deterministic findings.json merge: fold N axis reviews into one canonical verdict mechanically instead of via a synthesis model
+
+Usage: <BIN> findings [OPTIONS] <COMMAND>
+
+Commands:
+  merge  Merge N axis findings.json files into one: severity_counts recomputed, checks merged by id (worst wins), findings deduped; a bad axis is degraded
+  help   Print this message or the help of the given subcommand(s)
+
+Options:
+      --workspace-root <PATH>
+          Workspace to act on instead of the current directory
+
+      --vault <PATH>
+          Obsidian vault to use instead of `AIDP_VAULT`, `~/.aidp/config.json` or auto-detection
+
+      --no-vault
+          Ignore any vault and keep artefacts in the repo (`.aidp/pipelines/`)
+
+      --format <FORMAT>
+          Output format. Each command keeps its own default when omitted
+
+          Possible values:
+          - json-compact: One compact JSON document on a single line
+          - json-pretty:  One indented JSON document
+          - ndjson:       One compact JSON value per line
+          - text:         Human-readable text
+          - footer:       The one-line cost footer of a report, for `<BIN> cost ticket`; text elsewhere
+
+  -v, --verbose...
+          More diagnostics on stderr; repeat for more (`-vv`)
+
+  -h, --help
+          Print help (see a summary with '-h')

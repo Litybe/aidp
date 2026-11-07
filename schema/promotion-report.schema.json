@@ -1,0 +1,66 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/ai-dev-pipeline/schema/promotion-report.schema.json",
+  "title": "promotion-report.json",
+  "description": "Artifact produced by an `operator` stage with `with.operation: promotion`. Lists candidate promotions of run-local artefacts (ADRs, project-context updates, PRDs) into durable repo locations such as docs/decisions/ and .aidp/project-context.md. The agent ONLY proposes; the human (via AskQuestion) ultimately decides via the agent's blocking_questions.json.",
+  "type": "object",
+  "required": ["run_id", "generated_at", "promotions"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": { "type": "integer", "enum": [1], "default": 1 },
+    "run_id": { "type": "string" },
+    "generated_at": { "type": "string", "format": "date-time" },
+    "promotions": {
+      "type": "array",
+      "description": "One entry per promotion candidate. Empty when there is nothing to promote.",
+      "items": {
+        "type": "object",
+        "required": ["id", "kind", "candidate_path", "target_path", "action"],
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^P-[0-9A-Za-z_-]+$",
+            "description": "Stable id for the promotion (e.g. P-adr-001). Mirrors the id used in blocking_questions.json so the human's answer can be matched back."
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "adr",
+              "project_context_update",
+              "prd",
+              "architectural_brief"
+            ],
+            "description": "What is being promoted. Decides the default target_path."
+          },
+          "candidate_path": {
+            "type": "string",
+            "description": "Absolute path of the source artefact inside the run's stage_dir."
+          },
+          "target_path": {
+            "type": "string",
+            "description": "Absolute path proposed by the agent for the destination (must respect the per-stage scope: block declared on the operator promotion stage - typically docs/decisions/**, .aidp/project-context.md, docs/PRDs/**)."
+          },
+          "action": {
+            "type": "string",
+            "enum": ["promote", "skip", "edit"],
+            "description": "What the agent recommends. The orchestrator calls AskQuestion to confirm with the human; the human's answer wins."
+          },
+          "rationale": {
+            "type": ["string", "null"],
+            "description": "Short justification for the recommended action."
+          },
+          "human_decision": {
+            "type": ["string", "null"],
+            "enum": ["promote", "skip", "edit", null],
+            "description": "Filled by the orchestrator AFTER AskQuestion. Null while still pending."
+          },
+          "human_decision_at": {
+            "type": ["string", "null"],
+            "format": "date-time"
+          }
+        }
+      }
+    }
+  }
+}

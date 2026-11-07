@@ -1,0 +1,60 @@
+---
+source: crates/aidp-cli/tests/it_findings.rs
+expression: "serde_json::to_string_pretty(&snapshot_value).unwrap()"
+---
+{
+  "checks": [
+    {
+      "evidence": "correctness: read src/foo.rs and src/hot.rs in full",
+      "finding_ids": [],
+      "harness_gap": "security: diff vide",
+      "id": "C-diff-read",
+      "name": "Read the full diff",
+      "status": "skip"
+    },
+    {
+      "evidence": "correctness: cargo test -p foo passed",
+      "finding_ids": [],
+      "harness_gap": "perf: no load-test harness available in this sandbox",
+      "id": "C-tests-run",
+      "name": "Ran the relevant tests",
+      "status": "skip"
+    }
+  ],
+  "findings": [
+    {
+      "category": "correctness",
+      "description": "The cursor is advanced before the boundary check, dropping the last page's first row.",
+      "file": "src/foo.rs",
+      "id": "F-correctness-1",
+      "line": 42,
+      "related_ids": [],
+      "severity": "blocking",
+      "suggestion": "Advance the cursor after the boundary check.",
+      "title": "Off-by-one in the pagination cursor"
+    },
+    {
+      "category": "performance",
+      "description": "Under production load this loop issues one query per row.",
+      "file": "src/hot.rs",
+      "id": "F-perf-1",
+      "line": 100,
+      "related_ids": [],
+      "severity": "blocking",
+      "suggestion": "Batch the lookup outside the loop.",
+      "title": "N+1 query in the hot loop"
+    }
+  ],
+  "generated_at": "[REDACTED]",
+  "has_blocking_findings": true,
+  "iter": 0,
+  "run_id": "run-c6-fixture",
+  "schema_version": 1,
+  "scores": {},
+  "severity_counts": {
+    "blocking": 2,
+    "info": 0,
+    "major": 0,
+    "minor": 0
+  }
+}

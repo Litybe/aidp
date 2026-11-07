@@ -1,0 +1,605 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/ai-dev-pipeline/schema/run-state.schema.json",
+  "title": "AI Dev Pipeline - run state",
+  "description": "Canonical snapshot of a pipeline run, exactly as serialized by aidp (crate::run::RunState). Reconciled with the Rust struct and pinned by a round-trip test (WI-P0-5).",
+  "type": "object",
+  "required": [
+    "run_id",
+    "pipeline_path",
+    "pipeline_id",
+    "workspace_root",
+    "run_dir",
+    "started_at",
+    "stages"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "run_id": {
+      "type": "string"
+    },
+    "pipeline_path": {
+      "type": "string",
+      "description": "Path to the pipeline YAML that started the run."
+    },
+    "pipeline_id": {
+      "type": "string"
+    },
+    "workspace_root": {
+      "type": "string"
+    },
+    "run_dir": {
+      "type": "string",
+      "description": "Absolute path of this run's directory: <vault>/Pipelines/<repo>/<feature>/<run_id>/ when a vault is configured (v7 default), else the legacy <workspace>/.aidp/pipelines/<feature>/<run_id>/."
+    },
+    "vault_root": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "v7: the Obsidian vault this run's artefacts were written into. Absent/null means the legacy in-repo .aidp/pipelines/ layout. Persisted (not re-resolved) so notes are always regenerated in the vault the run started in."
+    },
+    "knowledge_root": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "v7: the per-project knowledge base directory (<vault>/Knowledge/<repo>/, or <workspace>/.aidp/knowledge/ in the legacy layout). Holds the durable service documentation written by knowledge stages and read back as input by later runs."
+    },
+    "repo": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "v7: the repo segment of the vault path (Pipelines/<repo>/…), derived from the git origin remote, falling back to the workspace directory name."
+    },
+    "feature": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "v7: the feature segment grouping every run for one feature (an explicit `feature` input, else the ticket list, else `_no-ticket`). Names the folder ticket_root() points at."
+    },
+    "started_at": {
+      "type": "string"
+    },
+    "inputs": {
+      "type": "object",
+      "description": "Resolved pipeline inputs at run start.",
+      "additionalProperties": true
+    },
+    "plan": {
+      "type": "array",
+      "description": "Topo-sorted layers of stage names (each inner array is one parallel layer).",
+      "items": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      }
+    },
+    "stages": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/stageState"
+      }
+    },
+    "loops": {
+      "type": "object",
+      "description": "Per-loop-container iteration state, keyed by loop stage name.",
+      "additionalProperties": {
+        "$ref": "#/definitions/loopState"
+      }
+    },
+    "workflow_run_id": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "v7: the Workflow-tool runId used for resumeFromRunId. Persisted so resume survives a lost transcript."
+    },
+    "pending_gate": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "v7: the gate the run is currently paused at, awaiting a human decision. Persisted with workflow_run_id the moment a gate is proposed (before approval), so a resume can re-propose that exact gate instead of re-running the whole pipeline. Cleared when the gate is approved."
+    },
+    "mode": {
+      "type": "string",
+      "enum": ["workflow", "native"],
+      "description": "Execution mode of the run: driven by the Workflow tool, or natively by the daemon. Absent for a Workflow-driven run."
+    },
+    "last_workflow_status": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "v7: the raw status of the last folded-in Workflow result (\"done\", \"paused\", \"awaiting_gate\", …), captured by `run reconcile`. Distinct from the derived overall_status: a run can have every reached stage Success and still be awaiting_gate, so this is what lets a note say the run is paused rather than reading it as finished."
+    },
+    "gates": {
+      "type": "array",
+      "description": "v7: gate decisions recorded across resumes. Approvals are baked into the emitted __approved seed.",
+      "items": {
+        "type": "object",
+        "required": [
+          "after_stage",
+          "decision"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "after_stage": {
+            "type": "string"
+          },
+          "asked_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "decision": {
+            "type": "string",
+            "enum": [
+              "approve",
+              "revise",
+              "abort"
+            ]
+          },
+          "notes": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      }
+    },
+    "plan_schedules": {
+      "type": "object",
+      "description": "v7: compiled plan_tasks schedules, keyed by stage name. Written by `aidp workflow emit` on the pass that resolves the planner's plan.json; task outcomes are folded back in by `run reconcile`.",
+      "additionalProperties": {
+        "$ref": "#/definitions/planSchedule"
+      }
+    },
+    "cost": {
+      "description": "v7: run-level cost rollup, attached best-effort at the end of `run reconcile` from the transcript ledger (crate::tokens / crate::cost) rather than the self-reported, self-averaged metrics.tokens_used a parallel task group hands back divided evenly across its members.",
+      "$ref": "#/definitions/runCost"
+    },
+    "knowledge_graph": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "description": "Workspace knowledge-graph snapshot, populated at init when settings.knowledge_graph.enabled = true. Absent/null when disabled or skipped.",
+      "additionalProperties": false,
+      "required": [
+        "status"
+      ],
+      "properties": {
+        "graph_json": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "graph_report": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "graph_html": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "cache_dir": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "built_at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "files_indexed": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "communities": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "fresh",
+            "reused",
+            "skipped",
+            "failed"
+          ]
+        },
+        "reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "base_sha": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "C7 (Lot 3): the workspace's `git rev-parse HEAD` at `init` (crate::gitlog::head). Null when the workspace was not a git repository (or git was unavailable) at init time — every feature this feeds (scope verification, `aidp git outcomes`) treats that as skipped, not failed."
+    },
+    "head_sha_end": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "C7: the workspace's HEAD as observed at the end of `run reconcile` (best-effort). Read together with base_sha to know what commit range this run actually produced."
+    },
+    "branch": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "C7: the branch `init` found checked out (`git rev-parse --abbrev-ref HEAD`), best-effort."
+    },
+    "commits": {
+      "type": "array",
+      "description": "C7: commit shas observed at the end of `run reconcile` (crate::gitlog::log, best-effort, most-recent-first, bounded). An audit trail for `aidp git outcomes` and similar tooling, not a full log.",
+      "items": {
+        "type": "string"
+      }
+    },
+    "scope_violations": {
+      "type": "array",
+      "description": "C7: the result of `scope::verify_run` at the end of `run reconcile`, when settings.verify_scope (default true) is enabled. Never changes reconcile's exit code by itself — see `aidp scope verify` for the command that fails loudly on what this collects.",
+      "items": {
+        "type": "object",
+        "required": ["path", "reason"],
+        "additionalProperties": false,
+        "properties": {
+          "path": { "type": "string" },
+          "reason": { "type": "string" }
+        }
+      }
+    },
+    "vault_leaks": {
+      "type": "array",
+      "description": "LOC-46: run/doc artefacts that were written into the repo working tree instead of the configured vault — a placement bug, detected by `vault_leak::detect` and populated by `run reconcile` whenever a vault is configured. Deliberately kept separate from `scope_violations`: a `repo_wide` stage accepts a `Pipelines/...` path as in-scope, which is exactly why that check alone could never catch this bug class. Unlike `scope_violations`, this DOES change the exit code — see `aidp scope verify` / `aidp run reconcile`, which exit 2 when this is non-empty.",
+      "items": {
+        "type": "object",
+        "required": ["path", "kind", "reason"],
+        "additionalProperties": false,
+        "properties": {
+          "path": { "type": "string" },
+          "kind": {
+            "type": "string",
+            "enum": ["run_artifact", "knowledge_note", "legacy_run_artifact"]
+          },
+          "reason": { "type": "string" }
+        }
+      }
+    },
+    "guard_findings": {
+      "type": "array",
+      "description": "C5 (Lot 3): the __guardFindings array the emitted Workflow script's __guard helper accumulates at every stage-boundary recomposition (fanin/taskin/up/taskUp), folded in by `run reconcile` from result.guard_findings on all four of the script's returns (done/paused/awaiting_gate/awaiting_plan) — a run paused by an injection is exactly the one whose findings matter most. Framing only, never a gate: reconcile never fails or blocks on this.",
+      "items": {
+        "type": "object",
+        "properties": {
+          "source": { "type": "string", "description": "Which recomposition call produced this hit, e.g. fanin:review, taskin:T1, up:plan, taskUp:T2." },
+          "findings": { "type": "array", "items": { "type": "string" }, "description": "label:severity tokens, e.g. instruction-override:critical." },
+          "bytes": { "type": "integer", "minimum": 0 }
+        },
+        "additionalProperties": true
+      }
+    },
+    "knowledge_snapshot": {
+      "type": ["object", "null"],
+      "description": "LOC-44: frozen read of the project knowledge base, captured by `run::ensure_knowledge_snapshot` right before this run's first `aidp workflow emit` compiles the script. Reused by every later re-emit of the same run so a read-only stage's prompt (and therefore its Workflow cache key) does not drift just because an upstream knowledge-writing stage touched the base in between. Null/absent for a run-state written before this field existed, or before the first emit.",
+      "additionalProperties": false,
+      "properties": {
+        "entries": {
+          "type": "array",
+          "description": "Transverse note filenames, as `knowledge::entries` lists them.",
+          "items": { "type": "string" }
+        },
+        "features": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/featureNote" }
+        },
+        "feature_resolution": {
+          "type": ["string", "null"],
+          "description": "The rendered create-or-update decision block a feature-layer writer stage (`knowledge: feature|true`) embeds in its prompt, frozen at the same first emit. That stage creates the note it resolves, so a live read on a later re-emit would flip `create` into `update`, change its prompt, and re-run it (and `plan` after it) on resume. Absent when the pipeline has no feature-layer writer, or for a snapshot captured before this field existed."
+        }
+      }
+    },
+    "init_warnings": {
+      "type": "array",
+      "description": "Warnings collected at `run init` time — an undeclared input, an unparseable `when:`/`gate:` expression — surfaced on the run instead of printed. Absent for a run-state written before this field existed.",
+      "items": { "type": "string" }
+    },
+    "autonomous": {
+      "type": "boolean",
+      "description": "True when the run is autonomous: stages never ask a question and journal their choices in `assumptions`."
+    },
+    "assumptions": {
+      "type": "array",
+      "description": "Choices autonomous stages took in place of a question.",
+      "items": {
+        "type": "object",
+        "required": ["choice", "reason"],
+        "additionalProperties": false,
+        "properties": {
+          "stage": { "type": "string" },
+          "question_id": { "type": "string" },
+          "question": { "type": "string" },
+          "choice": { "type": "string" },
+          "reason": { "type": "string" },
+          "rejected_alternative": { "type": "string" },
+          "auto_answered": { "type": "boolean" }
+        }
+      }
+    }
+  },
+  "definitions": {
+    "stageState": {
+      "type": "object",
+      "required": [
+        "name",
+        "status",
+        "stage_dir"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "pending",
+            "in_progress",
+            "success",
+            "cancel",
+            "skipped"
+          ]
+        },
+        "started_at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "finished_at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "duration_ms": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "tokens_used": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0,
+          "description": "Total tokens consumed by the sub-agent during this stage."
+        },
+        "stage_dir": {
+          "type": "string"
+        },
+        "outputs": {
+          "type": "object",
+          "description": "Map of declared output name -> path.",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "summary": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "v7: the sub-agent's one-paragraph reply summary, folded in by `run reconcile`. Rendered in the generated Obsidian stage note."
+        },
+        "follow_ups": {
+          "type": "array",
+          "description": "v7: the sub-agent's follow_ups, folded in by `run reconcile` and rendered as checkboxes in the run note.",
+          "items": {
+            "type": "string"
+          }
+        },
+        "skills_not_loaded": {
+          "type": "array",
+          "description": "v7: declared skills the sub-agent did not load, folded in from `signals.skills_not_loaded` by `run reconcile`. Plan-task entries read `<task>: <skill>`. Shown as a warning in the run summary.",
+          "items": {
+            "type": "string"
+          }
+        },
+        "usage": {
+          "description": "v7: this stage's usage as attributed from the transcript ledger, attached best-effort at the end of `run reconcile`.",
+          "$ref": "#/definitions/stageUsage"
+        },
+        "verification": {
+          "type": "array",
+          "description": "C7 (Lot 3): syntactic findings on this stage's declared outputs (crate::verify::verify_outputs) — an unbalanced code fence, a refusal pattern, invalid JSON, and the like. Purely annotation, never a gate.",
+          "items": { "type": "string" }
+        }
+      }
+    },
+    "loopState": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "iter": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Current iteration, 1-based; 0/absent = not started."
+        }
+      }
+    },
+    "planSchedule": {
+      "type": "object",
+      "description": "How aidp parallelised one plan-driven stage: the task graph it compiled from plan.json, plus every ordering it had to insert.",
+      "required": ["stage", "plan_path", "compiled_at", "max_parallel", "waves", "tasks"],
+      "additionalProperties": false,
+      "properties": {
+        "stage": { "type": "string" },
+        "plan_path": { "type": "string", "description": "The plan.json this schedule was compiled from." },
+        "compiled_at": { "type": "string" },
+        "max_parallel": { "type": "integer", "minimum": 1, "description": "The stage's plan_tasks.max cap." },
+        "width": { "type": "integer", "minimum": 0, "description": "Widest wave: the most tasks that could ever run at once." },
+        "waves": {
+          "type": "array",
+          "description": "Task ids per dependency level. Reporting only — dispatch is dependency-driven, not wave-gated.",
+          "items": { "type": "array", "items": { "type": "string" } }
+        },
+        "serializations": {
+          "type": "array",
+          "description": "Orderings aidp inserted because two otherwise-concurrent tasks wrote the same file.",
+          "items": {
+            "type": "object",
+            "required": ["before", "after", "files"],
+            "additionalProperties": false,
+            "properties": {
+              "before": { "type": "string" },
+              "after": { "type": "string" },
+              "files": { "type": "array", "items": { "type": "string" } }
+            }
+          }
+        },
+        "warnings": {
+          "type": "array",
+          "description": "Non-fatal contract slips in the plan (a task claiming a shared file, a cross-stage dependency, a task with no owned file).",
+          "items": { "type": "string" }
+        },
+        "tasks": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["id", "title", "kind", "wave", "status"],
+            "additionalProperties": false,
+            "properties": {
+              "id": { "type": "string" },
+              "title": { "type": "string" },
+              "kind": { "type": "string", "enum": ["code", "tests", "docs", "infra", "chore"] },
+              "wave": { "type": "integer", "minimum": 0 },
+              "deps": {
+                "type": "array",
+                "description": "Declared dependencies only: the plan's `needs`, resolved within this stage's claimed tasks. A blocked/failed entry here cancels this task. Does NOT include file-lock orderings aidp inserted on its own — see `mutex_after`.",
+                "items": { "type": "string" }
+              },
+              "mutex_after": {
+                "type": "array",
+                "description": "Orderings aidp inserted (C9, Lot 3 Capitalisation) because this task and an earlier one write the same file — never a semantic dependency. Execution still waits for these, but a failed entry here does NOT cancel this task, only warns it. Absent on a run-state written before this field existed.",
+                "items": { "type": "string" }
+              },
+              "files": { "type": "array", "items": { "type": "string" } },
+              "status": {
+                "type": "string",
+                "enum": ["pending", "success", "failed", "blocked", "skipped"]
+              },
+              "tokens_used": { "type": ["integer", "null"], "minimum": 0 }
+            }
+          }
+        }
+      }
+    },
+    "stageUsage": {
+      "description": "Per-stage usage attributed from the transcript ledger (crate::tokens::scan_run_agents), not the self-reported/self-averaged metrics.tokens_used.",
+      "type": "object",
+      "required": ["input", "output", "cache_creation", "cache_read", "bucket", "source"],
+      "additionalProperties": false,
+      "properties": {
+        "input": { "type": "integer", "minimum": 0 },
+        "output": { "type": "integer", "minimum": 0 },
+        "cache_creation": { "type": "integer", "minimum": 0 },
+        "cache_read": { "type": "integer", "minimum": 0 },
+        "model": { "type": ["string", "null"] },
+        "agent_type": { "type": ["string", "null"] },
+        "model_pinned": { "type": ["string", "null"] },
+        "bucket": { "type": "string", "description": "Deterministic complexity bucket (crate::cost::bucket): small | medium | large." },
+        "cost_usd": { "type": ["number", "null"] },
+        "pricing_version": { "type": ["string", "null"] },
+        "source": {
+          "type": "string",
+          "enum": ["jsonl", "budget", "unavailable"],
+          "description": "Provenance of this usage figure: jsonl (measured from the agent transcript), budget (fallback to the sub-agent-reported, output-only tokens_used), or unavailable (the ledger could not be read — never shown as a silent zero)."
+        },
+        "tool_calls": { "type": ["integer", "null"], "minimum": 0 }
+      }
+    },
+    "featureNote": {
+      "description": "One feature note as read from disk (crate::knowledge::FeatureNote), frozen into a knowledge_snapshot.",
+      "type": "object",
+      "required": ["path", "slug", "name", "status", "bytes", "guard_off"],
+      "additionalProperties": false,
+      "properties": {
+        "path": { "type": "string" },
+        "slug": { "type": "string", "description": "Stable identity, and the file stem. Kebab-case, ASCII." },
+        "name": { "type": "string", "description": "Human-readable feature name." },
+        "aliases": { "type": "array", "items": { "type": "string" } },
+        "status": { "type": "string", "description": "active | deprecated | planned. Free-form." },
+        "tickets": { "type": "array", "items": { "type": "string" } },
+        "updated": { "type": ["string", "null"] },
+        "area": { "type": ["string", "null"] },
+        "files": { "type": "array", "items": { "type": "string" }, "description": "Repo-relative paths of the files that carry this feature." },
+        "valid_until": { "type": ["string", "null"] },
+        "superseded_by": { "type": ["string", "null"] },
+        "findings": {
+          "type": "array",
+          "description": "guard::scan hits on this note's injectable metadata strings.",
+          "items": {
+            "type": "object",
+            "required": ["label", "sev"],
+            "additionalProperties": false,
+            "properties": {
+              "label": { "type": "string" },
+              "sev": { "type": "string", "enum": ["low", "medium", "high", "critical"] }
+            }
+          }
+        },
+        "bytes": { "type": "integer", "minimum": 0 },
+        "guard_off": { "type": "boolean", "description": "Mirrors the note's `aidp_guard: off` frontmatter escape hatch." }
+      }
+    },
+    "runCost": {
+      "description": "Run-level cost rollup, attached best-effort at the end of `run reconcile`.",
+      "type": "object",
+      "required": ["tokens_billable", "captured_at"],
+      "additionalProperties": false,
+      "properties": {
+        "total_usd": { "type": ["number", "null"] },
+        "tokens_billable": { "type": "integer", "minimum": 0 },
+        "pricing_version": { "type": ["string", "null"] },
+        "captured_at": { "type": "string" },
+        "by_model": {
+          "type": "object",
+          "description": "StageUsage aggregated per model id across the whole run.",
+          "additionalProperties": { "$ref": "#/definitions/stageUsage" }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,15 @@
+version: 5
+id: unresolved-skills
+inputs:
+  stack: { kind: enum, values: [a, b] }
+stages:
+  - name: plain
+    skills: [present, ghost]
+  - name: routed
+    skills_by: { input: stack, map: { a: [by-map] }, default: [by-default] }
+  - name: fix_loop
+    type: loop
+    when: "{{ true }}"
+    body:
+      - name: inner
+        skills: [present, deep-ghost]

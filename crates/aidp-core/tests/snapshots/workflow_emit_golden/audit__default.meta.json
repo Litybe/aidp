@@ -1,0 +1,17 @@
+{
+  "error": null,
+  "warnings": [
+    "skill dropped, no knowledge graph for this run: graphify-context removed from stage explore",
+    "skill dropped, no knowledge graph for this run: graphify-context removed from stage dim_correctness",
+    "skill dropped, no knowledge graph for this run: graphify-context removed from stage dim_security",
+    "skill dropped, no knowledge graph for this run: graphify-context removed from stage dim_perf",
+    "skill dropped, no knowledge graph for this run: graphify-context removed from stage dim_maintainability",
+    "skill dropped, no knowledge graph for this run: graphify-context removed from stage verify"
+  ],
+  "gates": [
+    "report"
+  ],
+  "awaiting_plan": null,
+  "awaiting_composite": null,
+  "plan_schedules": []
+}

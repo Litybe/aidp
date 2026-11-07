@@ -1,0 +1,32 @@
+version: 5
+id: dims
+stages:
+  - name: code
+    agent: executor
+    scope: { mode: production }
+    outputs: [changed-files.json]
+  - name: review_correctness
+    agent: reviewer
+    needs: [code]
+    outputs: [correctness.md]
+  - name: review_security
+    agent: reviewer
+    needs: [code]
+    outputs: [security.md]
+  - name: review
+    agent: reviewer
+    needs: [review_correctness, review_security]
+    outputs: [findings.json]
+  - name: correction_loop
+    type: loop
+    when: "{{ stages.review.outputs.findings.has_blocking_findings }}"
+    max_iterations: 2
+    body:
+      - { name: refix, agent: executor, scope: { mode: production }, needs: [review] }
+      - { name: rereview, agent: reviewer, needs: [refix], outputs: [findings.json] }
+  # Downstream of the loop, so no exemption could reach it via the `when:` walk —
+  # it is exempt purely because it is a reviewer.
+  - name: sidecar_review
+    agent: reviewer
+    needs: [correction_loop]
+    outputs: [sidecar.md]

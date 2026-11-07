@@ -1,0 +1,20 @@
+{
+  "error": null,
+  "warnings": [
+    "skill dropped, no knowledge graph for this run: graphify-context removed from stage discover_prompt",
+    "skill dropped, no knowledge graph for this run: graphify-context removed from stage qa__explore",
+    "skill dropped, no knowledge graph for this run: graphify-context removed from stage qa__dim_correctness",
+    "skill dropped, no knowledge graph for this run: graphify-context removed from stage qa__dim_security",
+    "skill dropped, no knowledge graph for this run: graphify-context removed from stage qa__dim_perf",
+    "skill dropped, no knowledge graph for this run: graphify-context removed from stage qa__dim_maintainability",
+    "skill dropped, no knowledge graph for this run: graphify-context removed from stage qa__verify"
+  ],
+  "gates": [],
+  "awaiting_plan": {
+    "plan_path": "<WORKSPACE>/.aidp/pipelines/_no-ticket/20260101-000000-golden/plan/plan.json",
+    "producer": "plan",
+    "stage": "implement"
+  },
+  "awaiting_composite": null,
+  "plan_schedules": []
+}

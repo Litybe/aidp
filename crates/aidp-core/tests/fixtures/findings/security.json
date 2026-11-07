@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "run_id": "run-c6-fixture",
+  "iter": 0,
+  "generated_at": "2026-09-09T10:00:00Z",
+  "severity_counts": { "blocking": 0, "major": 0, "minor": 0, "info": 0 },
+  "has_blocking_findings": false,
+  "findings": [],
+  "checks": [
+    { "id": "C-diff-read", "name": "Read the full diff", "status": "skip", "harness_gap": "diff vide", "evidence": null, "finding_ids": [] }
+  ]
+}

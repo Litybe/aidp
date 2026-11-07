@@ -1,0 +1,6 @@
+version: 5
+id: tools-inert
+stages:
+  - name: solo
+    agent: executor
+    outputs: [out.txt]

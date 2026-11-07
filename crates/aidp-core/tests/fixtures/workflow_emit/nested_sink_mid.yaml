@@ -1,0 +1,5 @@
+version: 5
+id: midsink
+stages:
+  - { name: m_first, agent: executor }
+  - { name: m_sink, type: pipeline, uses: innersink, needs: [m_first] }

@@ -1,0 +1,17 @@
+{
+  "_comment": "Merge these hooks into ~/.claude/settings.json (or .claude/settings.json) using the update-config skill. Stop: writes the summary of whatever run is currently in flight. There is no PreToolUse/PostToolUse guard here — see _v7_note.",
+  "_v7_note": "Earlier drafts of this file shipped a PreToolUse write-block for the main orchestrator and a PostToolUse `aidp scope check` hook, both armed on AIDP_RUN/AIDP_STAGE being non-empty. Those variables are only ever written into the sub-agent PROMPT TEXT, never into the hook's process environment, so the guard condition could never be satisfied — the hooks were dead weight, not a working safety net. Both guard hooks have been removed for good (not re-armed on a new marker); scope enforcement runs after the fact instead (see `aidp doctor`). The one hook that remains, Stop, calls `aidp run summary` with no `--run`, which resolves the in-flight run itself and prints nothing when there is none — so this hook is silent outside a pipeline and needs no shell-side JSON parsing or file test. It used to read `.aidp/run-in-flight` out of the repo by path; that marker now lives in the vault (`<vault>/Pipelines/<repo>/.state/run-in-flight`, written by `aidp workflow emit`, cleared by `aidp run reconcile`) because v7 writes nothing into the target working tree, and a hook has no business knowing where aidp keeps its state. One consequence worth having: the command is now identical on every platform, so there is no `_windows_command` variant to keep in sync.",
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "aidp run summary",
+            "blocking": false
+          }
+        ]
+      }
+    ]
+  }
+}

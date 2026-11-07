@@ -1,0 +1,26 @@
+# `cargo hakari` settings. aidp-workspace-hack pins one feature set per third-party
+# dependency, so `cargo test -p <crate>` and `--workspace` reuse the same compiled deps
+# instead of rebuilding them with other features. Regenerate after a dependency change:
+#   cargo hakari generate && cargo hakari manage-deps
+# CI runs `cargo hakari verify`.
+
+hakari-package = "aidp-workspace-hack"
+dep-format-version = "4"
+resolver = "2"
+
+# Windows is where development and CI run; Linux keeps the pins valid for other machines.
+platforms = [
+    "x86_64-pc-windows-msvc",
+    "x86_64-unknown-linux-gnu",
+]
+
+[final-excludes]
+# clap stays out of the library crates (CI guard); only aidp-cli uses it, so it cannot thrash.
+third-party = [
+    { name = "clap" },
+    { name = "clap_builder" },
+    { name = "clap_derive" },
+    { name = "clap_lex" },
+]
+# aidp-flows and aidp-agents stay dependency-light leaf crates.
+workspace-members = ["aidp-flows", "aidp-agents"]

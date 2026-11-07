@@ -1,0 +1,137 @@
+version: 5
+id: dev-lambda-ts
+description: >
+  Implement a Jira ticket end-to-end in a Pixelhood AWS Lambda TypeScript service,
+  plan-driven. Tracks via track = quick | standard | deep. The `plan` stage writes
+  an EXECUTABLE plan (`plan.json`: one task object per unit of work, with its own
+  prompt and its write set) and `aidp` compiles that task graph into the
+  `implement` stage — one sub-agent per task, parallel wherever the write sets are
+  disjoint, serialized wherever they are not, then a merge sub-agent for the
+  shared files (serverless.yml entries, shared types) and the build. Lambda code
+  AND jest tests are tasks of that plan. Context-gathering and review stay
+  composed from the reusable `dev-discovery` / `review` sub-pipelines
+  (`type: pipeline`, `uses:`), keeping the canonical stage names `discover` /
+  `review` so downstream refs hold.
+inputs:
+  # --- DEMAND. Exactly one of `jira_keys` / `prompt` must be non-empty; the
+  # pipeline is identical downstream of `discover` either way.
+  #
+  # Mode A (Jira): one or more Jira US of the SAME feature (unitary US slicing).
+  # A single US is a one-element list. Discovery reads them all; one plan, one
+  # branch, one PR.
+  jira_keys: { required: false, kind: list, default: [], description: "Une ou plusieurs US Jira de la MEME feature, en tableau JSON (ex. [\"PIXEL-1\",\"PIXEL-2\"])" }
+  # Mode B (prompt): the request in plain text, with no ticket behind it -
+  # `discover_prompt` turns it into the same requirements note `discover_jira`
+  # would have produced, so `plan` / `implement` / `review` / `pr` are unchanged.
+  # In this mode `feature` is REQUIRED: nothing else can name the branch, the
+  # vault folder or the PR.
+  prompt: { required: false, kind: string, default: "" }
+  # Feature/epic label → the run's grouping folder and branch name. Optional in
+  # Jira mode (derived from the ticket list), required in prompt mode.
+  feature: { required: false, kind: string, description: "Optional feature/epic label; feeds run::feature_key, which names the git branch and the vault run folder in place of deriving them from the ticket list." }
+  track: { required: true, kind: enum, values: [quick, standard, deep], default: standard, description: "Run depth: quick, standard, or deep - deep adds a human gate before planning; defaults to standard." }
+settings:
+  pr_draft: false
+  max_correction_iterations: 2
+  knowledge_graph:
+    enabled: true
+    refresh: never
+    code_only: true
+stages:
+  # First step: cut a fresh feature branch off an up-to-date master so every
+  # later stage writes code, commits and the PR land on feat/<feature>, never on
+  # master. `{{ feature }}` = epic label if given, else derived from the US list.
+  # The 3 context reads `needs` it → it runs alone, before the fan-out.
+  - name: prepare_branch
+    agent: executor
+    model: haiku   # delibere : setup de branche mecanique, aucun raisonnement - haiku suffit
+    skills: [git-branch-setup]
+    inputs:
+      jira_keys: "{{ inputs.jira_keys }}"
+      branch: "feat/{{ feature }}"
+    outputs: [branch.json]
+    when: "true"
+
+  # Context-gathering + study, composed from the reusable `dev-discovery`
+  # sub-pipeline (discover_jira ‖ discover_confluence ‖ discover_code →
+  # discover → study). `needs: [prepare_branch]` cascades onto its 3 root
+  # stages, reproducing the exact same parallel fan-out as before.
+  - name: discover
+    type: pipeline
+    uses: dev-discovery
+    needs: [prepare_branch]
+    with:
+      jira_keys: "{{ inputs.jira_keys }}"
+      prompt: "{{ inputs.prompt }}"
+      track: "{{ inputs.track }}"
+    outputs:
+      - { name: context, from: discover.context }
+      - { name: study, from: study.study }
+
+  # `plan.json` (schema/plan.schema.json) is the machine contract: one object per
+  # task, with its own prompt, its `needs` (real dependencies) and its `files`
+  # (write set). `aidp` compiles the `implement` stage from it, so the run's
+  # parallelism is decided by how this stage slices the work into file-disjoint
+  # tasks. The contract itself is injected into the prompt by the emitter.
+  # `plan.md` stays the human narrative (design, risks, rollback).
+  - name: plan
+    agent: planner
+    skills: [graphify-context, enforcing-decision-records, ticket-to-plan-aidp]
+    needs: [discover]
+    with: { mode: feature }
+    outputs: [plan.json, plan.md]
+    gate: "{{ inputs.track == 'deep' }}"
+
+  # Plan-driven implementation (TWO-PASS: the first `workflow emit` stops here and
+  # returns `awaiting_plan`; re-emitting once plan.json exists compiles the tasks
+  # and everything after them). One sub-agent per plan task, each starting as soon
+  # as its OWN dependencies are done, up to `max` at a time in the shared working
+  # tree; `aidp` inserts an ordering wherever two tasks would write the same file.
+  # `scope: repo_wide` because the plan's tasks cover Lambda code AND tests.
+  - name: implement
+    agent: executor
+    skills: [graphify-context, lambda-ts-dev-aidp, aws-serverless, feature-testing-aidp]
+    needs: [plan]
+    scope: { mode: repo_wide }
+    plan_tasks:
+      from: "{{ stages.plan.outputs.plan }}"
+      max: 4
+      merge_hint: >
+        Apply every shared-file change the tasks deferred to you (serverless.yml
+        function entries, shared types/validators, index barrels), then run the
+        build/typecheck and the FULL jest suite once. Fix cross-task breakage and
+        write the consolidated changed-files.json covering every task.
+    outputs: [changed-files.json]
+
+  # Review, composed from the reusable `review` sub-pipeline (4 rubric
+  # dimensions in parallel → synthesis). `needs: [implement]` cascades onto its
+  # 4 root dimension stages, reproducing the exact same parallel fan-out.
+  - name: review
+    type: pipeline
+    uses: review
+    needs: [implement]
+    outputs:
+      - { name: findings, from: review.findings }
+      - { name: summary, from: review.summary }
+
+  - name: correction_loop
+    type: loop
+    when: "{{ stages.review.outputs.findings.has_blocking_findings }}"
+    max_iterations: "{{ settings.max_correction_iterations }}"
+    body:
+      # delibere : une reprise de plan est un delta, pas une conception - opus serait surpaye
+      - { name: replan, agent: planner, model: sonnet, with: { mode: correction }, inputs: { findings: "{{ stages.review.outputs.findings }}" } }
+      - { name: refix, agent: executor, model: haiku, scope: { mode: repo_wide }, needs: [replan] }
+      - { name: rereview, agent: reviewer, skills: [graphify-context, code-review-aidp], needs: [refix], outputs: [findings.json, summary.md] }
+
+  - name: pr
+    policy:
+      - "Open the PR with `aidp gh pr-create --draft` only when the stage input pr_draft is true; otherwise open a regular PR."
+    agent: executor
+    model: haiku   # delibere : ouverture de PR, mecanique - haiku suffit
+    skills: [git-push, writing-clearly-and-concisely, teams-pr-notification]
+    needs: [review]
+    inputs: { pr_draft: "{{ settings.pr_draft }}" }
+    scope: { mode: stage_dir_only }
+    outputs: [pr.json]
+    gate: true

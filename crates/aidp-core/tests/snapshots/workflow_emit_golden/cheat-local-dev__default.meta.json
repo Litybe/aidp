@@ -1,0 +1,15 @@
+{
+  "error": null,
+  "warnings": [
+    "skill dropped, no knowledge graph for this run: graphify-context removed from stage discover",
+    "skill dropped, no knowledge graph for this run: graphify-context removed from stage plan"
+  ],
+  "gates": [],
+  "awaiting_plan": {
+    "plan_path": "<WORKSPACE>/.aidp/pipelines/golden-value/20260101-000000-golden/plan/plan.json",
+    "producer": "plan",
+    "stage": "implement"
+  },
+  "awaiting_composite": null,
+  "plan_schedules": []
+}

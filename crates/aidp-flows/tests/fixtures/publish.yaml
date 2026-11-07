@@ -1,0 +1,25 @@
+id: publish
+version: 1
+blocks:
+  publish:
+    - id: git_push
+      kind: action
+      use: noop
+    - id: pr_create
+      kind: action
+      use: noop
+  ci:
+    - id: ci_watch
+      kind: action
+      use: noop
+steps:
+  - id: build
+    kind: pipeline
+    use: dev
+    pushes: true
+  - id: review
+    kind: pipeline
+    use: dev
+  - id: after
+    kind: action
+    use: noop

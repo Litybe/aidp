@@ -1,0 +1,10 @@
+version: 5
+id: known-provider
+description: Stage and settings naming built-in providers only.
+settings:
+  providers:
+    executor: claude
+stages:
+  - name: build
+    agent: executor
+    provider: claude

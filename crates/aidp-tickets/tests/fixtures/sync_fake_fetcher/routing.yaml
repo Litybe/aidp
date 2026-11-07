@@ -1,0 +1,5 @@
+rules:
+  - match: { component: cheat-alerts-service }
+    service: cheat-alerts-service
+repos:
+  cheat-alerts-service: { template: dev-csharp }

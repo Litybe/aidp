@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/ai-dev-pipeline/schema/flow-repo.schema.json",
+  "title": "flow.json",
+  "description": "Per-repository settings read by the flow actions and probes. Lives at `.aidp/flow.json`. Every key is optional: the defaults come from the `flow` key of ~/.aidp/config.json, and this file overrides them. No secrets here.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "caps": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "worktrees": { "type": "integer", "minimum": 1, "default": 3, "description": "Maximum worktrees held at once for this repository." }
+      }
+    }
+  }
+}

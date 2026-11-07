@@ -1,0 +1,11 @@
+{
+  "key": "LOC-10",
+  "fields": {
+    "summary": "Blocked ticket",
+    "issuelinks": [
+      {"type": {"name": "Blocks"}, "inwardIssue": {"key": "LOC-5", "fields": {"status": {"name": "In Progress", "statusCategory": {"key": "indeterminate"}}}}},
+      {"type": {"name": "Blocks"}, "outwardIssue": {"key": "LOC-11", "fields": {"status": {"name": "To Do", "statusCategory": {"key": "new"}}}}},
+      {"type": {"name": "Blocks"}, "inwardIssue": {"key": "OTH-3", "fields": {"status": {"name": "Done", "statusCategory": {"key": "done"}}}}}
+    ]
+  }
+}

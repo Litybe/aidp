@@ -1,0 +1,6 @@
+id: unknown-use
+version: 1
+steps:
+  - id: first
+    kind: action
+    use: does_not_exist

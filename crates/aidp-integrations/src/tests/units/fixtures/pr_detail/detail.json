@@ -1,0 +1,13 @@
+{"data":{"viewer":{"login":"me"},"repository":{"pullRequest":{
+"body":"Adds the thing",
+"commits":{"nodes":[{"commit":{"oid":"abc123","messageHeadline":"feat: add thing","authoredDate":"2026-09-28T09:00:00Z","author":{"name":"Dev One","user":{"login":"dev"}}}}]},
+"reviews":{"nodes":[{"databaseId":900,"author":{"login":"alice"},"state":"CHANGES_REQUESTED","body":"## Naming\nRename it.\n## Tests\nAdd one.","submittedAt":"2026-09-28T10:00:00Z","url":"https://github.com/o/r/pull/7#pullrequestreview-900","commit":{"oid":"abc123"}}]},
+"reviewRequests":{"nodes":[{"requestedReviewer":{"login":"bob"}},{"requestedReviewer":{"name":"core-team"}}]},
+"comments":{"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":[
+{"databaseId":11,"author":{"login":"carol"},"body":"- first\n- second","createdAt":"2026-09-28T11:00:00Z","url":"https://github.com/o/r/pull/7#issuecomment-11"},
+{"databaseId":12,"author":{"login":"ci[bot]"},"body":"Coverage ok","createdAt":"2026-09-28T11:05:00Z","url":"https://github.com/o/r/pull/7#issuecomment-12"}]},
+"reviewThreads":{"nodes":[{"id":"T1","isResolved":false,"isOutdated":false,"path":"src/a.rs","line":10,"startLine":null,
+"comments":{"totalCount":2,"nodes":[
+{"id":"C1","databaseId":21,"author":{"login":"alice"},"body":"Why?","createdAt":"2026-09-28T10:01:00Z","url":"u1"},
+{"id":"C2","databaseId":22,"author":{"login":"me"},"body":"Because.","createdAt":"2026-09-28T10:02:00Z","url":"u2"}]}}]}
+}}}}

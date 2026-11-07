@@ -1,0 +1,18 @@
+version: 5
+id: planned-skilled
+stages:
+  - name: plan
+    agent: planner
+    model: opus
+    outputs: [plan.json, plan.md]
+  - name: implement
+    agent: executor
+    model: sonnet
+    needs: [plan]
+    skills: [a, b]
+    scope: { mode: repo_wide }
+    plan_tasks:
+      from: "{{ stages.plan.outputs.plan }}"
+      max: 3
+      merge_hint: "Run the full suite once."
+    outputs: [changed-files.json]

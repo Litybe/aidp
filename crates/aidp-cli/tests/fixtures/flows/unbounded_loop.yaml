@@ -1,0 +1,10 @@
+id: unbounded-loop
+version: 1
+steps:
+  - id: retry_loop
+    kind: loop
+    until: steps.inner.outputs.done == true
+    body:
+      - id: inner
+        kind: action
+        use: noop

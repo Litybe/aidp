@@ -1,0 +1,4 @@
+version: 5
+id: smallchild_a
+stages:
+  - { name: s, agent: analyzer, outputs: [a.md] }

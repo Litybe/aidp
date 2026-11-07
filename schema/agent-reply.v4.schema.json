@@ -1,0 +1,107 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "agent-reply.v4.schema.json",
+  "title": "Agent Reply Envelope (v4)",
+  "type": "object",
+  "required": ["status", "summary"],
+  "properties": {
+    "schema_version": { "type": "integer", "enum": [1], "default": 1 },
+    "status": {
+      "enum": ["completed", "blocked", "needs_review", "failed"]
+    },
+    "summary": {
+      "type": "string",
+      "maxLength": 1200,
+      "description": "Plain-text one-paragraph summary of what was done. Bodies of artifacts are NOT inlined here."
+    },
+    "outputs": {
+      "type": "object",
+      "description": "Map of declared output name -> absolute file path. Never inline content.",
+      "additionalProperties": { "type": "string" }
+    },
+    "signals": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "escalations": {
+          "type": "array",
+          "description": "Decisions that need a human but never block the run: one entry per escalated item.",
+          "items": {
+            "type": "object",
+            "required": ["id", "decision", "reason"],
+            "additionalProperties": false,
+            "properties": {
+              "id": { "type": "string" },
+              "decision": { "type": "string" },
+              "reason": { "type": "string" }
+            }
+          }
+        }
+      },
+      "description": "Booleans/counters the orchestrator branches on at runtime (e.g. has_blocking_findings). A reviewer stage whose downstream correction loop reads `stages.<this>.outputs.<name>.<prop>` MUST mirror that boolean here as `signals.<prop>` — the emitted Workflow reads `signals`, not the artifact file."
+    },
+    "follow_ups": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Optional follow-up tasks discovered during the stage. Surfaced to orchestrator, not blocking."
+    },
+    "ask_user_questions": {
+      "type": "array",
+      "description": "Audit trail of AskUserQuestion calls the sub-agent already issued. Each item logs question id and the user's answer. Orchestrator does NOT re-ask.",
+      "items": {
+        "type": "object",
+        "required": ["id"],
+        "properties": {
+          "id": { "type": "string" },
+          "question": { "type": "string" },
+          "answer": { "type": "string" },
+          "options": { "type": "array", "items": { "type": "string" } },
+          "recommended": { "type": "string" }
+        }
+      }
+    },
+    "scope_violations": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Files the sub-agent attempted to write outside scope and were blocked by the hook."
+    },
+    "skills_loaded": {
+      "type": "array",
+      "description": "Proof of skill loading. Required (by the emitted Workflow's per-dispatch schema) for every stage declaring skills: one entry per declared skill, naming one rule of it applied in the stage. A reply missing a declared skill fails the stage; only a read-only role (analyzer, planner, reviewer) is first re-dispatched once with a reminder.",
+      "items": {
+        "type": "object",
+        "required": ["name", "applied_rule"],
+        "properties": {
+          "name": { "type": "string" },
+          "applied_rule": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "assumptions": {
+      "type": "array",
+      "description": "Choices taken in place of a question during an autonomous run.",
+      "items": {
+        "type": "object",
+        "required": ["choice", "reason"],
+        "additionalProperties": false,
+        "properties": {
+          "choice": { "type": "string" },
+          "reason": { "type": "string" },
+          "rejected_alternative": { "type": "string" },
+          "question_id": { "type": "string" },
+          "question": { "type": "string" }
+        }
+      }
+    },
+    "metrics": {
+      "type": "object",
+      "properties": {
+        "tool_calls": { "type": "integer" },
+        "duration_ms": { "type": "integer" },
+        "tokens_used": { "type": "integer", "minimum": 0, "description": "Total tokens (input + output) consumed by the sub-agent." }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

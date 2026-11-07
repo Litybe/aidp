@@ -1,0 +1,252 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://aidp.local/schema/pipeline.v4.json",
+  "title": "aidp pipeline v4",
+  "type": "object",
+  "required": ["version", "id", "stages"],
+  "properties": {
+    "version": { "enum": [4, 5] },
+    "id": { "type": "string", "minLength": 1 },
+    "name": { "type": "string" },
+    "description": { "type": "string" },
+    "kind": {
+      "type": "string",
+      "enum": ["pipeline", "fragment"],
+      "default": "pipeline",
+      "description": "fragment = composition brick meant for uses:, never launched alone"
+    },
+    "policy": {
+      "type": "array",
+      "items": { "type": "string", "maxLength": 300 },
+      "maxItems": 10
+    },
+    "inputs": {
+      "type": "object",
+      "additionalProperties": { "$ref": "#/definitions/inputSpec" }
+    },
+    "settings": {
+      "type": "object",
+      "properties": {
+        "max_correction_iterations": { "type": "integer", "minimum": 0 },
+        "emit_effort": { "type": "boolean", "description": "When true, stages without an explicit `effort:` emit a per-role default effort in the dispatched agent() call. Defaults to false." },
+        "max_total_stages": { "type": "integer", "minimum": 1, "description": "Ceiling on total flattened stages (top-level + loop bodies) after composition expansion. Defaults to 256 when unset." },
+        "max_stages_per_pass": { "type": "integer", "minimum": 1, "description": "LOC-48: ceiling on how many stages one Workflow pass may accumulate before workflow_emit is forced to stop at a not-yet-crossed composite (`type: pipeline`) entry. A small composite that would still fit under the budget is merged into the surrounding pass instead of forcing its own `awaiting_composite` boundary. Defaults to 10 when unset." },
+        "knowledge_graph": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Workspace knowledge-graph (Graphify) config. When enabled, a usable graph is injected into every sub-agent prompt so analysis stages query the graph instead of bulk Grep+Read. The default `refresh: never` builds NOTHING — a graph is used only if already present, otherwise the run falls back to Grep/Read; set `refresh: lazy|always` to have `aidp run init` build/refresh it. Non-blocking: with no usable graph (or the graphify CLI absent) the run proceeds with Grep/Read fallback.",
+          "properties": {
+            "enabled":      { "type": "boolean", "default": false },
+            "cache_dir":    { "type": "string", "default": ".cursor/graphify-out" },
+            "refresh":      { "type": "string", "enum": ["lazy", "always", "never"], "default": "never" },
+            "include":      { "type": "array", "items": { "type": "string" }, "default": [] },
+            "exclude":      { "type": "array", "items": { "type": "string" } },
+            "code_only":    { "type": "boolean", "default": true },
+            "graphify_bin": { "type": "string", "default": "graphify", "pattern": "^[A-Za-z0-9_][A-Za-z0-9_.+-]*$", "description": "Bare program name resolved on PATH: no /, no backslash, no :, not . or ... Use the AIDP_GRAPHIFY_BIN env var to point at an absolute path." }
+          }
+        },
+        "knowledge": {
+          "type": "object",
+          "description": "Prompt-rendering budget for the project knowledge base (Lot 3 / C1). A sibling of `knowledge_graph` (Graphify config) — unrelated settings block, do not conflate.",
+          "properties": {
+            "prompt_budget_chars": { "type": "integer", "minimum": 500 },
+            "max_note_bytes": { "type": "integer", "minimum": 1024 }
+          }
+        },
+        "verify_scope": { "type": "boolean", "default": true, "description": "C7 (Lot 3): whether `run reconcile` runs scope::verify_run at the end of a run. Defaults to true." },
+        "budget_floor_tokens": { "type": "integer", "minimum": 0, "default": 50000, "description": "C8 (Lot 3): admission floor (in bud()/pool()'s OUTPUT-token budget read) below which a fan-out shard / plan task / parallel-group member is not dispatched at all (status: cancelled). bud() undercounts real cost ~31-87x (output tokens only) — this is a floor on 1-3% of true remaining budget, never a cost figure. Defaults to 50000." },
+        "resolve_policy": { "type": "string", "enum": ["never", "fixed", "fixed_and_not_relevant"], "default": "fixed_and_not_relevant", "description": "Which PR review threads the pr-comments commit_and_reply stage resolves after replying: never, only those fixed, or those fixed or judged not relevant. Threads needing a reviewer are always left open." },
+        "on_item_failure": { "type": "string", "enum": ["pause", "continue"], "default": "pause", "description": "C8 (Lot 3): what a cancelled/failed fan-out shard, plan task, or parallel-group member does to the run. `pause` (default) halts for a human. `continue` is opt-in: the item is logged as not-completed and the stage's merge/next dispatch (which sees every item's named status) decides." },
+        "tool_enforcement": { "type": "string", "enum": ["strict", "off"], "default": "off", "description": "C10 (Lot 3): whether stages resolve a specialized, tool-restricted agentType for read-only roles (analyzer/planner/reviewer) via a registry persona declaring a `tools:` allowlist. `off` (default): every stage emits its bare role, unchanged from every pre-C10 pipeline. `strict` is an explicit per-pipeline opt-in, safe only once `aidp doctor`'s agent_toolsets check is green — `aidp workflow emit` refuses to compile a `strict` pipeline while that check is red. `executor` is never restricted by either value." },
+        "providers": { "type": "object", "propertyNames": { "enum": ["analyzer", "planner", "executor", "reviewer"] }, "additionalProperties": { "type": "string", "pattern": "^[a-z][a-z0-9_-]{0,31}$" }, "description": "Agent provider id per role, used by stages that declare no provider of their own." }
+      },
+      "additionalProperties": true
+    },
+    "stages": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/definitions/stage" }
+    }
+  },
+  "additionalProperties": true,
+  "definitions": {
+    "inputSpec": {
+      "type": "object",
+      "properties": {
+        "required": { "type": "boolean" },
+        "kind": { "type": "string" },
+        "values": { "type": "array", "items": { "type": "string" } },
+        "default": {},
+        "description": { "type": "string" }
+      },
+      "additionalProperties": true
+    },
+    "stage": {
+      "type": "object",
+      "required": ["name"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1, "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$" },
+        "description": { "type": "string" },
+        "policy": {
+          "type": "array",
+          "items": { "type": "string", "maxLength": 300 },
+          "maxItems": 10
+        },
+        "type": { "type": "string", "enum": ["loop", "pipeline"] },
+        "uses": {
+          "type": "string",
+          "minLength": 1,
+          "description": "For a `type: pipeline` stage: the id (resolved via discovery) or file path of another pipeline template to inline at this stage. Enables pipeline composition / reuse."
+        },
+        "composite_entry": {
+          "type": "string",
+          "description": "Never authored in a template — set automatically by `compose::expand` on a composite's namespaced entry stage(s), to the composite's own stage name. Forces a new Workflow pass at this stage, exactly like `plan_tasks:` does for `plan`->`implement`."
+        },
+        "composite_when": {
+          "type": "array",
+          "items": { "type": ["string", "boolean"] },
+          "description": "Never authored in a template — set automatically by `compose::expand` on every stage inlined from a composite that declares a `when:` (LOC-51). The stage runs only if every entry, and its own `when:`, holds."
+        },
+        "agent": { "type": "string" },
+        "model": {
+          "type": "string",
+          "enum": ["sonnet", "opus", "haiku", "fable"],
+          "description": "Model family for this stage's sub-agent. Passed to the Claude Code Task tool as the `model` parameter. Omitting it does NOT inherit the session's model: the emitter always resolves and writes one via `AgentRole::default_model` — `opus` for a `planner`, `sonnet` for every other role."
+        },
+        "effort": {
+          "type": "string",
+          "enum": ["low", "medium", "high", "xhigh", "max"],
+          "description": "Override the effort level for this stage's sub-agent. Passed to the Claude Code Task tool as `opts.effort`. Inherits from the session if omitted."
+        },
+        "provider": { "type": "string", "pattern": "^[a-z][a-z0-9_-]{0,31}$", "description": "Agent provider id running this stage; overrides settings.providers for its role. Unknown ids are refused at resolution time." },
+        "skills": { "type": "array", "items": { "type": "string" } },
+        "skills_by": {
+          "type": "object",
+          "required": ["input"],
+          "additionalProperties": false,
+          "properties": {
+            "input": { "type": "string" },
+            "map": { "type": "object", "additionalProperties": { "type": "array", "items": { "type": "string" } } },
+            "default": { "type": "array", "items": { "type": "string" } }
+          }
+        },
+        "needs": { "type": "array", "items": { "type": "string" } },
+        "inputs": { "type": "object" },
+        "outputs": {
+          "type": "array",
+          "items": {
+            "oneOf": [
+              { "type": "string" },
+              {
+                "type": "object",
+                "properties": {
+                  "name": { "type": "string" },
+                  "kind": { "type": "string" },
+                  "path": { "type": "string" },
+                  "from": {
+                    "type": "string",
+                    "description": "On a `type: pipeline` stage, aliases an output produced inside the referenced pipeline, e.g. `scan.report` exposes the `report` output of the inner `scan` stage as this composite stage's output."
+                  }
+                },
+                "additionalProperties": true
+              }
+            ]
+          }
+        },
+        "with": { "type": "object" },
+        "when": { "type": ["string", "boolean"] },
+        "gate": { "type": ["string", "boolean", "object"] },
+        "scope": {
+          "type": "object",
+          "properties": {
+            "mode": { "type": "string", "enum": ["stage_dir_only", "production", "tests", "repo_wide", "custom"] },
+            "allowed": { "type": "array", "items": { "type": "string" } },
+            "denied": { "type": "array", "items": { "type": "string" } },
+            "writes": { "type": "array", "items": { "type": "string" } },
+            "reads": { "type": "array", "items": { "type": "string" } }
+          },
+          "additionalProperties": true
+        },
+        "isolation": {
+          "type": "string",
+          "enum": ["worktree"],
+          "description": "v7 workflow engine only: dispatch this stage's sub-agent inside an isolated git worktree (collision-free parallel writes). Ignored by the v4 driver."
+        },
+        "tools": {
+          "type": "object",
+          "description": "C10 (Lot 3): an explicit tool allow/deny for this stage's sub-agent, overriding whatever crate::toolset's role/scope matrix would otherwise compute under settings.tool_enforcement: strict. Captured as data; see pipeline.rs::ToolsSpec's doc comment for what this first jet does and does not yet wire up.",
+          "properties": {
+            "allow": { "type": "array", "items": { "type": "string" } },
+            "deny": { "type": "array", "items": { "type": "string" } }
+          },
+          "additionalProperties": false
+        },
+        "fan_out": {
+          "type": "object",
+          "description": "v7 workflow engine only: fan this stage out into N parallel sub-agents (one per shard) plus a merge sub-agent that produces the stage's canonical outputs/envelope. Provide exactly one of `items` (static shard labels) or `from` (handlebars ref to an upstream array signal, e.g. {{ stages.plan.signals.shards }}).",
+          "properties": {
+            "items": { "type": "array", "items": { "type": "string", "minLength": 1 }, "minItems": 1 },
+            "from": { "type": "string", "minLength": 1 },
+            "max": { "type": "integer", "minimum": 1, "maximum": 16 },
+            "fold": { "type": "boolean", "default": true, "description": "C8 (Lot 3): true (default, unchanged pre-C8 behaviour) folds any item past `max` into the last shard's text. false hard-truncates to `max` items instead (dropped, not folded) and `max` also becomes pool(...)'s concurrency size — either way `max` stays a hard ceiling on spawned sub-agents." },
+            "merge_hint": { "type": "string" }
+          },
+          "additionalProperties": false
+        },
+        "merge_findings": {
+          "type": "object",
+          "description": "C6 (Lot 3, Capitalisation): merge these upstream stages' findings.json into this stage's own canonical findings.json via `aidp findings merge` — severity_counts/has_blocking_findings recomputed mechanically instead of synthesized by a model. Only supported on a plain sequential agent stage (not loop/pipeline/fan_out/plan_tasks).",
+          "required": ["from", "out"],
+          "properties": {
+            "from": { "type": "array", "items": { "type": "string", "minLength": 1 }, "minItems": 1 },
+            "out": { "type": "string", "minLength": 1 }
+          },
+          "additionalProperties": false
+        },
+        "on_harness_gap": {
+          "type": "string",
+          "enum": ["pause", "continue"],
+          "description": "C6 (Lot 3, Capitalisation): `pause` halts the run when this stage reports signals.has_harness_gap (a control it declared it could not execute). Defaults to `continue`."
+        },
+        "plan_tasks": {
+          "type": "object",
+          "description": "v7 workflow engine only: compile this stage from an upstream planner's plan.json task graph (schema/plan.schema.json) instead of describing its work in the template. One sub-agent per task, dispatched as soon as its own `needs` resolve, with extra ordering inserted wherever two tasks write the same file, plus a merge sub-agent for the plan's `shared_files` and the stage's declared outputs. Compiles in two passes: the first `workflow emit` stops here (`awaiting_plan`), the second expands the tasks.",
+          "required": ["from"],
+          "properties": {
+            "from": { "type": "string", "minLength": 1, "description": "Handlebars ref to the plan artifact, e.g. {{ stages.plan.outputs.plan }} — must resolve to a .json file declared as an output of an upstream stage." },
+            "max": { "type": "integer", "minimum": 1, "maximum": 16, "description": "Ceiling on concurrently-running tasks (default 4). Tasks are never merged together; the cap only throttles dispatch." },
+            "kinds": {
+              "type": "array",
+              "items": { "type": "string", "enum": ["code", "tests", "docs", "infra", "chore"] },
+              "description": "Task kinds this stage claims. Empty/absent = every task in the plan. Several plan_tasks stages must claim disjoint kinds, and together they must cover every kind the plan produces."
+            },
+            "merge_hint": { "type": "string" },
+            "skills_by_kind": {
+              "type": "object",
+              "additionalProperties": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+              "description": "Opt-in per-kind reduction of the stage's skill list: a task whose kind has an entry here loads only those skills instead of the stage's full list. Skills not mentioned for any kind stay common to every task. The merge sub-agent always gets the stage's full list. Absent/empty (every template today) leaves emission unchanged."
+            }
+          },
+          "additionalProperties": false
+        },
+        "max_iterations": { "type": ["string", "integer"] },
+        "knowledge": {
+          "oneOf": [
+            { "type": "boolean" },
+            { "type": "string", "enum": ["service", "feature", "all"] }
+          ],
+          "description": "Write this stage's artefacts to the per-project knowledge base <vault>/Knowledge/<repo>/ instead of the run folder, and tell the agent to update those notes in place. The base has two layers: `service` = the transverse notes at the base root (architecture, events, data, domain, operations) — what the service IS; `feature` = <vault>/Knowledge/<repo>/Features/<slug>.md, ONE note per business feature — how a business capability actually works, which is the granularity an agent implementing a ticket needs. `all` (and the legacy `true`) grants both. A `feature` stage's stage_dir is Features/ itself, so `scope: stage_dir_only` keeps it out of the transverse notes. For a `feature` stage aidp injects the pre-computed create-or-update decision (see `aidp knowledge resolve`) so the agent never invents a note name."
+        },
+        "body": { "type": "array", "items": { "$ref": "#/definitions/stage" } }
+      },
+      "additionalProperties": true,
+      "if": {
+        "properties": { "type": { "const": "pipeline" } },
+        "required": ["type"]
+      },
+      "then": {
+        "required": ["uses"]
+      }
+    }
+  }
+}

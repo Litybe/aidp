@@ -1,0 +1,12 @@
+version: 5
+id: foboth
+stages:
+  - name: plan
+    agent: planner
+    outputs: [plan.md]
+  - name: code
+    agent: executor
+    needs: [plan]
+    fan_out:
+      items: ["x"]
+      from: "{{ stages.plan.signals.shards }}"

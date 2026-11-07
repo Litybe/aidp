@@ -1,0 +1,9 @@
+version: 5
+id: bothshard
+stages:
+  - { name: plan, agent: planner, outputs: [plan.json] }
+  - name: code
+    agent: executor
+    needs: [plan]
+    fan_out: { items: ["a", "b"] }
+    plan_tasks: { from: "{{ stages.plan.outputs.plan }}" }

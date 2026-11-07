@@ -1,0 +1,13 @@
+version: 5
+id: loopnoproduceremit
+stages:
+  - name: review
+    agent: reviewer
+    outputs: [findings.json, summary.md]
+  - name: correction_loop
+    type: loop
+    when: "{{ stages.review.outputs.findings.has_blocking_findings }}"
+    max_iterations: 2
+    body:
+      - name: refix
+        agent: executor

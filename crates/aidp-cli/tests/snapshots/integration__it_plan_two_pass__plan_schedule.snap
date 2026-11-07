@@ -1,0 +1,67 @@
+---
+source: crates/aidp-cli/tests/it_plan_two_pass.rs
+expression: redacted_json_str
+---
+{
+  "compiled_at": "<REDACTED>",
+  "max_parallel": 5,
+  "plan_path": "<REDACTED>",
+  "serializations": [
+    {
+      "after": "T2",
+      "before": "T1",
+      "files": [
+        "src/Shared.cs"
+      ]
+    }
+  ],
+  "stage": "implement",
+  "tasks": [
+    {
+      "files": [
+        "src/Shared.cs"
+      ],
+      "id": "T1",
+      "kind": "code",
+      "status": "pending",
+      "title": "Task 1",
+      "wave": 0
+    },
+    {
+      "files": [
+        "src/Shared.cs"
+      ],
+      "id": "T2",
+      "kind": "code",
+      "mutex_after": [
+        "T1"
+      ],
+      "status": "pending",
+      "title": "Task 2",
+      "wave": 1
+    },
+    {
+      "deps": [
+        "T1"
+      ],
+      "files": [
+        "src/Other.cs"
+      ],
+      "id": "T3",
+      "kind": "code",
+      "status": "pending",
+      "title": "Task 3",
+      "wave": 1
+    }
+  ],
+  "waves": [
+    [
+      "T1"
+    ],
+    [
+      "T2",
+      "T3"
+    ]
+  ],
+  "width": 2
+}

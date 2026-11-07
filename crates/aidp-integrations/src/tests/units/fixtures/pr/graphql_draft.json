@@ -1,0 +1,7 @@
+{"viewer":{"login":"me"},"repository":{"pullRequest":{
+"number":7,"url":"u","title":"Wip","state":"OPEN","isDraft":true,
+"headRefName":"feat/X-2","headRefOid":"def456","baseRefName":"master","mergeable":"UNKNOWN","reviewDecision":"APPROVED",
+"author":{"login":"dev"},
+"latestOpinionatedReviews":{"nodes":[]},"reviewRequests":{"nodes":[]},
+"commits":{"nodes":[{"commit":{"statusCheckRollup":null}}]},
+"reviewThreads":{"nodes":[]}}}}

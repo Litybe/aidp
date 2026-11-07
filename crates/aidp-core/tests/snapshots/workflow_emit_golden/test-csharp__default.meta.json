@@ -1,0 +1,28 @@
+{
+  "error": null,
+  "warnings": [
+    "skill dropped, no knowledge graph for this run: graphify-context removed from stage discover__knowledge__knowledge_read",
+    "skill dropped, no knowledge graph for this run: graphify-context removed from stage discover__discover_prompt",
+    "skill dropped, no knowledge graph for this run: graphify-context removed from stage discover__discover_code",
+    "skill dropped, no knowledge graph for this run: graphify-context removed from stage discover__discover",
+    "skill dropped, no knowledge graph for this run: graphify-context removed from stage discover__study",
+    "skill dropped, no knowledge graph for this run: graphify-context removed from stage discover__knowledge_sync__knowledge_feature_update",
+    "skill dropped, no knowledge graph for this run: graphify-context removed from stage plan",
+    "skill dropped, no knowledge graph for this run: graphify-context removed from stage tests",
+    "skill dropped, no knowledge graph for this run: graphify-context removed from stage review__review_correctness",
+    "skill dropped, no knowledge graph for this run: graphify-context removed from stage review__review_security",
+    "skill dropped, no knowledge graph for this run: graphify-context removed from stage review__review_perf",
+    "skill dropped, no knowledge graph for this run: graphify-context removed from stage review__review_maintainability",
+    "skill dropped, no knowledge graph for this run: graphify-context removed from stage review__review",
+    "skill dropped, no knowledge graph for this run: graphify-context removed from stage refix",
+    "skill dropped, no knowledge graph for this run: graphify-context removed from stage rereview"
+  ],
+  "gates": [],
+  "awaiting_plan": {
+    "plan_path": "<WORKSPACE>/.aidp/pipelines/_no-ticket/20260101-000000-golden/plan/plan.json",
+    "producer": "plan",
+    "stage": "tests"
+  },
+  "awaiting_composite": null,
+  "plan_schedules": []
+}

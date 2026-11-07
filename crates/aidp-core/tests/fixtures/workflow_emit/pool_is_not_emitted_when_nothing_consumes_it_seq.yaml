@@ -1,0 +1,10 @@
+version: 5
+id: nopool
+stages:
+  - name: a
+    agent: analyzer
+    outputs: [a.md]
+  - name: b
+    agent: analyzer
+    needs: [a]
+    outputs: [b.md]

@@ -1,0 +1,17 @@
+id: invalid-duplicate
+version: 1
+steps:
+  - id: a
+    kind: action
+    use: noop
+  - id: repeat
+    kind: loop
+    max: 2
+    body:
+      - id: a
+        kind: action
+        use: noop
+  - id: b
+    kind: action
+    use: missing-action
+    when: steps.ghost.status == "done"

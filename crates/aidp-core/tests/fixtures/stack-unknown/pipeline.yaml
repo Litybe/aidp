@@ -1,0 +1,8 @@
+version: 5
+id: stackunknown
+inputs:
+  stack: { kind: enum, values: [auto, unknown, rust], default: auto }
+stages:
+  - name: fix
+    agent: executor
+    skills: [a]

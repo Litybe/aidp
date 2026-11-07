@@ -1,0 +1,13 @@
+version: 5
+id: mergedbudget
+stages:
+  - { name: code, agent: executor, outputs: [changed-files.json] }
+  - name: extra_a
+    type: pipeline
+    uses: smallchild_a
+    needs: [code]
+  - name: extra_b
+    type: pipeline
+    uses: smallchild_b
+    needs: [extra_a]
+  - { name: pr, agent: executor, needs: [extra_b] }

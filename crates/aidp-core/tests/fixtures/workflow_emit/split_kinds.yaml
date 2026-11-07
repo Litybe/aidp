@@ -1,0 +1,16 @@
+version: 5
+id: plansplit
+stages:
+  - name: plan
+    agent: planner
+    outputs: [plan.json]
+  - name: code
+    agent: executor
+    needs: [plan]
+    plan_tasks: { from: "{{ stages.plan.outputs.plan }}", max: 2, kinds: [code, infra] }
+    outputs: [changed-files.json]
+  - name: tests
+    agent: executor
+    needs: [code]
+    plan_tasks: { from: "{{ stages.plan.outputs.plan }}", max: 2, kinds: [tests] }
+    outputs: [changed-files.json]

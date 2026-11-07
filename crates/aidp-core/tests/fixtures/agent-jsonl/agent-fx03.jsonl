@@ -1,0 +1,2 @@
+{"type":"user","agentId":"fx03","cwd":"C:/ws/demo","sessionId":"s1","timestamp":"2026-01-01T00:20:00.000Z","message":{"content":"# Stage `study`\n\n**Agent:** `analyzer`\n\n**Pipeline:** `demo` (run `19990101-000000-9999`)\n"}}
+{"type":"assistant","agentId":"fx03","cwd":"C:/ws/demo","sessionId":"s1","timestamp":"2026-01-01T00:20:01.000Z","message":{"id":"msg_E","model":"claude-sonnet-5","usage":{"input_tokens":5,"output_tokens":5,"cache_creation_input_tokens":10,"cache_read_input_tokens":10}}}

@@ -1,0 +1,15 @@
+[package]
+name = "aidp-flows"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "aidp ticket workflow engine: flow definition model, validation, condition evaluator and the pure state machine"
+
+[lints]
+workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+serde_yaml.workspace = true
+thiserror.workspace = true

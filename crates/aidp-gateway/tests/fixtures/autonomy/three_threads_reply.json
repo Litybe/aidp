@@ -1,0 +1,9 @@
+{
+  "status": "completed",
+  "summary": "Three review threads: two decided, one left open for the reviewer.",
+  "outputs": {},
+  "signals": {
+    "decided": ["thread-1", "thread-3"],
+    "escalations": []
+  }
+}

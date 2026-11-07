@@ -1,0 +1,21 @@
+version: 5
+id: composed
+settings: { max_correction_iterations: 2 }
+stages:
+  - name: code
+    agent: executor
+    scope: { mode: production }
+    outputs: [changed-files.json]
+  - name: review
+    type: pipeline
+    uses: revsub
+    needs: [code]
+    outputs:
+      - { name: findings, from: review.findings }
+  - name: correction_loop
+    type: loop
+    when: "{{ stages.review.outputs.findings.has_blocking_findings }}"
+    max_iterations: "{{ settings.max_correction_iterations }}"
+    body:
+      - { name: refix, agent: executor, scope: { mode: production } }
+      - { name: rereview, agent: reviewer, needs: [refix], outputs: [findings.json] }

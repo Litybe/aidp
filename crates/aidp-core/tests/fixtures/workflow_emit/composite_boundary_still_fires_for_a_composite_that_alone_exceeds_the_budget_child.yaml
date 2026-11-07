@@ -1,0 +1,6 @@
+version: 5
+id: bigchild
+stages:
+  - { name: a, agent: analyzer, outputs: [a.md] }
+  - { name: b, agent: analyzer, outputs: [b.md] }
+  - { name: c, agent: analyzer, needs: [a, b], outputs: [c.md] }

@@ -1,0 +1,9 @@
+version: 5
+id: t05-retry
+description: Minimal test pipeline with one executor stage, no fan_out, no plan_tasks, no parallel group.
+inputs: {}
+settings:
+  max_stage_retries: 2
+stages:
+  - name: only
+    agent: executor

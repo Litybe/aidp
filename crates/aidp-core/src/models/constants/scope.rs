@@ -1,0 +1,12 @@
+pub const SCOPE_JSON_FILE: &str = "scope.json";
+pub const MODE_STAGE_DIR_ONLY: &str = "stage_dir_only";
+pub const MODE_PRODUCTION: &str = "production";
+pub const MODE_TESTS: &str = "tests";
+pub const MODE_REPO_WIDE: &str = "repo_wide";
+pub const MODE_CUSTOM: &str = "custom";
+pub const TESTS_DIR: &str = "tests";
+pub const DOCS_DIR: &str = "docs";
+pub const JS_TESTS_DIR: &str = "__tests__";
+pub const FIELD_ALLOWED: &str = "allowed";
+pub const FIELD_DENIED: &str = "denied";
+pub const NO_RULES_REASON: &str = "no scope rules were available to check this path against";

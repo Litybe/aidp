@@ -1,0 +1,4 @@
+version: 5
+id: revchild
+stages:
+  - { name: r, agent: reviewer, outputs: [findings.json] }

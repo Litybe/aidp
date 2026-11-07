@@ -1,0 +1,28 @@
+{
+  "schema_version": 1,
+  "run_id": "r",
+  "iter": 0,
+  "generated_at": "2026-10-07T10:00:00Z",
+  "severity_counts": {
+    "blocking": 0,
+    "major": 1,
+    "minor": 0,
+    "info": 0
+  },
+  "has_blocking_findings": false,
+  "findings": [
+    {
+      "id": "F-1",
+      "severity": "major",
+      "category": "correctness",
+      "title": "t",
+      "location": {
+        "path": "src/a.rs",
+        "line": 12,
+        "side": "RIGHT",
+        "start_line": 10
+      }
+    }
+  ],
+  "checks": []
+}

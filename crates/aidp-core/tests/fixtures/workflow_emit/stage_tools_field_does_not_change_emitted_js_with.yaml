@@ -1,0 +1,7 @@
+version: 5
+id: tools-inert
+stages:
+  - name: solo
+    agent: executor
+    tools: { allow: [Read] }
+    outputs: [out.txt]

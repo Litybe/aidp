@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aidp.local/schema/flow.v1.json",
+  "title": "aidp flow definition",
+  "description": "A ticket workflow definition read by the flow engine (aidp-flows). Mirrors the FlowDef model: top-level keys and step keys are closed.",
+  "type": "object",
+  "required": ["id", "version"],
+  "additionalProperties": false,
+  "properties": {
+    "id": { "type": "string", "minLength": 1 },
+    "version": { "type": "integer", "minimum": 0 },
+    "inputs": { "type": "object" },
+    "settings": { "type": "object" },
+    "blocks": {
+      "type": "object",
+      "description": "Named step lists, referenced by an action step whose `use` names the block.",
+      "additionalProperties": { "type": "array", "items": { "$ref": "#/$defs/step" } }
+    },
+    "steps": { "type": "array", "items": { "$ref": "#/$defs/step" } }
+  },
+  "$defs": {
+    "step": {
+      "type": "object",
+      "required": ["id"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$" },
+        "kind": { "type": "string", "enum": ["action", "pipeline", "wait", "human", "loop"], "default": "action" },
+        "phase": { "type": "string" },
+        "when": { "type": "string" },
+        "skip_on": { "type": "array", "items": { "type": "string", "enum": ["local"] } },
+        "pushes": { "type": "boolean", "default": false },
+        "resource": { "type": "string", "enum": ["unity-editor"], "description": "Daemon resource held while the pipeline step runs; one holder at a time per project, others wait (waiting_external, reason resource:<name>). Pipeline steps only." },
+        "use": { "type": "string", "description": "Registry entry (action, wait), pipeline template (pipeline) or block name." },
+        "then": { "type": "string" },
+        "on_error": { "type": "string", "enum": ["fail", "warn"], "default": "fail" },
+        "with": { "type": "object" },
+        "max": { "type": "integer", "minimum": 1 },
+        "until": { "type": "string" },
+        "body": { "type": "array", "items": { "$ref": "#/$defs/step" } },
+        "prompt": { "type": "string", "description": "Question shown for a human step." },
+        "choices": { "type": "array", "items": { "type": "string" } }
+      }
+    }
+  }
+}

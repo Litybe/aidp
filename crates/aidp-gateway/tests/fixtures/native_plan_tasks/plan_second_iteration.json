@@ -1,0 +1,24 @@
+{
+  "schema": "aidp-plan.v1",
+  "summary": "Correction plan: two independent fixes.",
+  "tasks": [
+    {
+      "id": "R1",
+      "title": "Fix the first file",
+      "kind": "code",
+      "prompt": "Create src/fix_one.txt.",
+      "instructions": ["Create the file"],
+      "needs": [],
+      "files": ["src/fix_one.txt"]
+    },
+    {
+      "id": "R2",
+      "title": "Fix the second file",
+      "kind": "code",
+      "prompt": "Create src/fix_two.txt.",
+      "instructions": ["Create the file"],
+      "needs": [],
+      "files": ["src/fix_two.txt"]
+    }
+  ]
+}

@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "run_id": "run-c6-fixture",
+  "iter": 0,
+  "generated_at": "2026-09-09T10:00:00Z",
+  "severity_counts": { "blocking": 1, "major": 0, "minor": 0, "info": 0 },
+  "has_blocking_findings": true,
+  "findings": [
+    {
+      "id": "F-1",
+      "severity": "minor",
+      "category": "maintainability",
+      "file": "src/bar.rs",
+      "line": 5,
+      "title": "Unclear name",
+      "description": "The declared severity_counts (1 blocking) does not match this single minor finding — deliberately inconsistent fixture for C6's count-lie test.",
+      "related_ids": []
+    }
+  ],
+  "checks": []
+}

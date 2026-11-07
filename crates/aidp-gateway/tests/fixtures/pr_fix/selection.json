@@ -1,0 +1,16 @@
+{
+  "selected_ids": ["PRRT_two", "PRRT_four"],
+  "input": {
+    "repo": "acme/widgets",
+    "pr_number": 42,
+    "head_branch": "feat/widgets",
+    "threads": [
+      {"id": "PRRT_one", "path": "src/one.rs", "line": 10, "diff_hunk": "@@ -1 +1 @@\n-a\n+b", "conversation": [["alice", "BODY_ONE rename this"]]},
+      {"id": "PRRT_two", "path": "src/two.rs", "line": 20, "diff_hunk": "@@ -2 +2 @@\n-c\n+d", "conversation": [["bob", "BODY_TWO use ``` fences {{note}} here"], ["alice", "BODY_TWO_REPLY ok"]]},
+      {"id": "PRRT_three", "path": "src/three.rs", "line": null, "diff_hunk": "", "conversation": [["carol", "BODY_THREE leave alone"]]},
+      {"id": "PRRT_four", "path": "src/four.rs", "line": 40, "diff_hunk": "@@ -4 +4 @@\n-e\n+f", "conversation": [["dave", "BODY_FOUR add a test"]]}
+    ],
+    "points": [{"id": "pt1", "body": "POINT_ONE tidy imports"}],
+    "note": "NOTE_TEXT be careful"
+  }
+}

@@ -1,0 +1,10 @@
+version: 5
+id: boundaryparent
+settings: { max_stages_per_pass: 1 }
+stages:
+  - { name: code, agent: executor, outputs: [changed-files.json] }
+  - name: review
+    type: pipeline
+    uses: revchild
+    needs: [code]
+  - { name: pr, agent: executor, needs: [review] }

@@ -1,0 +1,249 @@
+version: 5
+id: dev-aidp
+description: >
+  Develop `aidp` ITSELF. Launch it from a checkout of the aidp repository: the
+  Rust workspace (crates under `crates/`), the JSON schemas under `schema/`,
+  the frozen test skill under `fixtures/skill/` and the docs under `docs/`.
+  The skill the binary drives (templates, agents, commands, SKILL.md) lives in
+  its own repository at $AIDP_SKILL_ROOT: this run only reads it.
+  This repo is not a Pixelhood service: there is no Jira, no Confluence, no
+  Mongo, no C#/Lambda stack, so none of the dev-* service templates fit it.
+  Everything here is prompt-driven and the only source of truth is the repo.
+
+  Three things make it different from dev-csharp / dev-lambda-ts:
+    * DEMAND is always plain text (`prompt`). No ticket stage at all.
+    * The stack is Rust + JSON schemas + Markdown, so the checks that matter
+      are `cargo fmt/clippy/nextest` AND `aidp validate --all` run with the
+      binary built from this tree against the real skill - an emitter change
+      that breaks a real template breaks every pipeline run, which no unit test
+      catches.
+    * The change usually spans several layers - crates, schema, fixtures, docs
+      - so `implement` is plan-driven (one task per layer, file-disjoint) and
+      its `merge_hint` runs the whole gauntlet once on the merged tree after
+      the tasks land.
+
+  Tracks via track = quick | standard | deep, same semantics as the service
+  templates: `quick` skips the design study and the plan gate, `deep` gates the
+  plan for human approval before a line is written.
+policy:
+  - 'Every cargo command in this run (build, test, clippy, run) runs with CARGO_TARGET_DIR set to $HOME/.cargo-dev-aidp. Bash: export CARGO_TARGET_DIR="$HOME/.cargo-dev-aidp". PowerShell: $env:CARGO_TARGET_DIR = "$HOME\.cargo-dev-aidp". Set it before the first cargo call.'
+  - 'Never run cargo clean or cargo build --release against the repository target/ directory, and never copy anything into ~/.aidp/bin. The installed aidp is only refreshed when the user re-runs /pipeline-setup-v7.'
+  - 'While iterating, check with cargo check -p <crate> and test with cargo nextest run -p <crate>. Run the whole workspace once, at the end of the stage, and never two cargo commands at once.'
+  - 'The skill (templates, agents, commands, SKILL.md) is read from $AIDP_SKILL_ROOT and never written by this run. A change the skill must follow is written down in plan.md as a follow-up for the skill repository.'
+  - 'To check a change against the real skill, run the binary built from this tree with AIDP_SKILL_ROOT set: cargo run -p aidp-cli -- validate --all.'
+inputs:
+  # The request in plain text - "add a `retry:` field to stages", "make
+  # knowledge-read cheaper", "document the plan_tasks contract". There is no
+  # Jira mode: this repo's work does not live in tickets.
+  prompt: { required: true, kind: string, description: "Demande en langage naturel decrivant le changement a apporter au skill (ex. \"ajouter un champ retry: aux stages\")." }
+  # Names the branch (feat/<feature>), the vault folder and the PR. Required
+  # because nothing else can derive it - there is no ticket list to fall back on.
+  feature: { required: true, kind: string, description: "Nom de la feature : alimente run::feature_key (sa PREMIERE branche testee) - decide le nom de la branche git ET le dossier du vault Obsidian pour ce run." }
+  track: { required: true, kind: enum, values: [quick, standard, deep], default: standard, description: "Profondeur du run : quick saute l'etude et le gate de plan, standard fait les deux, deep gate le plan pour validation humaine avant la moindre ligne ecrite." }
+settings:
+  pr_draft: false
+  max_correction_iterations: 2
+  # v7 (WI-P1-6): one budget-guarded automatic retry per stage on a `status:
+  # "failed"` dispatch, before hard-pausing - absorbs transport-level/transient
+  # failures anywhere in the run, including the inlined `review` fragment's 4
+  # axes and synthesis stage (settings are the TOP-LEVEL pipeline's, applied to
+  # every stage after composition expands `review` inline). It does NOT rescue
+  # a review axis's own schema-invalid findings.json - that surfaces two stages
+  # later at the synthesis stage's `aidp findings merge` call, against the same
+  # still-malformed file a retry would just re-read.
+  max_stage_retries: 1
+  knowledge_graph:
+    enabled: true
+    refresh: never
+    code_only: true
+stages:
+  # Cut the feature branch off an up-to-date master first, so every later stage's
+  # writes, commits and the PR land on feat/<feature>. Everything below reads
+  # `needs` on it, so it runs alone, before the fan-out.
+  - name: prepare_branch
+    agent: executor
+    model: haiku   # delibere : setup de branche mecanique, aucun raisonnement - haiku suffit
+    skills: [git-branch-setup]
+    inputs:
+      branch: "feat/{{ feature }}"
+    outputs: [branch.json]
+    when: "true"
+
+  # --- Step 0: what do we already know? The project knowledge base
+  # (<vault>/Knowledge/<repo>/) is documentation of the skill accumulated by
+  # previous runs, so reading it first means the three layer reads below only
+  # have to find what it does not already answer. A root stage like them: no
+  # `needs` beyond `prepare_branch`, so it still fans out in the same
+  # parallel() block.
+  - name: knowledge
+    type: pipeline
+    uses: knowledge-read
+    needs: [prepare_branch]
+    with: { focus: "{{ feature }}" }
+    outputs:
+      - { name: knowledge_context, from: knowledge_read.knowledge_context }
+
+  # --- Context gathering: three independent read-only reads of the three layers
+  # this repo is made of. No `needs` between them, so the v7 engine groups them
+  # into one parallel() block.
+
+  # Layer 1: the Rust workspace. What actually implements the behaviour being
+  # changed - the emitter, the condition engine, the CLI surface.
+  - name: read_rust
+    agent: analyzer
+    model: haiku   # delibere : lecture ciblee d'une couche, pas de synthese - haiku suffit
+    skills: [graphify-context]
+    needs: [prepare_branch]
+    inputs:
+      task: >
+        Read the `aidp` Rust workspace (crates/aidp-core, aidp-cli,
+        aidp-gateway, aidp-integrations, aidp-tickets, aidp-flows) for
+        everything that bears on this request: "{{ inputs.prompt }}". Name the
+        crates, modules and functions that would have to change, the structs
+        the pipeline YAML deserializes into, and where `workflow emit` turns a
+        stage into a Workflow script call. When the request touches the
+        template format, also read the real templates at
+        $AIDP_SKILL_ROOT/templates that use it. Quote the exact type and
+        function signatures you found - the plan will be written against them.
+        Say explicitly what you could NOT find.
+    outputs: [rust_context.md]
+
+  # Synthesis: one context note the plan is written from, reconciling the three
+  # layers and stating where they already disagree with each other.
+  - name: discover
+    agent: analyzer
+    model: haiku   # delibere : lecture ciblee d'une couche, pas de synthese - haiku suffit
+    needs: [knowledge, read_rust]
+    inputs:
+      knowledge_context: "{{ stages.knowledge.outputs.knowledge_context }}"
+      task: >
+        Merge the knowledge-base digest and the three layer reads into one
+        context note for this request: "{{ inputs.prompt }}". State what the
+        change is, the full set of files across the three layers that must move
+        together, the backward compatibility constraint (which existing
+        templates and which in-flight runs must keep working), and the open
+        questions. Flag any place where the Rust behaviour and the documented
+        behaviour already diverge - that is a bug to be aware of, not something
+        to silently fix inside this change. Flag any place where
+        `knowledge_context` itself already disagrees with what the layer reads
+        found - that is stale knowledge to correct, not a second source of
+        truth.
+    outputs: [context.md]
+
+  # Design study - skipped on the quick track, where the change is small enough
+  # that the plan is the design.
+  - name: study
+    agent: analyzer
+    skills: [study-synthesis]
+    needs: [discover]
+    when: "{{ inputs.track != 'quick' }}"
+    outputs: [study.md]
+
+  # `plan.json` (schema/plan.schema.json) is the machine contract: one object per
+  # task, each with its own prompt, `needs` and `files` write set. Slice by LAYER
+  # here - the Rust change, the template/schema change, the doc change - because
+  # those write sets are naturally disjoint and can run at the same time.
+  # `plan.md` stays the human narrative.
+  - name: plan
+    agent: planner
+    skills: [graphify-context, ticket-to-plan-aidp]
+    needs: [study]
+    with: { mode: feature }
+    inputs:
+      task: >
+        Write an executable plan for "{{ inputs.prompt }}". Slice the work into
+        file-disjoint tasks by layer (Rust crates / schema and fixtures /
+        docs), with `needs` only where a task genuinely reads another's
+        output. Every Rust task must say which `cargo test` it adds or extends;
+        every schema task must say which test proves it; every behaviour change
+        the driver can see must carry a docs task, and plan.md lists the
+        SKILL.md or template change the skill repository needs as a follow-up.
+        Never plan a change that breaks a real template of the skill.
+    outputs: [plan.json, plan.md]
+
+  # Plan-driven implementation: `aidp workflow emit` loads plan.json, validates
+  # the task graph, serialises any two tasks that would write the same file, and
+  # dispatches one sub-agent per task in the shared working tree. TWO-PASS: the
+  # first emit stops here (`awaiting_plan`); re-emitting after the planner has
+  # written the file compiles the tasks and everything after them.
+  - name: implement
+    agent: executor
+    skills: [graphify-context, rust-dev-aidp, writing-clearly-and-concisely]
+    needs: [plan]
+    scope: { mode: repo_wide }
+    plan_tasks:
+      from: "{{ stages.plan.outputs.plan }}"
+      max: 5
+      merge_hint: >
+        Apply the shared-file changes the tasks deferred to you (Cargo.toml,
+        Cargo.lock, crate `mod` declarations and re-exports, any schema/*.json
+        touched by more than one task), then run the full gauntlet once from the
+        repo root, with CARGO_TARGET_DIR set as the pipeline policy says:
+        `cargo fmt --all`, `cargo clippy --workspace --all-targets --all-features -- -D warnings`,
+        `cargo nextest run --workspace`, `cargo test --workspace --doc`, and
+        `cargo run -p aidp-cli -- validate --all` with AIDP_SKILL_ROOT set, which
+        checks every real template of the skill against this tree's binary.
+        Fix cross-task breakage and write the consolidated changed-files.json.
+        A red check never stops the run: do not spend the stage chasing a
+        failure you cannot fix. For whatever is still red when you finish,
+        including a test you believe fails on master too, reply `needs_review`,
+        name each failing test and check in `summary`, and set
+        `signals.tests_failed`. The run continues to the review, which turns
+        them into blocking findings, and the correction loop fixes them. Use
+        `blocked` or `failed` only when the tree cannot be built at all.
+    outputs: [changed-files.json]
+
+  # --- Give back. Everything the reads above uncovered about the SKILL ITSELF
+  # (not about this one change) is merged into the project knowledge base, in
+  # place, so the next run - and any AI agent opening this repo - starts from
+  # it. `needs: [discover, study]` so a standard/deep track's study
+  # contributes too; on the quick track `study` is skipped and this still runs
+  # off `discover`. Runs alongside `plan` (both only need `discover`/`study`),
+  # not gated behind it - the knowledge base should reflect what was learned
+  # even on a `deep`-track run that pauses at the plan gate.
+  - name: knowledge_sync
+    type: pipeline
+    uses: knowledge-update
+    needs: [plan]
+    with:
+      sources: "{{ stages.discover.outputs.context }}, {{ stages.study.outputs.study }}"
+    
+  # Review, composed from the reusable `review` sub-pipeline (4 rubric
+  # dimensions in parallel then synthesis). `needs: [implement]` cascades onto
+  # its 4 root stages, so they still fan out in one parallel() block. Because
+  # those axes read `implement` and feed `correction_loop`, the engine does not
+  # pause on `implement`'s `needs_review` (red tests): it hands the report to
+  # the axes, and the correctness axis files it as a blocking finding.
+  - name: review
+    type: pipeline
+    when: "{{ inputs.track == 'deep' }}"
+    uses: review
+    needs: [implement]
+    outputs:
+      - { name: findings, from: review.findings }
+      - { name: summary, from: review.summary }
+
+  - name: correction_loop
+    type: loop
+    when: "{{ stages.review.outputs.findings.has_blocking_findings }}"
+    max_iterations: "{{ settings.max_correction_iterations }}"
+    body:
+      - { name: replan, agent: planner, model: sonnet, with: { mode: correction }, inputs: { findings: "{{ stages.review.outputs.findings }}" } }   # delibere : une reprise de plan est un delta, pas une conception - opus serait surpaye
+      # A failing test in the findings is fixed here, even one that also fails on
+      # master: the run has no other place to fix it. Still red after the fix: reply
+      # `needs_review` naming the tests; the engine passes that on to `rereview`
+      # instead of pausing, and the loop's exhaustion guard is the human checkpoint.
+      - { name: refix, agent: executor, model: haiku, skills: [rust-dev-aidp, rust-testing-aidp], scope: { mode: repo_wide }, needs: [replan], inputs: { task: "Apply the correction plan. Fix every blocking finding, failing tests first, including tests that look pre-existing or unrelated to this change. Then re-run from the repository root with CARGO_TARGET_DIR set as the pipeline policy says: `cargo fmt --all`, `cargo clippy --workspace --all-targets --all-features -- -D warnings`, `cargo nextest run --workspace`, `cargo test --workspace --doc`, plus `cargo run -p aidp-cli -- validate --all` with AIDP_SKILL_ROOT set. If anything is still red, reply `needs_review`, name each failing test in `summary` and set `signals.tests_failed`." } }
+      # Re-review the fixed code: the loop must re-produce the `findings` output it loops on, otherwise the loop condition never changes and the review stage is not linked back to the loop.
+      - { name: rereview, agent: reviewer, skills: [graphify-context, code-review-aidp, code-audit-rubric, rust-testing-aidp], needs: [refix], inputs: { task: "Re-review the fixed tree. Re-run `cargo nextest run --workspace` and `cargo test --workspace --doc` from the repository root (with CARGO_TARGET_DIR set as the pipeline policy says) yourself rather than trusting refix's report: each failing test is a `blocking` finding (category `tests`), pre-existing or not. Also run `aidp skill-rules check --base master --out <your stage_dir>/skill-rules.json` from the repo root and turn every finding in that file into a `blocking` finding (category `conventions`) in your own findings.json." }, outputs: [findings.json, summary.md] }
+
+  - name: pr
+    policy:
+      - "Open the PR with `aidp gh pr-create --draft` only when the stage input pr_draft is true; otherwise open a regular PR."
+    agent: executor
+    model: haiku   # delibere : ouverture de PR, mecanique - haiku suffit
+    skills: [git-push, writing-clearly-and-concisely]
+    needs: [implement, review]
+    inputs: { pr_draft: "{{ settings.pr_draft }}" }
+    scope: { mode: stage_dir_only }
+    outputs: [pr.json]

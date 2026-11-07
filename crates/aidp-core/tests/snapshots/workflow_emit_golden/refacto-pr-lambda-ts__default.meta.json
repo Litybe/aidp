@@ -1,0 +1,17 @@
+{
+  "error": null,
+  "warnings": [
+    "skill dropped, no knowledge graph for this run: graphify-context removed from stage scope_diff",
+    "skill dropped, no knowledge graph for this run: graphify-context removed from stage scan_smells",
+    "skill dropped, no knowledge graph for this run: graphify-context removed from stage plan",
+    "skill dropped, no knowledge graph for this run: graphify-context removed from stage refactor"
+  ],
+  "gates": [],
+  "awaiting_plan": {
+    "plan_path": "<WORKSPACE>/.aidp/pipelines/_no-ticket/20260101-000000-golden/plan/plan.json",
+    "producer": "plan",
+    "stage": "refactor"
+  },
+  "awaiting_composite": null,
+  "plan_schedules": []
+}

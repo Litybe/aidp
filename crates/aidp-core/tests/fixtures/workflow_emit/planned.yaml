@@ -1,0 +1,22 @@
+version: 5
+id: planned
+settings: { max_correction_iterations: 2 }
+stages:
+  - name: plan
+    agent: planner
+    model: opus
+    outputs: [plan.json, plan.md]
+  - name: implement
+    agent: executor
+    model: sonnet
+    needs: [plan]
+    scope: { mode: repo_wide }
+    plan_tasks:
+      from: "{{ stages.plan.outputs.plan }}"
+      max: 3
+      merge_hint: "Run the full suite once."
+    outputs: [changed-files.json]
+  - name: review
+    agent: reviewer
+    needs: [implement]
+    outputs: [findings.json]

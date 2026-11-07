@@ -1,0 +1,145 @@
+version: 5
+id: correction-after-test-dev
+description: >
+  Fix the bugs reported by a DEV test run on an existing branch and comment the
+  existing pull request. The branch and its PR already exist: this pipeline
+  works on the current branch and only comments the PR. It discovers the reported bugs,
+  plans and implements the fixes, writes the tests for the detected stack,
+  reviews, loops on blocking findings, then commits, pushes to the current
+  branch and posts a "Correction après test DEV" comment on the PR.
+
+  DEMAND: `prompt` carries the DEV test report followed by the ticket body, and
+  `jira_keys` may add tickets. Both are wired to `dev-discovery`, so the
+  requirements note lists every reported bug. The stack input selects the test
+  composite.
+inputs:
+  jira_keys: { required: false, kind: list, default: [] }
+  prompt: { required: false, kind: string, default: "", description: "The DEV test report followed by the ticket body." }
+  feature: { required: false, kind: string, description: "Optional feature label; names the vault run folder." }
+  stack: { required: true, kind: enum, values: [csharp, lambda-ts, angular, rust, ts-node, unknown], description: "Language stack of the repo; selects the test composite." }
+  track: { required: true, kind: enum, values: [quick, standard, deep], default: standard, description: "Run depth: quick, standard, or deep - deep adds a human gate before planning." }
+  publish: { required: false, kind: enum, values: [agent, host], default: agent, description: "Who publishes the branch: agent pushes; host (a ticket flow) publishes after the run, so the run only commits and never runs git push." }
+settings:
+  max_correction_iterations: 2
+  knowledge_graph:
+    enabled: true
+    refresh: never
+    code_only: true
+stages:
+  - name: discover
+    type: pipeline
+    uses: dev-discovery
+    with:
+      jira_keys: "{{ inputs.jira_keys }}"
+      prompt: "{{ inputs.prompt }}"
+      track: "{{ inputs.track }}"
+    outputs:
+      - { name: context, from: discover.context }
+      - { name: study, from: study.study }
+
+  - name: plan
+    agent: planner
+    skills: [graphify-context, enforcing-decision-records, ticket-to-plan-aidp]
+    needs: [discover]
+    with: { mode: feature }
+    policy:
+      - "Plan one fix per reported bug."
+    outputs: [plan.json, plan.md]
+    gate: "{{ inputs.track == 'deep' }}"
+
+  - name: implement
+    agent: executor
+    skills: [graphify-context]
+    needs: [plan]
+    scope: { mode: repo_wide }
+    plan_tasks:
+      from: "{{ stages.plan.outputs.plan }}"
+      max: 4
+      kinds: [code, docs, infra, chore]
+      merge_hint: >
+        Apply every shared-file change the tasks deferred to you, then build and
+        run the EXISTING test suite once as a regression check. The regression
+        tests for the fixed bugs are written by the test phase right after you.
+        Write the consolidated changed-files.json covering every task.
+    outputs: [changed-files.json]
+
+  - name: tests_csharp
+    type: pipeline
+    uses: dev-tests-csharp-split
+    needs: [implement]
+    when: "{{ inputs.stack == 'csharp' }}"
+    with:
+      changed_files: "{{ stages.implement.outputs.changed-files }}"
+      context: "{{ stages.discover.outputs.context }}"
+    outputs:
+      - { name: changed-files, from: tests_suite.changed-files }
+      - { name: test-report, from: tests_suite.test-report }
+
+  - name: tests_lambda_ts
+    type: pipeline
+    uses: dev-tests-jest
+    needs: [implement]
+    when: "{{ inputs.stack == 'lambda-ts' }}"
+    with:
+      changed_files: "{{ stages.implement.outputs.changed-files }}"
+      context: "{{ stages.discover.outputs.context }}"
+    outputs:
+      - { name: changed-files, from: tests_suite.changed-files }
+      - { name: test-report, from: tests_suite.test-report }
+
+  - name: tests_node
+    type: pipeline
+    uses: dev-tests-vitest
+    needs: [implement]
+    when: "{{ inputs.stack == 'ts-node' or inputs.stack == 'angular' }}"
+    with:
+      changed_files: "{{ stages.implement.outputs.changed-files }}"
+      context: "{{ stages.discover.outputs.context }}"
+    outputs:
+      - { name: changed-files, from: tests_suite.changed-files }
+      - { name: test-report, from: tests_suite.test-report }
+
+  - name: tests_rust
+    type: pipeline
+    uses: dev-tests-cargo
+    needs: [implement]
+    when: "{{ inputs.stack == 'rust' }}"
+    with:
+      changed_files: "{{ stages.implement.outputs.changed-files }}"
+      context: "{{ stages.discover.outputs.context }}"
+    outputs:
+      - { name: changed-files, from: tests_suite.changed-files }
+      - { name: test-report, from: tests_suite.test-report }
+
+  - name: review
+    type: pipeline
+    uses: review
+    needs: [tests_csharp, tests_lambda_ts, tests_node, tests_rust]
+    outputs:
+      - { name: findings, from: review.findings }
+      - { name: summary, from: review.summary }
+
+  - name: correction_loop
+    type: loop
+    when: "{{ stages.review.outputs.findings.has_blocking_findings }}"
+    max_iterations: "{{ settings.max_correction_iterations }}"
+    body:
+      - { name: replan, agent: planner, model: sonnet, with: { mode: correction }, inputs: { findings: "{{ stages.review.outputs.findings }}" } }
+      - { name: refix, agent: executor, model: haiku, scope: { mode: repo_wide }, needs: [replan] }
+      - { name: rereview, agent: reviewer, skills: [graphify-context, code-review-aidp], needs: [refix], outputs: [findings.json, summary.md] }
+
+  - name: push_comment
+    agent: executor
+    model: haiku
+    skills: [writing-clearly-and-concisely]
+    skills_by: { input: publish, map: { host: [] }, default: [git-push] }
+    needs: [review]
+    inputs: { publish: "{{ inputs.publish }}" }
+    scope: { mode: repo_wide }
+    policy:
+      - "Never ask the user a question. Never create a branch and never open a pull request."
+      - "Commit the changes on the current branch with a Conventional Commits message `fix(<KEY>): <summary>`, then push to that same branch."
+      - "When the input `publish` is `host`, commit only and never run git push: the host publishes the branch right after the run, so the comment lists the commit subjects instead of SHAs."
+      - "Resolve the existing PR number with `aidp gh pr-resolve`, then post the comment with `aidp gh pr-comment <owner/repo> <number> --body-file -`, piping the body on stdin."
+      - "The comment is titled `Correction après test DEV` and lists each bug addressed and the commit SHAs."
+    outputs: [comment.json]

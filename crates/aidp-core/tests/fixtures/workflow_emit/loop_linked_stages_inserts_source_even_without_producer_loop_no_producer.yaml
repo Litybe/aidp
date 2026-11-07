@@ -1,0 +1,14 @@
+version: 5
+id: loopnoproducer
+stages:
+  - name: review
+    agent: reviewer
+    outputs: [findings.json, summary.md]
+    on_harness_gap: pause
+  - name: correction_loop
+    type: loop
+    when: "{{ stages.review.outputs.findings.has_blocking_findings }}"
+    max_iterations: 2
+    body:
+      - name: refix
+        agent: executor

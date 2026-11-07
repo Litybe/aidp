@@ -1,0 +1,57 @@
+{
+  "error": null,
+  "warnings": [
+    "skill dropped, no knowledge graph for this run: graphify-context removed from stage discover__knowledge__knowledge_read",
+    "skill dropped, no knowledge graph for this run: graphify-context removed from stage discover__discover_prompt",
+    "skill dropped, no knowledge graph for this run: graphify-context removed from stage discover__discover_code",
+    "skill dropped, no knowledge graph for this run: graphify-context removed from stage discover__discover",
+    "skill dropped, no knowledge graph for this run: graphify-context removed from stage discover__study",
+    "skill dropped, no knowledge graph for this run: graphify-context removed from stage discover__knowledge_sync__knowledge_feature_update",
+    "skill dropped, no knowledge graph for this run: graphify-context removed from stage plan",
+    "skill dropped, no knowledge graph for this run: graphify-context removed from stage tests",
+    "skill dropped, no knowledge graph for this run: graphify-context removed from stage review__review_correctness",
+    "skill dropped, no knowledge graph for this run: graphify-context removed from stage review__review_security",
+    "skill dropped, no knowledge graph for this run: graphify-context removed from stage review__review_perf",
+    "skill dropped, no knowledge graph for this run: graphify-context removed from stage review__review_maintainability",
+    "skill dropped, no knowledge graph for this run: graphify-context removed from stage review__review",
+    "skill dropped, no knowledge graph for this run: graphify-context removed from stage refix",
+    "skill dropped, no knowledge graph for this run: graphify-context removed from stage rereview"
+  ],
+  "gates": [
+    "plan"
+  ],
+  "awaiting_plan": null,
+  "awaiting_composite": {
+    "composite": "review",
+    "stage": "review__review_correctness"
+  },
+  "plan_schedules": [
+    {
+      "compiled_at": "<TIMESTAMP>",
+      "max_parallel": 4,
+      "plan_path": "<WORKSPACE>/.aidp/pipelines/_no-ticket/20260101-000000-golden/plan/plan.json",
+      "stage": "tests",
+      "tasks": [
+        {
+          "files": [
+            "tests/FeatureTests.cs"
+          ],
+          "id": "T2",
+          "kind": "tests",
+          "status": "pending",
+          "title": "Test the feature",
+          "wave": 0
+        }
+      ],
+      "warnings": [
+        "task `T2` needs `T1`, which this stage does not claim (different `kind`) — that ordering is enforced by the stage dependency, not inside this stage"
+      ],
+      "waves": [
+        [
+          "T2"
+        ]
+      ],
+      "width": 1
+    }
+  ]
+}

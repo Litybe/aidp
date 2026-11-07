@@ -1,0 +1,14 @@
+id: loop-max
+version: 1
+steps:
+  - id: fix-loop
+    kind: loop
+    max: 2
+    until: steps.check.outputs.green == true
+    body:
+      - id: fix
+        kind: action
+        use: noop
+      - id: check
+        kind: action
+        use: noop

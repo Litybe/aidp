@@ -1,0 +1,14 @@
+[env]
+# Uncapped parallelism made the suite ~3.5x slower on Windows (process spawns, sockets, Defender).
+# `force = false` keeps an explicit RUST_TEST_THREADS from the shell winning.
+RUST_TEST_THREADS = { value = "4", force = false }
+# Keeps in-process `reconcile` tests off the real ~/.claude/projects (GBs of transcripts, ~5 min
+# per test). A test that needs transcripts sets the variable itself.
+AIDP_CLAUDE_PROJECTS_DIR = { value = ".cargo/test-claude-projects", relative = true, force = false }
+# When sccache is the rustc wrapper (user config, never required), strip this checkout's path from
+# its cache keys so a second worktree reuses the dependencies the first one compiled.
+SCCACHE_BASEDIRS = { value = ".", relative = true, force = false }
+
+[target.x86_64-pc-windows-msvc]
+# rust-lld ships with the toolchain; linking the many test binaries was ~12% faster than link.exe.
+linker = "rust-lld"

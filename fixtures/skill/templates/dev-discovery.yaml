@@ -1,0 +1,182 @@
+version: 5
+id: dev-discovery
+kind: fragment
+description: >
+  Context-gathering phase shared across dev-* pipelines: read the DEMAND +
+  Confluence + the code graph in parallel, synthesize into context.md, then
+  (for standard/deep tracks) produce a feasibility study.md. Extracted from
+  dev-csharp so other dev-* templates can compose it via `type: pipeline`
+  instead of re-declaring these stages. Named `dev-discovery` (not
+  `discovery`) to avoid colliding with the existing `discovery` backlog-
+  brainstorm pipeline, which is a different, unrelated template.
+
+  DUAL-MODE DEMAND. The demand can arrive two ways and the rest of the phase is
+  identical afterwards:
+    * `jira_keys` non-empty  -> `discover_jira` reads the tickets (Jira mode);
+    * `prompt` non-empty     -> `discover_prompt` turns the free-text request
+                               into the same kind of requirements note
+                               (prompt mode, no ticket at all).
+  The two stages are mutually exclusive by their input-only `when:`, which
+  `aidp workflow emit` resolves at compile time - the unused one is never
+  dispatched and costs nothing. A parent pipeline that maps neither input gets
+  Jira mode, exactly as before `prompt` existed.
+inputs:
+  # --- Demand, mode A: one or more Jira US of the same feature (see the parent
+  # `dev` pipeline). Empty list => not Jira-driven.
+  jira_keys: { required: false, kind: list, default: [] }
+  # --- Demand, mode B: the request in plain text, straight from the user, with
+  # no ticket behind it. Non-empty => prompt-driven.
+  #
+  # `default: false` is a deliberate SENTINEL, not a value: a parent pipeline
+  # that does not map `prompt:` has this literal substituted into the guard
+  # `when:` at composition time, where `false` is both falsy and parseable, so
+  # `discover_prompt` is statically skipped. An empty-string default would make
+  # that guard an empty expression, which the condition engine cannot parse and
+  # therefore fails OPEN - the stage would run with no demand at all.
+  prompt: { required: false, kind: string, default: false }
+  track: { required: true, kind: enum, values: [quick, standard, deep], default: standard, description: "Run depth: quick, standard, or deep - only standard/deep run the study stage; defaults to standard." }
+settings:
+  knowledge_graph:
+    enabled: true
+    refresh: never
+    code_only: true
+stages:
+  # --- Step 0: what do we already know? The project knowledge base
+  # (<vault>/Knowledge/<repo>/) is documentation of the SERVICE accumulated by
+  # previous runs, so reading it first means the source reads below only have to
+  # find what it does not already answer. A root stage like the others: a parent
+  # composite's `needs` cascades onto it too.
+  #
+  # `focus` is `{{ feature }}` - the run's own feature identifier - rather than
+  # the ticket list, because it must say what the run is about in BOTH modes
+  # (`aidp` derives it from `inputs.feature`, else from the ticket list).
+  - name: knowledge
+    type: pipeline
+    uses: knowledge-read
+    with: { focus: "{{ feature }}" }
+    outputs:
+      - { name: knowledge_context, from: knowledge_read.knowledge_context }
+
+  # --- Context gathering: independent, read-only reads. No `needs` between them
+  # (they are this sub-pipeline's roots) - a parent composite stage's
+  # `needs`/`when`/`gate` cascades onto all of them at composition time, and
+  # adjacency still lets the v7 engine group them into one parallel() block.
+
+  # Demand, mode A. `when:` is a bare input reference so composition can bind it
+  # to the parent's own `jira_keys`; an empty list is falsy => stage skipped at
+  # compile time.
+  - name: discover_jira
+    agent: analyzer
+    skills: [analyze-jira-ticket-aidp]
+    inputs: { jira_keys: "{{ inputs.jira_keys }}" }
+    outputs: [jira_context.md]
+    when: "{{ inputs.jira_keys }}"
+
+  # Demand, mode B. Produces the SAME artifact shape as `discover_jira` - a
+  # requirements note the synthesis below consumes without caring which mode
+  # produced it. There is no ticket to read, so the whole job is turning a
+  # free-text request into something plannable, and being explicit about what the
+  # request does NOT say.
+  - name: discover_prompt
+    agent: analyzer
+    skills: [graphify-context, writing-clearly-and-concisely]
+    inputs:
+      request: "{{ inputs.prompt }}"
+      task: >
+        The demand for this run is the free-text `request` above - there is no
+        Jira ticket. Write prompt_context.md as the requirements note a planner
+        would otherwise get from a ticket, with these sections:
+        (1) Demand - the request restated in one paragraph, plus the verbatim
+        request quoted so nothing is lost in your restatement;
+        (2) Scope - what is in, and an explicit OUT-OF-SCOPE list; a prompt is
+        looser than a ticket, so bounding it is the main value you add here;
+        (3) Acceptance criteria - testable, numbered, derived from the request,
+        each one checkable against code or a test;
+        (4) Assumptions - every gap you filled to make the request actionable,
+        one line each, flagged as an assumption and NOT as a fact;
+        (5) Open questions - what a human must answer, and what you decided to
+        assume in the meantime so the run is not blocked;
+        (6) Affected area - the components and paths the request most likely
+        touches, found via the code graph, so the parallel code read and the
+        planner start from the same map.
+        Invent no requirement the request does not support. If the request is too
+        vague to bound, say so in one line at the top of the note and still
+        produce the best-effort sections - the plan gate is where a human stops
+        the run, not this stage.
+    outputs: [prompt_context.md]
+    when: "{{ inputs.prompt }}"
+
+  - name: discover_confluence
+    agent: analyzer
+    skills: [analyze-confluence-docs-aidp]
+    inputs:
+      jira_keys: "{{ inputs.jira_keys }}"
+      focus: "{{ feature }}"
+      task: >
+        Find and read the Confluence pages documenting the area this run touches.
+        Exactly one of `jira_keys` / `prompt` carries the demand: when
+        `jira_keys` is empty (`[]`) the run is prompt-driven, so seed your search
+        from `focus` and the repository's own vocabulary instead of from ticket
+        links.
+    outputs: [confluence_context.md]
+    when: "true"
+
+  - name: discover_code
+    agent: analyzer
+    skills: [graphify-context, enforcing-decision-records]
+    inputs:
+      jira_keys: "{{ inputs.jira_keys }}"
+      focus: "{{ feature }}"
+      task: >
+        Map the code the run will have to change. Exactly one of `jira_keys` /
+        `prompt` carries the demand: when `jira_keys` is empty (`[]`) the run is
+        prompt-driven, so seed the code graph from `focus` and from the
+        repository's own structure rather than from ticket references.
+    outputs: [code_context.md]
+    when: "true"
+
+  # Synthesis: merges the parallel reads into the canonical context.md that
+  # study/plan already consume. Needs all of them -> breaks the parallel group
+  # and runs once after the fan-out. One of `jira_context` / `prompt_context` is
+  # always absent (the other mode's stage was skipped at compile time); the note
+  # that exists is the demand.
+  - name: discover
+    agent: analyzer
+    skills: [graphify-context]
+    needs: [knowledge, discover_jira, discover_prompt, discover_confluence, discover_code]
+    inputs:
+      knowledge_context: "{{ stages.knowledge.outputs.knowledge_context }}"
+      jira_context: "{{ stages.discover_jira.outputs.jira_context }}"
+      prompt_context: "{{ stages.discover_prompt.outputs.prompt_context }}"
+      confluence_context: "{{ stages.discover_confluence.outputs.confluence_context }}"
+      code_context: "{{ stages.discover_code.outputs.code_context }}"
+      task: >
+        Merge the upstream notes into context.md. The demand is in exactly ONE of
+        `jira_context` (Jira-driven run) or `prompt_context` (prompt-driven run)
+        - the other path was skipped and its file does not exist, which is
+        expected, not an error. Carry the demand's acceptance criteria,
+        assumptions and open questions through into context.md verbatim rather
+        than re-deriving them: on a prompt-driven run they are the only contract
+        the plan and the review have.
+    outputs: [context.md]
+    when: "true"
+
+  - name: study
+    agent: analyzer
+    skills: [graphify-context, study-synthesis]
+    needs: [discover]
+    inputs: { context: "{{ stages.discover.outputs.context }}" }
+    outputs: [study.md]
+    when: "{{ inputs.track in ['standard','deep'] }}"
+
+  # --- Last step: give back. Everything the reads above uncovered about the
+  # SERVICE (not about this ticket) is merged into the project knowledge base, in
+  # place, so the next run - and any AI agent opening this repo - starts from it.
+  # Runs after `study` so a standard/deep track contributes its analysis too; on
+  # the quick track `study` is skipped and this still runs off `discover`.
+  - name: knowledge_sync
+    type: pipeline
+    uses: knowledge-update
+    needs: [discover, study]
+    with:
+      sources: "{{ stages.discover.outputs.context }}, {{ stages.study.outputs.study }}"

@@ -1,0 +1,74 @@
+{
+  "data": {
+    "r0": {
+      "pullRequests": {
+        "nodes": [
+          {
+            "number": 11,
+            "updatedAt": "2026-09-11T10:00:00Z",
+            "headRefOid": "sha11",
+            "isDraft": false,
+            "mergeable": "MERGEABLE",
+            "reviewDecision": null,
+            "commits": {
+              "nodes": [
+                {
+                  "commit": {
+                    "statusCheckRollup": {
+                      "state": "SUCCESS"
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "r1": {
+      "pullRequests": {
+        "nodes": []
+      }
+    },
+    "r2": {
+      "pullRequests": {
+        "nodes": []
+      }
+    },
+    "r3": {
+      "pullRequests": {
+        "nodes": []
+      }
+    },
+    "r4": {
+      "pullRequests": {
+        "nodes": []
+      }
+    },
+    "r5": {
+      "pullRequests": {
+        "nodes": []
+      }
+    },
+    "r6": {
+      "pullRequests": {
+        "nodes": []
+      }
+    },
+    "r7": {
+      "pullRequests": {
+        "nodes": []
+      }
+    },
+    "r8": {
+      "pullRequests": {
+        "nodes": []
+      }
+    },
+    "r9": {
+      "pullRequests": {
+        "nodes": []
+      }
+    }
+  }
+}

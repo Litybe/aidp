@@ -1,0 +1,17 @@
+version: 5
+id: native-step-outputs
+kind: pipeline
+description: Two stages; the last one writes result.json, run by the native executor with a scripted provider.
+inputs:
+  feature: { required: false, kind: string, default: native-step-outputs }
+stages:
+  - name: scan
+    description: Collect the context.
+    agent: analyzer
+    outputs: [scan.md]
+
+  - name: review
+    description: Review the context and write result.json.
+    agent: reviewer
+    needs: [scan]
+    outputs: [summary.md]

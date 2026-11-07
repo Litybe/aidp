@@ -1,0 +1,26 @@
+[package]
+name = "aidp-testkit"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+tempfile.workspace = true
+aidp-agents = { path = "../aidp-agents" }
+aidp-workspace-hack = { version = "0.1", path = "../aidp-workspace-hack" }
+
+[[bin]]
+name = "argv_recorder"
+path = "src/bin/argv_recorder.rs"
+test = false
+doctest = false
+
+[[bin]]
+name = "fake_claude"
+path = "src/bin/fake_claude.rs"
+test = false
+doctest = false

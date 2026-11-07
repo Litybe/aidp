@@ -1,0 +1,103 @@
+{
+  "data": {
+    "r0": {
+      "pullRequest": {
+        "number": 11,
+        "title": "First batch change",
+        "url": "https://github.com/acme/r00/pull/11",
+        "isDraft": false,
+        "createdAt": "2026-09-01T10:00:00Z",
+        "updatedAt": "2026-09-11T10:00:00Z",
+        "baseRefName": "master",
+        "headRefName": "feat/p11",
+        "headRefOid": "sha11",
+        "mergeable": "MERGEABLE",
+        "reviewDecision": null,
+        "author": {
+          "login": "bob"
+        },
+        "reviewRequests": {
+          "nodes": [
+            {
+              "requestedReviewer": {
+                "login": "alice"
+              }
+            }
+          ]
+        },
+        "reviews": {
+          "nodes": []
+        },
+        "commits": {
+          "totalCount": 2,
+          "nodes": [
+            {
+              "commit": {
+                "statusCheckRollup": {
+                  "state": "SUCCESS"
+                }
+              }
+            }
+          ]
+        },
+        "reviewThreads": {
+          "nodes": [
+            {
+              "isResolved": true
+            },
+            {
+              "isResolved": false
+            }
+          ]
+        },
+        "comments": {
+          "totalCount": 3
+        },
+        "labels": {
+          "nodes": [
+            {
+              "name": "bug"
+            }
+          ]
+        }
+      }
+    },
+    "r1": {
+      "pullRequest": {
+        "number": 12,
+        "title": "Second batch change",
+        "url": "https://github.com/acme/r10/pull/12",
+        "isDraft": false,
+        "createdAt": "2026-09-01T10:00:00Z",
+        "updatedAt": "2026-09-12T10:00:00Z",
+        "baseRefName": "master",
+        "headRefName": "feat/p12",
+        "headRefOid": "sha12",
+        "mergeable": "MERGEABLE",
+        "reviewDecision": null,
+        "author": {
+          "login": "carol"
+        },
+        "reviewRequests": {
+          "nodes": []
+        },
+        "reviews": {
+          "nodes": []
+        },
+        "commits": {
+          "totalCount": 1,
+          "nodes": []
+        },
+        "reviewThreads": {
+          "nodes": []
+        },
+        "comments": {
+          "totalCount": 0
+        },
+        "labels": {
+          "nodes": []
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,7 @@
+version: 5
+id: ok
+description: One analyzer stage, the smallest pipeline a run can reconcile.
+inputs: {}
+stages:
+  - name: a
+    agent: analyzer

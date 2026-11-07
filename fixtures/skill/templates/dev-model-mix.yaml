@@ -1,0 +1,181 @@
+version: 5
+id: dev-model-mix
+description: Model-mix variant of dev (plan on opus, pr on haiku, plan-driven implement on sonnet, no study stage). Distinct id so discovery is unambiguous — previously collided with dev.yaml. Demande dual-mode — jira_keys (tickets) OU prompt (texte libre, sans ticket).
+inputs:
+  # --- DEMAND. Exactly one of `jira_keys` / `prompt` carries the demand; the
+  # pipeline is identical from `plan` onwards either way, because both discovery
+  # modes below write the same `context.md`.
+  #
+  # Mode A (Jira): one or more Jira US of the SAME feature (unitary US slicing);
+  # one plan, one branch, one PR. A single US is a one-element list. An empty
+  # list (`[]`) means the run is NOT Jira-driven.
+  jira_keys: { required: false, kind: list, default: [], description: "Une ou plusieurs US Jira de la MEME feature, en tableau JSON (ex. [\"PIXEL-1\",\"PIXEL-2\"])" }
+  # Mode B (prompt): the request in plain text, with no ticket behind it -
+  # `discover_prompt` turns it into the same `context.md` that `discover` would
+  # have produced from tickets, so plan/implement/review/pr are unchanged. In
+  # this mode `feature` is REQUIRED: nothing else can name the branch, the vault
+  # run folder or the PR. The `""` default is falsy, so on a Jira run the prompt
+  # stage is dropped at compile time and costs nothing.
+  prompt: { required: false, kind: string, default: "", description: "Demande en texte libre, sans ticket (mode prompt); exclusif avec jira_keys" }
+  # Optional feature/epic label → the run's grouping folder and branch name.
+  # Optional in Jira mode (derived from the ticket list), REQUIRED in prompt mode.
+  feature: { required: false, kind: string, description: "Optional feature/epic label; feeds run::feature_key, which names the git branch and the vault run folder in place of deriving them from the ticket list." }
+  track: { required: true, kind: enum, values: [quick, standard, deep], default: standard, description: "Run depth: quick, standard, or deep - deep adds a human gate before planning; defaults to standard." }
+settings:
+  pr_draft: false
+  max_correction_iterations: 2
+  knowledge_graph:
+    enabled: true
+    refresh: never
+    code_only: true
+stages:
+  # First step: cut a fresh feature branch off an up-to-date master so every
+  # later stage writes code, commits and the PR land on feat/<feature>, never on
+  # master. `{{ feature }}` = epic label if given, else derived from the US list -
+  # which is why prompt mode, having no US list, requires `feature`.
+  # The discovery stage `needs` it → it runs alone, before anything else.
+  - name: prepare_branch
+    agent: executor
+    skills: [git-branch-setup]
+    inputs:
+      jira_keys: "{{ inputs.jira_keys }}"
+      branch: "feat/{{ feature }}"
+    outputs: [branch.json]
+    when: "true"
+
+  # --- Discovery, mode A (Jira). Unchanged except for its guard: `when:` is now a
+  # bare input reference, which `aidp workflow emit` resolves at compile time - a
+  # non-empty `jira_keys` is truthy, so a Jira run dispatches exactly the stage it
+  # always did; an empty list drops it and `discover_prompt` below takes over.
+  - name: discover
+    agent: analyzer
+    skills: [graphify-context, enforcing-decision-records, analyze-jira-ticket-aidp, analyze-confluence-docs-aidp]
+    needs: [prepare_branch]
+    inputs: { jira_keys: "{{ inputs.jira_keys }}" }
+    outputs: [context.md]
+    when: "{{ inputs.jira_keys }}"
+
+  # --- Discovery, mode B (prompt). The twin of `discover`, and mutually exclusive
+  # with it by the same kind of input-only guard, so exactly one of the two is ever
+  # emitted. This template owns its discovery (it does not compose `dev-discovery`),
+  # so this stage must do the WHOLE job its twin does - demand + Confluence + code
+  # graph - and write it to the SAME artefact name, `context.md`: that is what makes
+  # `plan` and everything after it byte-identical between the two modes.
+  - name: discover_prompt
+    agent: analyzer
+    skills: [graphify-context, enforcing-decision-records, analyze-confluence-docs-aidp, writing-clearly-and-concisely]
+    needs: [prepare_branch]
+    inputs:
+      request: "{{ inputs.prompt }}"
+      focus: "{{ feature }}"
+      task: >
+        The demand for this run is the free-text `request` above - there is no Jira
+        ticket, so seed every search from `request` and `focus` (and the
+        repository's own vocabulary) rather than from ticket links. Write
+        context.md: the SAME context note the Jira path produces, with these
+        sections:
+        (1) Demand - the request restated in one paragraph, plus the verbatim
+        request quoted so nothing is lost in your restatement;
+        (2) Scope - what is in, and an explicit OUT-OF-SCOPE list; a prompt is
+        looser than a ticket, so bounding it is the main value you add here;
+        (3) Acceptance criteria - testable, numbered, derived from the request,
+        each one checkable against code or a test;
+        (4) Assumptions - every gap you filled to make the request actionable, one
+        line each, flagged as an assumption and NOT as a fact;
+        (5) Open questions - what a human must answer, and what you decided to
+        assume in the meantime so the run is not blocked;
+        (6) Documentation - what the Confluence pages covering this area say about
+        it, if any;
+        (7) Affected area - the components and paths the request most likely
+        touches, found via the code graph, plus the ADRs that constrain them, so
+        the planner starts from a real map.
+        Invent no requirement the request does not support. If the request is too
+        vague to bound, say so in one line at the top of the note and still produce
+        the best-effort sections - the plan gate is where a human stops the run,
+        not this stage. Carry sections (3) to (5) through untouched into the note:
+        on a prompt-driven run they are the only contract the plan and the review
+        have.
+    outputs: [context.md]
+    when: "{{ inputs.prompt }}"
+
+  # `plan.json` (schema/plan.schema.json) is the machine contract: ONE OBJECT PER
+  # TASK - prompt, instructions, `needs` (real dependencies) and `files` (the
+  # task's write set). `aidp` compiles the implementation stage from it, so the
+  # run's parallelism is decided here, by how the work is sliced into file-disjoint
+  # tasks. The contract itself is injected into this stage's prompt by the emitter.
+  # `plan.md` stays the human narrative (design, risks, rollback).
+  #
+  # `needs` names BOTH discovery modes. With exactly one input set - the normal
+  # case - the other stage was dropped at compile time and its stage dir simply
+  # does not exist, which is expected, not an error; the surviving one wrote
+  # `context.md`, so the planner reads the same artefact under the same name
+  # whichever mode produced it. If BOTH inputs are set, neither stage is dropped:
+  # each is a research stage writing `context.md` in its OWN stage dir, so both
+  # simply run and `plan` - hence the rest of the run - consumes BOTH notes
+  # (Jira + prompt), nothing races and nothing is overwritten.
+  - name: plan
+    agent: planner
+    skills: [graphify-context, enforcing-decision-records, ticket-to-plan-aidp]
+    needs: [discover, discover_prompt]
+    with: { mode: feature }
+    outputs: [plan.json, plan.md]
+    gate: "{{ inputs.track == 'deep' }}"
+
+  # Plan-driven implementation: `aidp workflow emit` loads `plan.json`, validates
+  # the task graph (unknown deps, cycles), inserts an ordering wherever two tasks
+  # would write the same file, and emits one sub-agent per task - each starting as
+  # soon as its OWN dependencies are done (no wave barrier), up to `max` at a time
+  # in the shared working tree. A final merge sub-agent applies the shared-file
+  # work the tasks deferred to it, builds, runs the suite, and writes the
+  # consolidated changed-files.json. A single-task plan short-circuits the merge
+  # and costs exactly what a plain stage costs.
+  #
+  # TWO-PASS stage: the first `workflow emit` stops here (the workflow returns
+  # `awaiting_plan`); re-emitting once the planner has written the file compiles
+  # the tasks plus everything after them. The v7 skill drives that round-trip.
+  #
+  # `scope: repo_wide` because the plan's tasks cover production code AND tests.
+  - name: implement
+    agent: executor
+    skills: [graphify-context, csharp-dev-aidp, feature-testing-aidp, reqnroll-testing-aidp]
+    needs: [plan]
+    scope: { mode: repo_wide }
+    plan_tasks:
+      from: "{{ stages.plan.outputs.plan }}"
+      max: 4
+      merge_hint: >
+        Apply every shared-file change the tasks deferred to you (DI registrations
+        in AddXxxDependencies(), csproj/.sln entries), then build the solution and
+        run the FULL `dotnet test` suite once - including any test project a task
+        bootstrapped (add it to the .sln first). Fix cross-task breakage and write
+        the consolidated changed-files.json covering every task.
+    outputs: [changed-files.json]
+
+  - name: review
+    agent: reviewer
+    skills: [graphify-context, code-review-aidp, code-audit-rubric]
+    needs: [implement]
+    outputs: [findings.json, summary.md]
+
+  - name: correction_loop
+    type: loop
+    when: "{{ stages.review.outputs.findings.has_blocking_findings }}"
+    max_iterations: "{{ settings.max_correction_iterations }}"
+    body:
+      # delibere : une reprise de plan est un delta, pas une conception - opus serait surpaye
+      - { name: replan, agent: planner, model: sonnet, with: { mode: correction }, inputs: { findings: "{{ stages.review.outputs.findings }}" } }
+      - { name: refix, agent: executor, scope: { mode: repo_wide }, needs: [replan] }
+      - { name: rereview, agent: reviewer, skills: [graphify-context, code-review-aidp], needs: [refix], outputs: [findings.json, summary.md] }
+
+  # delibere : demo model-mix - ouverture de PR mecanique (formatage, push, notif), aucun raisonnement requis
+  - name: pr
+    policy:
+      - "Open the PR with `aidp gh pr-create --draft` only when the stage input pr_draft is true; otherwise open a regular PR."
+    agent: executor
+    model: haiku
+    skills: [git-push, writing-clearly-and-concisely, teams-pr-notification]
+    needs: [review]
+    inputs: { pr_draft: "{{ settings.pr_draft }}" }
+    scope: { mode: stage_dir_only }
+    outputs: [pr.json]
+    gate: true

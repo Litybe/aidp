@@ -1,0 +1,28 @@
+{
+  "data": {
+    "viewer": { "login": "alexis" },
+    "repository": { "pullRequest": { "reviewThreads": { "nodes": [
+      {
+        "id": "T_conv", "isResolved": false, "isOutdated": false, "path": "src/a.rs", "line": 10, "startLine": 8,
+        "comments": { "totalCount": 3, "nodes": [
+          { "id": "C1", "databaseId": 1, "author": { "login": "bob" }, "body": "rename this", "createdAt": "2026-01-01T00:00:00Z", "url": "https://x/1", "diffHunk": "@@ -8,3 +8,3 @@ fn a() {" },
+          { "id": "C2", "databaseId": 2, "author": { "login": "alexis" }, "body": "why?", "createdAt": "2026-01-02T00:00:00Z", "url": "https://x/2" },
+          { "id": "C3", "databaseId": 3, "author": { "login": "alexis" }, "body": "done", "createdAt": "2026-01-03T00:00:00Z", "url": "https://x/3" }
+        ] }
+      },
+      {
+        "id": "T_outdated", "isResolved": false, "isOutdated": true, "path": "src/b.rs", "line": null, "startLine": null,
+        "comments": { "totalCount": 1, "nodes": [
+          { "id": "C4", "databaseId": 4, "author": { "login": "bob" }, "body": "old", "createdAt": "2026-01-01T00:00:00Z", "url": "https://x/4" }
+        ] }
+      },
+      {
+        "id": "T_resolved", "isResolved": true, "isOutdated": false, "path": "src/c.rs", "line": 3, "startLine": null,
+        "comments": { "totalCount": 2, "nodes": [
+          { "id": "C5", "databaseId": 5, "author": { "login": "bob" }, "body": "nit", "createdAt": "2026-01-01T00:00:00Z", "url": "https://x/5" },
+          { "id": "C6", "databaseId": 6, "author": { "login": "alexis" }, "body": "fixed", "createdAt": "2026-01-02T00:00:00Z", "url": "https://x/6" }
+        ] }
+      }
+    ] } } }
+  }
+}

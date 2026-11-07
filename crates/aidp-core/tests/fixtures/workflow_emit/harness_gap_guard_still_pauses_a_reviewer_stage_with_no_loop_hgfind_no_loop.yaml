@@ -1,0 +1,10 @@
+version: 5
+id: hgfindnoloop
+stages:
+  - name: review
+    agent: reviewer
+    outputs: [findings.json, summary.md]
+    on_harness_gap: pause
+  - name: report
+    agent: executor
+    needs: [review]

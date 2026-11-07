@@ -1,0 +1,191 @@
+version: 5
+id: dev-flow
+description: >
+  Implement one feature end-to-end on any supported stack, from a Jira ticket
+  list or from a plain-text prompt. The `stack` input selects the test phase at
+  compile time; `track` = quick | standard | deep sets the depth.
+
+  DEMAND: Jira OR prompt. Pass `jira_keys` to drive the run from tickets, or
+  `prompt` to drive it from a plain-text request (then `feature` is required).
+  `dev-discovery` resolves both into the same requirements note, so everything
+  from `plan` onwards is identical between the modes.
+
+  The run is fully autonomous: open points are decided by the agent and recorded
+  as assumptions. The only gate is the pre-plan gate of
+  `track: deep`. The branch is assumed ready; `branch_ready: false` adds a
+  branch-setup stage. The final stage commits, pushes the current branch and
+  opens the pull request (draft, ready or none). With `publish: host` (a ticket
+  flow) it only commits and writes the PR body: the flow publishes the branch
+  and opens the pull request itself.
+inputs:
+  jira_keys: { required: false, kind: list, default: [] }
+  prompt: { required: false, kind: string, default: "" }
+  feature: { required: false, kind: string, description: "Optional feature/epic label; feeds run::feature_key, which names the git branch and the vault run folder in place of deriving them from the ticket list." }
+  stack: { required: true, kind: enum, values: [csharp, lambda-ts, angular, rust, ts-node, unknown], description: "Target stack; selects the test phase." }
+  track: { required: true, kind: enum, values: [quick, standard, deep], default: standard, description: "Run depth: quick, standard, or deep - deep adds a human gate before planning; defaults to standard." }
+  pr: { required: false, kind: enum, values: [draft, ready, none], default: draft, description: "Pull request mode: draft, ready, or none (no commit, push or PR)." }
+  branch_ready: { required: false, kind: bool, default: true, description: "True when the current worktree branch is already prepared; false runs branch setup first." }
+  publish: { required: false, kind: enum, values: [agent, host], default: agent, description: "Who publishes the branch: agent pushes and opens the PR; host (a ticket flow) publishes after the run, so the run only commits and writes the PR body." }
+settings:
+  max_correction_iterations: 2
+  knowledge_graph:
+    enabled: true
+    refresh: never
+    code_only: true
+stages:
+  - name: prepare_branch
+    agent: executor
+    model: haiku   # delibere : setup de branche mecanique, aucun raisonnement - haiku suffit
+    skills: [git-branch-setup]
+    inputs:
+      jira_keys: "{{ inputs.jira_keys }}"
+      branch: "feat/{{ feature }}"
+    outputs: [branch.json]
+    when: "{{ inputs.branch_ready == false }}"
+
+  - name: discover
+    type: pipeline
+    uses: dev-discovery
+    needs: [prepare_branch]
+    with:
+      jira_keys: "{{ inputs.jira_keys }}"
+      prompt: "{{ inputs.prompt }}"
+      track: "{{ inputs.track }}"
+    outputs:
+      - { name: context, from: discover.context }
+      - { name: study, from: study.study }
+
+  - name: plan
+    agent: planner
+    skills: [graphify-context, enforcing-decision-records, ticket-to-plan-aidp]
+    needs: [discover]
+    with: { mode: feature }
+    outputs: [plan.json, plan.md]
+    gate: "{{ inputs.track == 'deep' }}"
+
+  - name: implement
+    agent: executor
+    skills: [graphify-context]
+    needs: [plan]
+    scope: { mode: repo_wide }
+    plan_tasks:
+      from: "{{ stages.plan.outputs.plan }}"
+      max: 4
+      kinds: [code, docs, infra, chore]
+      merge_hint: >
+        Apply every shared-file change the tasks deferred to you, then build and
+        run the EXISTING test suite once as a regression check - the feature's
+        own tests are written by the tests phase right after you, so do not
+        write tests here. Fix cross-task breakage and write the consolidated
+        changed-files.json covering every task.
+    outputs: [changed-files.json]
+
+  - name: tests_csharp
+    type: pipeline
+    uses: dev-tests-csharp-split
+    needs: [implement]
+    when: "{{ inputs.stack == 'csharp' }}"
+    with:
+      changed_files: "{{ stages.implement.outputs.changed-files }}"
+      context: "{{ stages.discover.outputs.context }}"
+    outputs:
+      - { name: changed-files, from: tests_suite.changed-files }
+      - { name: test-report, from: tests_suite.test-report }
+
+  - name: tests_lambda_ts
+    type: pipeline
+    uses: dev-tests-jest
+    needs: [implement]
+    when: "{{ inputs.stack == 'lambda-ts' }}"
+    with:
+      changed_files: "{{ stages.implement.outputs.changed-files }}"
+      context: "{{ stages.discover.outputs.context }}"
+    outputs:
+      - { name: changed-files, from: tests_suite.changed-files }
+      - { name: test-report, from: tests_suite.test-report }
+
+  - name: tests_node
+    type: pipeline
+    uses: dev-tests-vitest
+    needs: [implement]
+    when: "{{ inputs.stack == 'ts-node' or inputs.stack == 'angular' }}"
+    with:
+      changed_files: "{{ stages.implement.outputs.changed-files }}"
+      context: "{{ stages.discover.outputs.context }}"
+    outputs:
+      - { name: changed-files, from: tests_suite.changed-files }
+      - { name: test-report, from: tests_suite.test-report }
+
+  - name: tests_rust
+    type: pipeline
+    uses: dev-tests-cargo
+    needs: [implement]
+    when: "{{ inputs.stack == 'rust' }}"
+    with:
+      changed_files: "{{ stages.implement.outputs.changed-files }}"
+      context: "{{ stages.discover.outputs.context }}"
+    outputs:
+      - { name: changed-files, from: tests_suite.changed-files }
+      - { name: test-report, from: tests_suite.test-report }
+
+  - name: review
+    type: pipeline
+    uses: review
+    needs: [tests_csharp, tests_lambda_ts, tests_node, tests_rust]
+    outputs:
+      - { name: findings, from: review.findings }
+      - { name: summary, from: review.summary }
+
+  - name: correction_loop
+    type: loop
+    when: "{{ stages.review.outputs.findings.has_blocking_findings }}"
+    max_iterations: "{{ settings.max_correction_iterations }}"
+    body:
+      # delibere : une reprise de plan est un delta, pas une conception - opus serait surpaye
+      - { name: replan, agent: planner, model: sonnet, with: { mode: correction }, inputs: { findings: "{{ stages.review.outputs.findings }}" } }
+      - { name: refix, agent: executor, model: haiku, scope: { mode: repo_wide }, needs: [replan] }
+      - { name: rereview, agent: reviewer, skills: [graphify-context, code-review-aidp], needs: [refix], outputs: [findings.json, summary.md] }
+
+  - name: push_pr
+    policy:
+      - "Never ask the user a question. Decide open points yourself and record them as assumptions."
+      - "Never create or switch branches: commit and push the current worktree branch only."
+    agent: executor
+    model: haiku   # delibere : commit, push et ouverture de PR, mecanique - haiku suffit
+    skills: [git-push, writing-clearly-and-concisely]
+    needs: [review]
+    inputs: { pr: "{{ inputs.pr }}" }
+    scope: { mode: stage_dir_only }
+    outputs: [pr.json]
+    when: "{{ inputs.pr != 'none' and inputs.publish != 'host' }}"
+    with:
+      instructions: >
+        Commit the working tree in Conventional Commits, then push the current
+        worktree branch (never create or switch branches). Write a PR body file
+        with the sections `## Context`, `## Change`, `## Tests`, then
+        `## Hypothèses` listing every entry of the run's `assumptions[]` (read
+        it from `aidp run summary`); omit the Hypothèses section entirely when
+        there are none. Open the PR with `aidp gh pr-create`, title
+        `<type>(<KEY>): <summary>`, passing the body file, and add `--draft`
+        when the input `pr` is `draft`. Write pr.json with the PR url.
+
+  - name: commit_pr
+    policy:
+      - "Never ask the user a question. Decide open points yourself and record them as assumptions."
+      - "Never create or switch branches, never run git push and never open a pull request: the host publishes the branch and opens the PR after the run."
+    agent: executor
+    model: haiku   # delibere : commit et corps de PR, mecanique - haiku suffit
+    skills: [writing-clearly-and-concisely]
+    needs: [review]
+    scope: { mode: stage_dir_only }
+    outputs: [pr-body.md]
+    when: "{{ inputs.pr != 'none' and inputs.publish == 'host' }}"
+    with:
+      instructions: >
+        Commit the working tree on the current worktree branch in Conventional
+        Commits, `<type>(<KEY>): <summary>`, with a body saying why. Do not push.
+        Write pr-body.md in your stage dir with the sections `## Context`,
+        `## Change`, `## Tests`, then `## Hypothèses` listing every entry of the
+        run's `assumptions[]` (read it from `aidp run summary`); omit the
+        Hypothèses section entirely when there are none. The host opens the pull
+        request with that body once it published the branch.

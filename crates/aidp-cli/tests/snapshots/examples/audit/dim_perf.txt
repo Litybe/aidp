@@ -1,0 +1,73 @@
+# Stage `dim_perf`
+
+**Agent:** `reviewer`
+
+**Pipeline:** `audit` (run `<RUN_ID>`)
+
+## Environment
+
+You are a sub-agent dispatched by the `ai-dev-pipeline-v7` workflow engine. Do your work, write any file artifacts into your stage directory, then return the reply envelope as your FINAL answer — the runtime validates it against a JSON schema, so there is no `reply.md` to write and no free-text parsing.
+
+Working environment variables for this stage:
+
+```
+AIDP_RUN=<RUN_ID>
+AIDP_STAGE=dim_perf
+AIDP_AGENT_SESSION=1
+```
+
+Do your work, write outputs into the stage directory, then emit the reply envelope.
+
+## Goal
+
+Execute the `dim_perf` stage of pipeline `audit`.
+
+## Inputs (paths or values)
+
+- `axis`: performance
+- `path`: x
+
+## Needs (upstream stage_dirs)
+
+- `explore`: `./.aidp/pipelines/_no-ticket/explore`
+
+## Skills (load each SKILL.md before acting)
+
+- `code-review-aidp` → (not found)
+- `code-audit-rubric` → (not found)
+
+**Mandatory first tool calls.** Before any other tool call — and in any case before any `Edit`, `Write`, `NotebookEdit` or state-changing `Bash` — call the `Skill` tool once per skill above, in this order:
+
+- Skill("code-review-aidp")
+- Skill("code-audit-rubric")
+
+If the `Skill` tool is not available, `Read` each SKILL.md path above in full instead (no `offset`/`limit`, no `head`/`sed -n` truncation). Then follow those skills for the whole stage.
+
+Your reply MUST carry `skills_loaded`: one `{"name", "applied_rule"}` entry per skill above, where `applied_rule` states one rule of that skill you actually applied in this stage. A reply missing a skill is sent back once, then fails the stage.
+
+## Outputs (write into `./.aidp/pipelines/_no-ticket/<RUN_ID>/dim_perf`)
+
+- `findings.json`
+
+## Reply envelope
+
+Your FINAL answer is the reply envelope (it is schema-validated by the runtime — return it directly, do NOT write `reply.md`). Fields:
+- `status`: one of `completed` | `blocked` | `needs_review` | `failed`.
+- `summary`: one short paragraph (no artifact bodies inlined).
+- `outputs`: map of declared output name → absolute file path (string values only).
+- `signals`: object of booleans/counters the orchestrator branches on. If you are a reviewer, you MUST set `signals.has_blocking_findings` (boolean). Optionally add `findings_count`, `confidence`, etc. `signals.escalations`: optional array of `{id, decision, reason}` for items that need a human without blocking the run.
+- `assumptions`: optional array of `{choice, reason, rejected_alternative?, question_id?, question?}` for each choice taken in place of a question.
+- `follow_ups`: optional array of strings. `ask_user_questions`: array of `{id, question, answer?, options?, recommended?}` (`options` an array of strings, `recommended` a string) — leave it EMPTY unless a real blocker stops you. Decide open points yourself and record the decision and its rationale in `follow_ups` or your artifact. An entry with a non-empty `answer` on a `completed` stage is only informational; one with no `answer` pauses the whole run for a human. `scope_violations`: array of blocked paths. `metrics`: optional `{tool_calls, duration_ms, tokens_used}`.
+
+
+## Controls you must self-report (`checks[]`)
+
+Your findings.json's `checks[]` MUST report on exactly these, by id — one entry per control below, `status` one of `pass|fail|skip`. A control you did not actually execute is `skip` with a non-null `harness_gap` — NEVER `pass`: `pass` means you ran it and it is green.
+
+- `C-diff-read` — Read the full diff for every file in scope (not just a summary of it).
+- `C-tests-exist` — Checked whether tests exist covering the changed behavior.
+- `C-tests-run` — Actually ran (or confirmed CI ran) the relevant tests — not merely read them.
+- `C-boundary-validation` — Checked input/boundary validation at the entry points this diff touches.
+- `C-severity-self-check` — Recomputed severity_counts from findings[] by hand and confirmed it matches exactly before writing the file.
+
+Before you return `status: "completed"`, use the Read tool to re-open the `findings.json` you just wrote, at the exact path you are about to put in `outputs.findings` — yes, even with 0 findings: a clean axis still writes `{"findings": [], "checks": [...]}` and still re-reads it back. If the Read fails, or its content doesn't match what you're about to report, you have not produced a review — return `status: "failed"` naming exactly what the Read reported. Never report `outputs.findings` for a path you have not just successfully re-read. A harness gap (a control you could not run) is never a reason to skip the write either: `has_harness_gap: true` together with an empty `outputs` is invalid, exactly like a fabricated path — express "I could not run this control" as a `checks[].status: "skip"` entry, with `harness_gap` naming why, inside the `findings.json` you write and re-read exactly as above.

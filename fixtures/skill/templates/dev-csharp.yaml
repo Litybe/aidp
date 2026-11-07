@@ -1,0 +1,202 @@
+version: 5
+id: dev-csharp
+description: >
+  Implement one feature end-to-end in a Pixelhood C#/.NET service, from a Jira
+  ticket list or from a plain-text prompt. Tracks via
+  track = quick | standard | deep.
+
+  DEMAND: Jira OR prompt. Pass `jira_keys` to drive the run from tickets, or
+  `prompt` to drive it from a plain-text request with no ticket at all (then
+  `feature` is required - it names the branch, the vault folder and the PR).
+  `dev-discovery` resolves the two into the same requirements note at compile
+  time, so everything from `plan` onwards is byte-identical between the modes.
+  Plan-driven: `plan` writes an EXECUTABLE plan (`plan.json`, one task per unit
+  of work with its own prompt and write set) and `aidp` compiles the `implement`
+  stage from it. `implement` claims the plan's PRODUCTION kinds only
+  (`code, docs, infra, chore`); test writing is a phase of its own, `tests`,
+  composed from the reusable `dev-tests-csharp-split` sub-pipeline right after
+  it - xUnit unit tests and Reqnroll functional tests in two dedicated stages
+  running in parallel, then one merge stage that registers what they
+  bootstrapped, runs the whole `dotnet test` suite once and consolidates
+  changed-files.json. A BDD scenario needs the complete feature wired and
+  building, which a per-task test slice cannot give it - that is why the phase
+  sits after `implement` rather than inside the plan.
+  The context-gathering phase (demand ‖
+  Confluence ‖ code-graph → synthesis → study) and the review phase
+  (correctness ‖ security ‖ perf ‖ maintainability → synthesis) are each
+  composed from the reusable `dev-discovery` / `review` sub-pipelines
+  (`type: pipeline`, `uses:`) instead of being declared inline here — reuse
+  them as-is in any other dev-* template. Composition preserves the same
+  parallel fan-out (each sub-pipeline's independent read-only stages have no
+  `needs` between them, so the v7 engine still groups them into one
+  parallel() block) and keeps the canonical stage names `discover` / `review`
+  so downstream references (`plan`, `correction_loop`, `pr`) are unchanged.
+inputs:
+  # --- DEMAND. Exactly one of `jira_keys` / `prompt` must be non-empty; the
+  # pipeline is identical downstream of `discover` either way.
+  #
+  # Mode A (Jira): one or more Jira US of the SAME feature (unitary US slicing).
+  # A single US is a one-element list. Discovery reads them all; one plan, one
+  # branch, one PR.
+  jira_keys: { required: false, kind: list, default: [] }
+  # Mode B (prompt): the request in plain text, with no ticket behind it -
+  # `discover_prompt` turns it into the same requirements note `discover_jira`
+  # would have produced, so `plan` / `implement` / `review` / `pr` are unchanged.
+  # In this mode `feature` is REQUIRED: nothing else can name the branch, the
+  # vault folder or the PR.
+  prompt: { required: false, kind: string, default: "" }
+  # Feature/epic label → the run's grouping folder and branch name. Optional in
+  # Jira mode (derived from the ticket list), required in prompt mode.
+  feature: { required: false, kind: string, description: "Optional feature/epic label; feeds run::feature_key, which names the git branch and the vault run folder in place of deriving them from the ticket list." }
+  track: { required: true, kind: enum, values: [quick, standard, deep], default: standard, description: "Run depth: quick, standard, or deep - deep adds a human gate before planning; defaults to standard." }
+settings:
+  pr_draft: false
+  max_correction_iterations: 2
+  knowledge_graph:
+    enabled: true
+    refresh: never
+    code_only: true
+stages:
+  # First step: cut a fresh feature branch off an up-to-date master so every
+  # later stage writes code, commits and the PR land on feat/<feature>, never on
+  # master. `{{ feature }}` = the `feature` input if given, else derived from the
+  # US list - which is why prompt mode, having no US list, requires `feature`.
+  # The context reads `needs` it → it runs alone, before the fan-out.
+  - name: prepare_branch
+    agent: executor
+    model: haiku   # delibere : setup de branche mecanique, aucun raisonnement - haiku suffit
+    skills: [git-branch-setup]
+    inputs:
+      jira_keys: "{{ inputs.jira_keys }}"
+      branch: "feat/{{ feature }}"
+    outputs: [branch.json]
+    when: "true"
+
+  # Context-gathering + study, composed from the reusable `dev-discovery`
+  # sub-pipeline: (demand ‖ confluence ‖ code-graph) → discover → study, where
+  # "demand" is `discover_jira` or `discover_prompt` depending on which input is
+  # non-empty (the other is dropped at compile time). `needs: [prepare_branch]`
+  # cascades onto every root stage (they have no `needs` inside
+  # dev-discovery.yaml), reproducing the exact same parallel fan-out as before. Output aliases keep the canonical
+  # names `context`/`study` addressable as `stages.discover.outputs.*`.
+  - name: discover
+    type: pipeline
+    uses: dev-discovery
+    needs: [prepare_branch]
+    with:
+      jira_keys: "{{ inputs.jira_keys }}"
+      prompt: "{{ inputs.prompt }}"
+      track: "{{ inputs.track }}"
+    outputs:
+      - { name: context, from: discover.context }
+      - { name: study, from: study.study }
+
+  # `plan.json` (schema/plan.schema.json) is the machine contract: ONE OBJECT PER
+  # TASK - prompt, instructions, `needs` (real dependencies) and `files` (the
+  # task's write set). `aidp` compiles the implementation stage from it, so the
+  # run's parallelism is decided here, by how the work is sliced into file-disjoint
+  # tasks. The contract itself is injected into this stage's prompt by the emitter.
+  # `plan.md` stays the human narrative (design, risks, rollback).
+  - name: plan
+    agent: planner
+    skills: [graphify-context, enforcing-decision-records, ticket-to-plan-aidp]
+    needs: [discover]
+    with: { mode: feature }
+    outputs: [plan.json, plan.md]
+    gate: "{{ inputs.track == 'deep' }}"
+
+  # Plan-driven implementation: `aidp workflow emit` loads `plan.json`, validates
+  # the task graph (unknown deps, cycles), inserts an ordering wherever two tasks
+  # would write the same file, and emits one sub-agent per task - each starting as
+  # soon as its OWN dependencies are done (no wave barrier), up to `max` at a time
+  # in the shared working tree. A final merge sub-agent applies the shared-file
+  # work the tasks deferred to it, builds, runs the suite, and writes the
+  # consolidated changed-files.json. A single-task plan short-circuits the merge
+  # and costs exactly what a plain stage costs.
+  #
+  # TWO-PASS stage: the first `workflow emit` stops here (the workflow returns
+  # `awaiting_plan`); re-emitting once the planner has written the file compiles
+  # the tasks plus everything after them. The v7 skill drives that round-trip.
+  #
+  # `kinds:` claims the plan's PRODUCTION work only, which is also what the
+  # planner is told to plan: the plan contract injected into `plan`'s prompt
+  # lists exactly the kinds a `plan_tasks:` stage of this pipeline claims, so
+  # naming them here is what stops the planner from emitting test tasks the
+  # `tests` phase below would then write a second time. `scope: repo_wide`
+  # because a `docs`/`infra` task legitimately writes outside the code tree.
+  - name: implement
+    agent: executor
+    skills: [graphify-context, csharp-dev-aidp]
+    needs: [plan]
+    scope: { mode: repo_wide }
+    plan_tasks:
+      from: "{{ stages.plan.outputs.plan }}"
+      max: 4
+      kinds: [code, docs, infra, chore]
+      merge_hint: >
+        Apply every shared-file change the tasks deferred to you (DI registrations
+        in AddXxxDependencies(), csproj/.sln entries), then build the solution and
+        run the EXISTING `dotnet test` suite once as a regression check - the
+        feature's own tests are written by the `tests` phase right after you, so
+        do not write tests here. Fix cross-task breakage and write the
+        consolidated changed-files.json covering every task.
+    outputs: [changed-files.json]
+
+  # Test phase, composed from the reusable `dev-tests-csharp-split` sub-pipeline:
+  # (tests_unit ‖ tests_reqnroll) → tests_suite. `needs: [implement]` cascades
+  # onto its two writer stages (they have no `needs` inside the sub-pipeline), so
+  # they are adjacent and mutually independent and the emitter groups them into
+  # ONE `parallel()` block - the unit suite and the Reqnroll suite are written at
+  # the same time in the same working tree, disjoint by project. `tests_suite`
+  # then owns the .sln entries, the single full-solution `dotnet test`, and the
+  # consolidated changed-files.json. `needs: [tests]` downstream resolves to that
+  # terminal stage, so `review` reads one write set, not three.
+  - name: tests
+    type: pipeline
+    uses: dev-tests-csharp-split
+    needs: [implement]
+    with:
+      changed_files: "{{ stages.implement.outputs.changed-files }}"
+      context: "{{ stages.discover.outputs.context }}"
+    outputs:
+      - { name: changed-files, from: tests_suite.changed-files }
+      - { name: test-report, from: tests_suite.test-report }
+
+  # Review, composed from the reusable `review` sub-pipeline (4 rubric
+  # dimensions in parallel → synthesis). `needs: [tests]` cascades onto
+  # its 4 root dimension stages (which have no `needs` inside review.yaml),
+  # reproducing the exact same parallel fan-out as before, and resolves to the
+  # test phase's terminal `tests_suite` stage - so each dimension's prompt
+  # carries its stage dir and the dimensions read test-report.md, including the
+  # production defects the test phase refused to paper over. Output aliases keep
+  # the canonical name `findings`/`summary` addressable as
+  # `stages.review.outputs.*`, so correction_loop and pr below are unchanged.
+  - name: review
+    type: pipeline
+    uses: review
+    needs: [tests]
+    outputs:
+      - { name: findings, from: review.findings }
+      - { name: summary, from: review.summary }
+
+  - name: correction_loop
+    type: loop
+    when: "{{ stages.review.outputs.findings.has_blocking_findings }}"
+    max_iterations: "{{ settings.max_correction_iterations }}"
+    body:
+      # delibere : une reprise de plan est un delta, pas une conception - opus serait surpaye
+      - { name: replan, agent: planner, model: sonnet, with: { mode: correction }, inputs: { findings: "{{ stages.review.outputs.findings }}" } }
+      - { name: refix, agent: executor, model: haiku, scope: { mode: repo_wide }, needs: [replan] }
+      - { name: rereview, agent: reviewer, skills: [graphify-context, code-review-aidp], needs: [refix], outputs: [findings.json, summary.md] }
+
+  - name: pr
+    policy:
+      - "Open the PR with `aidp gh pr-create --draft` only when the stage input pr_draft is true; otherwise open a regular PR."
+    agent: executor
+    model: haiku   # delibere : ouverture de PR, mecanique - haiku suffit
+    skills: [git-push, writing-clearly-and-concisely]
+    needs: [review]
+    inputs: { pr_draft: "{{ settings.pr_draft }}" }
+    scope: { mode: stage_dir_only }
+    outputs: [pr.json]
+    gate: true

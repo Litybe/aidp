@@ -1,0 +1,20 @@
+id: nested-human-deploy
+version: 1
+blocks:
+  release:
+    - id: deploy_approval
+      kind: human
+      choices: [approve, reject]
+      on_error: warn
+    - id: deploy
+      kind: action
+      use: deploy.dev
+steps:
+  - id: test_dev
+    kind: loop
+    max: 5
+    until: steps.release.outputs.clean == true
+    body:
+      - id: release
+        kind: action
+        use: release

@@ -1,0 +1,50 @@
+[package]
+name = "aidp-cli"
+autotests = false
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "aidp"
+path = "src/main.rs"
+
+[dependencies]
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+tracing-appender = { workspace = true }
+aidp-core = { path = "../aidp-core" }
+aidp-integrations = { path = "../aidp-integrations" }
+aidp-agents = { path = "../aidp-agents" }
+aidp-gateway = { path = "../aidp-gateway" }
+aidp-tickets = { path = "../aidp-tickets" }
+aidp-flows = { path = "../aidp-flows" }
+aidp-memory = { path = "../aidp-memory" }
+clap.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+serde_yaml.workspace = true
+anyhow.workspace = true
+walkdir.workspace = true
+glob.workspace = true
+chrono.workspace = true
+aidp-workspace-hack = { version = "0.1", path = "../aidp-workspace-hack" }
+
+[dev-dependencies]
+aidp-testkit.workspace = true
+tempfile.workspace = true
+assert_cmd.workspace = true
+predicates.workspace = true
+insta.workspace = true
+ureq.workspace = true
+
+[[test]]
+name = "it_gh_pr_status"
+path = "src/tests/units/it_gh_pr_status.rs"
+
+[[test]]
+name = "integration"
+path = "tests/integration.rs"

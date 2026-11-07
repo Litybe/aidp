@@ -1,0 +1,9 @@
+version: 5
+id: fo-guard
+stages:
+  - name: a
+    agent: analyzer
+    outputs: [a.md]
+  - name: b
+    agent: executor
+    fan_out: { items: ["x", "y"] }

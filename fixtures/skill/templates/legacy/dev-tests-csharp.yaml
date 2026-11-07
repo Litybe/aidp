@@ -1,0 +1,48 @@
+version: 5
+id: dev-tests-csharp
+description: >
+  Reusable test-writing phase for Pixelhood C#/.NET dev pipelines: writes unit
+  tests (xUnit) AND integration/functional tests (Reqnroll BDD — Features/*.feature
+  + StepDefinitions) for whatever the composing pipeline's upstream `code` stage
+  just produced. Extracted from dev-csharp/test-csharp so every C#-capable dev-*
+  template can compose it via `type: pipeline` (replacing its inline `tests`
+  stage) instead of re-declaring the same fan-out — exactly like `dev-discovery`
+  and `review` are composed. Single deliverable: the consolidated
+  changed-files.json. If the repo has no Reqnroll suite yet, the integration
+  shard BOOTSTRAPS one from scratch (packages, reqnroll.json, Support/ harness)
+  rather than skipping it. Reqnroll is .NET-only, so this sub-pipeline is C#-
+  specific by design; TypeScript/stack-agnostic dev pipelines keep their own
+  test phase.
+settings:
+  # Match the KG config used by the other composable sub-pipelines so a graph is
+  # used when present but never built on a run. Non-blocking if graphify absent.
+  knowledge_graph:
+    enabled: true
+    refresh: never
+    code_only: true
+stages:
+  # Single stage, fanned out by test category. It is the sub-pipeline's only
+  # (and terminal) stage and has no `needs` → it is the composition ENTRY stage,
+  # so the composite parent's `needs` (e.g. [code]) cascades onto it at
+  # composition time. The two shards target separate projects/directories (the
+  # unit test project vs the Reqnroll `cheat.<PROJECT>.functional.tests`
+  # project, e.g. `cheat.alerts.functional.tests`) so the
+  # parallel writers are naturally file-disjoint; the merge shard runs the FULL
+  # suite once and writes the consolidated changed-files.json.
+  - name: tests
+    agent: executor
+    model: sonnet
+    skills: [graphify-context, feature-testing-aidp, reqnroll-testing-aidp, csharp-dev-aidp]
+    scope: { mode: tests }
+    fan_out:
+      items:
+        - "unit tests (xUnit, per use-case/handler — Fakes/ test doubles, AAA, Moq+Shouldly)"
+        - "integration tests (Reqnroll BDD — Features/*.feature + StepDefinitions). ALWAYS place these Reqnroll tests in the solution's functional-test project named `cheat.<PROJECT>.functional.tests`, where `<PROJECT>` is the service/solution name (e.g. for the `cheat.alerts` solution the project is `cheat.alerts.functional.tests`) — reuse it if it exists. If the repo has no Reqnroll suite yet, BOOTSTRAP it first per reqnroll-testing-aidp: create that `cheat.<PROJECT>.functional.tests` project, add the Reqnroll/Reqnroll.xUnit/Testcontainers.MongoDb/WireMock.Net packages, reqnroll.json, and the Support/ harness (Hooks/WebAppFactory/WebAppFixture/WireMockSetup) — do not skip this shard"
+      merge_hint: >
+        Run the FULL test suite once (`dotnet test`, every test project
+        including the `cheat.<PROJECT>.functional.tests` Reqnroll project — e.g.
+        `cheat.alerts.functional.tests`). If the integration shard bootstrapped
+        a new `cheat.<PROJECT>.functional.tests` project, add it to the .sln and
+        confirm `dotnet build`/`dotnet test` discover it. Fix failures, and
+        write the consolidated changed-files.json covering both shards.
+    outputs: [changed-files.json]

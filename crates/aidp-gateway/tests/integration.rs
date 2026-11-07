@@ -1,0 +1,33 @@
+//! Integration tests, linked into one binary: one test binary per file cost
+//! a full link of the crate's dependency graph each.
+mod access_guard;
+mod clock_port;
+mod common_scripted;
+mod concurrency;
+mod crypto_template_primitives;
+mod dispatcher_pause;
+mod flow_shutdown;
+mod game_code_flow;
+mod http_contract;
+mod http_hardening;
+mod mcp_configurations;
+mod mcp_providers;
+mod mcp_resume;
+mod memory_http_routes;
+mod native_launch_paths;
+mod native_plan_tasks;
+mod native_runs;
+mod pr_fix_route;
+mod pr_workspace_holder_native;
+mod run_files_http;
+mod scope_guard_task_writes;
+mod session_aidp_bin;
+mod session_process_runner;
+mod session_start_validation;
+mod settings_http;
+mod static_ui;
+mod ticket_start_route;
+mod token_costs;
+mod unity_http_routes;
+mod vault_disabled;
+mod worktrees_ensure_remove;

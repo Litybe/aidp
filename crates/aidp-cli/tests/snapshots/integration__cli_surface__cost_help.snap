@@ -1,0 +1,41 @@
+---
+source: crates/aidp-cli/tests/cli_surface.rs
+expression: normalized
+---
+Cost measurement: per-run breakdown, JSONL ledger, counterfactual and anomaly detection. Never changes a `model:` or makes a routing decision
+
+Usage: <BIN> cost [OPTIONS] <COMMAND>
+
+Commands:
+  show            Cost of one run by stage and model plus the total, always paired with its provenance (`jsonl` | `budget` | `unavailable`), never a silent 0
+  ledger          Append one numeric JSONL line per sub-agent to the durable routing ledger (default `<vault>/Knowledge/<repo>/_routing/decisions.jsonl`); write failures are swallowed
+  counterfactual  Replay this run's observed token volumes at an alternate tier's prices. Cost only: says nothing about the alternate model's quality
+  ticket          Token cost of one ticket from the daemon (flows, steps, stages, models, window share); `--format footer` prints the one-line report footer instead
+  anomaly         Flag cost outliers via the Iglewicz-Hoaglin modified z-score (median + MAD). Exits 6 (negative verdict) if an outlier is found
+  help            Print this message or the help of the given subcommand(s)
+
+Options:
+      --workspace-root <PATH>
+          Workspace to act on instead of the current directory
+
+      --vault <PATH>
+          Obsidian vault to use instead of `AIDP_VAULT`, `~/.aidp/config.json` or auto-detection
+
+      --no-vault
+          Ignore any vault and keep artefacts in the repo (`.aidp/pipelines/`)
+
+      --format <FORMAT>
+          Output format. Each command keeps its own default when omitted
+
+          Possible values:
+          - json-compact: One compact JSON document on a single line
+          - json-pretty:  One indented JSON document
+          - ndjson:       One compact JSON value per line
+          - text:         Human-readable text
+          - footer:       The one-line cost footer of a report, for `<BIN> cost ticket`; text elsewhere
+
+  -v, --verbose...
+          More diagnostics on stderr; repeat for more (`-vv`)
+
+  -h, --help
+          Print help (see a summary with '-h')

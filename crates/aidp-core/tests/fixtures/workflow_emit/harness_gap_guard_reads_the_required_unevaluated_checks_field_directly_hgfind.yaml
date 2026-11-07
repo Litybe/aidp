@@ -1,0 +1,7 @@
+version: 5
+id: hgfind
+stages:
+  - name: review
+    agent: reviewer
+    outputs: [findings.json]
+    on_harness_gap: pause

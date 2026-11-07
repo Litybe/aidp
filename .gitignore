@@ -1,0 +1,13 @@
+target/
+.cargo/*
+!.cargo/config.toml
+graphify-out/
+!crates/aidp-memory/tests/fixtures/mini/graphify-out/
+.aidp/
+*.log
+Pipelines/
+
+*.snap.new
+dotnet/**/bin/
+dotnet/**/obj/
+dotnet/artifacts/

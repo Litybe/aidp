@@ -1,0 +1,16 @@
+version: 5
+id: poolcontinue
+settings: { on_item_failure: continue }
+stages:
+  - name: code
+    agent: executor
+    scope: { mode: production }
+    outputs: [changed-files.json]
+  - name: tests
+    agent: executor
+    needs: [code]
+    scope: { mode: tests }
+    fan_out:
+      items: ["unit tests", "functional tests"]
+      max: 4
+    outputs: [changed-files.json]

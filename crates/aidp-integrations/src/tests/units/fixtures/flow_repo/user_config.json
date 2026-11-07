@@ -1,0 +1,6 @@
+{
+  "vault": "C:/vault",
+  "flow": {
+    "caps": { "worktrees": 2 }
+  }
+}

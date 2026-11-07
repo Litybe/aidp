@@ -1,0 +1,8 @@
+version: 5
+id: noout
+stages:
+  - { name: plan, agent: planner, outputs: [plan.md] }
+  - name: code
+    agent: executor
+    needs: [plan]
+    plan_tasks: { from: "{{ stages.plan.outputs.plan_json }}" }

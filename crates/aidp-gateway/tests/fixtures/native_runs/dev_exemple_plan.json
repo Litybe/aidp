@@ -1,0 +1,24 @@
+{
+  "schema": "aidp-plan.v1",
+  "summary": "Two small tasks: write a source file, then its test.",
+  "tasks": [
+    {
+      "id": "T1",
+      "title": "Write the greeting source file",
+      "kind": "code",
+      "prompt": "Create src/greeting.txt containing a greeting.",
+      "instructions": ["Create the file"],
+      "needs": [],
+      "files": ["src/greeting.txt"]
+    },
+    {
+      "id": "T2",
+      "title": "Write the greeting check",
+      "kind": "tests",
+      "prompt": "Create tests/greeting_check.txt describing the expected greeting.",
+      "instructions": ["Create the file"],
+      "needs": ["T1"],
+      "files": ["tests/greeting_check.txt"]
+    }
+  ]
+}

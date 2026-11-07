@@ -1,0 +1,36 @@
+{
+  "schema": "aidp-plan.v1",
+  "summary": "Golden fixture plan with one production task and one test task.",
+  "jira_keys": ["GOLDEN-1"],
+  "shared_files": ["src/Startup.cs"],
+  "risks": [],
+  "open_questions": [],
+  "tasks": [
+    {
+      "id": "T1",
+      "title": "Implement the feature",
+      "kind": "code",
+      "prompt": "Implement the golden feature.",
+      "instructions": ["Add the handler."],
+      "needs": [],
+      "files": ["src/Feature.cs"],
+      "reads": [],
+      "verification": "build passes",
+      "acceptance": ["AC1"],
+      "jira_keys": ["GOLDEN-1"]
+    },
+    {
+      "id": "T2",
+      "title": "Test the feature",
+      "kind": "tests",
+      "prompt": "Cover the golden feature with tests.",
+      "instructions": ["Add unit tests."],
+      "needs": ["T1"],
+      "files": ["tests/FeatureTests.cs"],
+      "reads": ["src/Feature.cs"],
+      "verification": "tests pass",
+      "acceptance": ["AC1"],
+      "jira_keys": ["GOLDEN-1"]
+    }
+  ]
+}

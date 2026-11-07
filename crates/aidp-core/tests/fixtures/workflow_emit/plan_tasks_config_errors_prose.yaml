@@ -1,0 +1,8 @@
+version: 5
+id: proseplan
+stages:
+  - { name: plan, agent: planner, outputs: [plan.md, plan.json] }
+  - name: code
+    agent: executor
+    needs: [plan]
+    plan_tasks: { from: "{{ stages.plan.outputs.plan }}" }

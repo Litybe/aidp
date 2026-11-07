@@ -1,0 +1,20 @@
+{
+  "error": null,
+  "warnings": [
+    "skill dropped, no knowledge graph for this run: graphify-context removed from stage knowledge__knowledge_read",
+    "skill dropped, no knowledge graph for this run: graphify-context removed from stage scan_structure",
+    "skill dropped, no knowledge graph for this run: graphify-context removed from stage scan_events",
+    "skill dropped, no knowledge graph for this run: graphify-context removed from stage scan_data",
+    "skill dropped, no knowledge graph for this run: graphify-context removed from stage scan_domain",
+    "skill dropped, no knowledge graph for this run: graphify-context removed from stage scan_ops",
+    "skill dropped, no knowledge graph for this run: graphify-context removed from stage scan_features",
+    "skill dropped, no knowledge graph for this run: graphify-context removed from stage write_features",
+    "skill dropped, no knowledge graph for this run: graphify-context removed from stage verify"
+  ],
+  "gates": [
+    "write_knowledge"
+  ],
+  "awaiting_plan": null,
+  "awaiting_composite": null,
+  "plan_schedules": []
+}

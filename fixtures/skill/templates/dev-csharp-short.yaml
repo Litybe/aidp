@@ -1,0 +1,128 @@
+version: 5
+id: dev-csharp-short
+description: >
+  Pipeline C#/.NET minimale pour démo/test du moteur v7 : deux étapes seulement,
+  Plan (avec gate humain) → Code. Le planner lit le ticket Jira + le graphe de code
+  et produit un plan ; après validation humaine du plan, l'executor implémente en C#.
+  Aucun study, aucune boucle de correction, aucune review — volontairement courte.
+
+  DEMANDE : Jira OU prompt. Passer `jira_keys` pour piloter le run depuis des
+  tickets, ou `prompt` pour le piloter depuis une demande en texte libre, sans
+  aucun ticket (dans ce mode `feature` est requis par convention — le moteur ne
+  l'impose pas — car rien d'autre ne nomme la branche ni le dossier de run). En
+  mode prompt, l'étape `discover_prompt` — la même que celle du sous-pipeline
+  réutilisable `dev-discovery` — transforme la demande en la note d'exigences
+  qu'un ticket aurait fournie, et `plan` la lit à la place du ticket. `plan.md`
+  puis `code` sont inchangés dans les deux modes.
+inputs:
+  # --- DEMANDE. Exactement UN des deux (`jira_keys` / `prompt`) doit être non
+  # vide ; à partir de `plan` le run est identique dans les deux modes.
+  #
+  # Mode A (Jira) : une ou plusieurs US Jira de la MÊME feature (découpage
+  # unitaire) ; une seule US = liste à un élément. Liste vide => run non piloté
+  # par Jira (c'est ce qui rend « exactement un des deux » exprimable).
+  jira_keys: { required: false, kind: list, default: [], description: "Une ou plusieurs US Jira de la MEME feature, en tableau JSON (ex. [\"PIXEL-1\",\"PIXEL-2\"])" }
+  # Mode B (prompt) : la demande en texte libre, sans aucun ticket derrière.
+  #
+  # Le défaut `""` est la convention des templates de PREMIER NIVEAU (cf.
+  # dev-csharp.yaml) : ici le garde `when: "{{ inputs.prompt }}"` est évalué sur
+  # la valeur du run (chaîne vide => falsy => étape supprimée à la compilation),
+  # il n'est pas substitué textuellement. Le sentinelle `default: false` de
+  # dev-discovery.yaml ne sert qu'aux FRAGMENTS composés via `uses:`, où le défaut
+  # est bien injecté tel quel dans le texte du garde.
+  prompt: { required: false, kind: string, default: "", description: "Demande en texte libre, sans ticket Jira ; alternative a jira_keys (exactement un des deux). Attend feature, par convention non verifiee par le moteur." }
+  # Label feature/epic optionnel → dossier de regroupement du run (et branche).
+  # Optionnel en mode Jira (dérivé de la liste de tickets), requis en mode prompt :
+  # sans ticket, rien d'autre ne peut nommer la branche ni le dossier. C'est une
+  # CONVENTION, pas une contrainte : l'entrée reste `required: false` et rien dans
+  # le moteur ne vérifie « prompt implique feature » — un run en mode prompt sans
+  # `feature` n'est pas refusé, il retombe sur le dossier partagé `_no-ticket`.
+  # La passer en `required: true` casserait le mode Jira, qui l'omet légitimement.
+  feature: { required: false, kind: string, description: "Label feature/epic optionnel ; alimente run::feature_key, qui nomme la branche git et le dossier de run du vault a la place du derivage depuis la liste de tickets." }
+settings:
+  # Graphe de connaissance activé (code uniquement) : le planner interroge le graphe
+  # au lieu de faire des Grep/Read massifs. Non bloquant si graphify est absent.
+  knowledge_graph:
+    enabled: true
+    refresh: never
+    code_only: true
+stages:
+  # 0) DEMANDE, mode prompt UNIQUEMENT. Ce template n'a pas de `discover_jira` :
+  #    en mode Jira c'est `plan` lui-même qui lit les tickets (c'est toute
+  #    l'économie de la version courte). Cette étape est donc l'autre moitié de la
+  #    paire : elle ne tourne QUE quand `prompt` est non vide, et produit la note
+  #    d'exigences que `plan` lirait sinon dans le ticket. Le garde est une
+  #    référence d'entrée NUE, donc statiquement décidable : en mode Jira
+  #    (`prompt` vide => falsy) `aidp workflow emit` supprime l'étape à la
+  #    compilation, elle n'est jamais dispatchée et ne coûte rien — le chemin Jira
+  #    reste exactement le run à deux étapes d'avant.
+  #    Étape et consigne reprises telles quelles de `dev-discovery.yaml` pour que
+  #    les deux templates produisent la même note à partir d'une même demande.
+  - name: discover_prompt
+    agent: analyzer
+    skills: [graphify-context, writing-clearly-and-concisely]
+    inputs:
+      request: "{{ inputs.prompt }}"
+      task: >
+        The demand for this run is the free-text `request` above - there is no
+        Jira ticket. Write prompt_context.md as the requirements note a planner
+        would otherwise get from a ticket, with these sections:
+        (1) Demand - the request restated in one paragraph, plus the verbatim
+        request quoted so nothing is lost in your restatement;
+        (2) Scope - what is in, and an explicit OUT-OF-SCOPE list; a prompt is
+        looser than a ticket, so bounding it is the main value you add here;
+        (3) Acceptance criteria - testable, numbered, derived from the request,
+        each one checkable against code or a test;
+        (4) Assumptions - every gap you filled to make the request actionable,
+        one line each, flagged as an assumption and NOT as a fact;
+        (5) Open questions - what a human must answer, and what you decided to
+        assume in the meantime so the run is not blocked;
+        (6) Affected area - the components and paths the request most likely
+        touches, found via the code graph, so the planner starts from that map.
+        Invent no requirement the request does not support. If the request is too
+        vague to bound, say so in one line at the top of the note and still
+        produce the best-effort sections - the plan gate is where a human stops
+        the run, not this stage.
+    outputs: [prompt_context.md]
+    when: "{{ inputs.prompt }}"
+
+  # 1) PLAN — le planner (opus) lit la demande et le graphe de code, puis écrit
+  #    un plan d'implémentation ordonné. `gate: true` => le run s'arrête ici et attend
+  #    l'approbation humaine avant de coder (statut Workflow: awaiting_gate).
+  #    La demande est dans EXACTEMENT UNE des deux entrées ci-dessous ; `task`
+  #    dit au planner laquelle, et que l'absence de l'autre est normale.
+  - name: plan
+    agent: planner
+    skills: [graphify-context, ticket-to-plan-aidp]
+    needs: [discover_prompt]
+    with: { mode: feature }
+    inputs:
+      jira_keys: "{{ inputs.jira_keys }}"
+      prompt_context: "{{ stages.discover_prompt.outputs.prompt_context }}"
+      task: >
+        Exactement UNE des deux entrées porte la demande. Si `jira_keys` est non
+        vide, le run est piloté par Jira : lis les tickets comme d'habitude, et
+        NE LIS PAS `prompt_context` — l'étape `discover_prompt` a été supprimée à
+        la compilation, donc son fichier est soit absent, soit périmé : c'est une
+        étape de recherche, ses artefacts sont écrits dans la racine partagée par
+        tous les runs de la MÊME feature, si bien qu'un `prompt_context.md` laissé
+        par un run précédent en mode prompt peut encore s'y trouver. Les deux cas
+        sont attendus et ne sont pas des erreurs : en mode Jira, ce fichier n'a
+        aucune autorité, ignore-le qu'il existe ou non.
+        Si `jira_keys` est vide (`[]`), le run est piloté par prompt : il n'y a
+        aucun ticket, et `prompt_context.md` EST la demande. Reprends alors tels
+        quels dans plan.md ses critères d'acceptation, ses hypothèses et ses
+        questions ouvertes plutôt que de les redériver : c'est le seul contrat du
+        run, et le gate humain juste après est le seul endroit où ils sont relus.
+    outputs: [plan.md]
+    gate: true
+
+  # 2) CODE — l'executor (sonnet) implémente le plan en C#. `needs: [plan]` garantit
+  #    qu'il ne démarre qu'après le plan approuvé et reçoit plan.md dans son contexte.
+  #    `scope: production` limite ses écritures au code applicatif (pas les tests/docs).
+  - name: code
+    agent: executor
+    skills: [graphify-context, csharp-dev-aidp]
+    needs: [plan]
+    scope: { mode: production }
+    outputs: [changed-files.json]

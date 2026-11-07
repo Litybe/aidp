@@ -1,0 +1,25 @@
+{
+  "findings": [
+    {
+      "id": "F-1",
+      "severity": "major",
+      "title": "Deleted guard",
+      "description": "The guard was removed.",
+      "location": { "path": "src/a.rs", "line": 11, "side": "LEFT" }
+    },
+    {
+      "id": "F-2",
+      "severity": "minor",
+      "title": "Renamed file issue",
+      "file": "src/old_name.rs",
+      "line": 2
+    },
+    {
+      "id": "F-3",
+      "severity": "info",
+      "title": "Far away line",
+      "file": "src/a.rs",
+      "line": 99
+    }
+  ]
+}

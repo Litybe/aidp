@@ -1,0 +1,11 @@
+{
+  "ok": [],
+  "reopen": [
+    {
+      "thread": "T-2",
+      "reason": "still broken"
+    }
+  ],
+  "new_findings": [],
+  "clean": false
+}

@@ -1,0 +1,5 @@
+version: 5
+id: innersink
+stages:
+  - { name: i_first, agent: executor }
+  - { name: i_last, agent: executor, needs: [i_first], outputs: [note.md] }

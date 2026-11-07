@@ -1,0 +1,66 @@
+version: 5
+id: pr-review
+description: >-
+  Review a GitHub pull request without touching it. A read-only resolve stage
+  captures the PR metadata and the base...head diff in its stage dir, then the
+  shared `review` sub-pipeline (four rubric axes in parallel, then synthesis)
+  produces findings.json and summary.md. Each finding carries a `location`
+  ({path, line, start_line?, side}) and a severity so a later step can post it
+  inline. Nothing is written to the worktree or to GitHub: every stage writes
+  its own stage dir only. The reviewers judge the tests check from the PR's
+  CI (ci-status.json) instead of running the tests, and leave it out when the
+  PR has no CI check, so a PR whose CI is fine does not pause on a harness gap.
+
+  Runs autonomously in native mode: gates are pre-approved and no stage asks a
+  question; an ambiguity is decided and recorded in the summary.
+inputs:
+  feature:
+    required: false
+    kind: string
+    description: >-
+      Ticket key the PR implements. It names the run's vault folder so the
+      review sits beside the ticket's other runs.
+settings:
+  knowledge_graph:
+    enabled: true
+    refresh: never
+    code_only: true
+stages:
+  - name: resolve
+    agent: analyzer
+    skills: [graphify-context]
+    description: >-
+      Resolve the PR `{{ inputs.target }}` (ticket `{{ inputs.feature }}`) with `aidp gh pr-resolve`, then write
+      pr.json ({number, repo, base, head}), diff.patch (the `base...head`
+      diff, from `aidp gh pr-diff` or `git diff`), ci-status.json (the output of
+      `aidp gh pr-status <number> --repo <owner/name>`, whose `checks` holds the CI
+      runs of the head commit) and review-brief.md into your stage dir.
+    policy:
+      - "Write only inside your stage dir: no worktree write, no commit, no push, no GitHub write."
+      - "review-brief.md names diff.patch and states the finding rules for the reviewers, who write only inside their stage dir: no worktree write, no GitHub write."
+      - "Brief rule: every finding carries a severity and a `location` {path, line, start_line?, side}; path is repo-relative and line is the line in the diff."
+      - "Brief rule: start_line is set only for a range; side is RIGHT for added or unchanged lines and LEFT for removed lines."
+      - "Never ask a question: when the PR is ambiguous, take the current-branch PR and say so in the summary."
+      - "ci-status.json is the raw `aidp gh pr-status` output, written even when the PR has no CI check; when the command fails, write {\"error\": \"<message>\"} instead."
+      - "review-brief.md summarises the CI of the head commit from ci-status.json: every check run with its conclusion, or `no CI check on this PR`."
+    inputs: { pr: "{{ inputs.target }}" }
+    scope: { mode: stage_dir_only }
+    outputs: [pr.json, diff.patch, ci-status.json, review-brief.md]
+
+  - name: review
+    type: pipeline
+    uses: review
+    needs: [resolve]
+    # The reviewers are read-only and never run the tests: the PR's CI is the evidence.
+    with:
+      tests_evidence: >-
+        This review never runs the tests. Evaluate the tests check (C-tests-run) only from
+        ci-status.json in the resolve stage dir. Every check run of the head commit concluded
+        with success: pass, the check names as evidence. A check run failed: fail, with a
+        finding naming the failed check. Some check runs still pending: skip, harness_gap
+        "CI still running". No check run at all, or ci-status.json holds an error: do not
+        declare a tests check, and write "tests not verified: no CI check on this PR" in
+        summary.md (synthesis) or in your reply summary (axis).
+    outputs:
+      - { name: findings, from: review.findings }
+      - { name: summary, from: review.summary }

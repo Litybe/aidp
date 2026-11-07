@@ -1,0 +1,14 @@
+{
+  "error": null,
+  "warnings": [
+    "skill dropped, no knowledge graph for this run: graphify-context removed from stage knowledge__knowledge_read",
+    "skill dropped, no knowledge graph for this run: graphify-context removed from stage gather",
+    "skill dropped, no knowledge graph for this run: graphify-context removed from stage knowledge_sync__knowledge_feature_update"
+  ],
+  "gates": [
+    "review"
+  ],
+  "awaiting_plan": null,
+  "awaiting_composite": null,
+  "plan_schedules": []
+}

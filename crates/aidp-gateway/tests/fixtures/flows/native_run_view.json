@@ -1,0 +1,10 @@
+{
+  "runId": "run-1",
+  "templateId": "dev",
+  "status": "running",
+  "workspace": ".",
+  "runDir": ".",
+  "request": { "projectId": "project-1", "templateId": "dev" },
+  "startedAt": "2026-10-07T00:00:00Z",
+  "stages": []
+}

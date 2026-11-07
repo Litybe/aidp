@@ -1,0 +1,23 @@
+{
+  "launch_tail": ["--disallowedTools", "AskUserQuestion"],
+  "permissions": {
+    "policy": "allow",
+    "deny": [
+      "Bash(git push --force*)",
+      "Bash(git push -f*)",
+      "Bash(git push --force-with-lease*)",
+      "Bash(git push origin master*)",
+      "Bash(git push origin main*)",
+      "Bash(git push --delete*)",
+      "Bash(git push origin :*)",
+      "Bash(gh pr merge*)",
+      "Bash(gh pr close*)",
+      "Bash(rm -rf*)",
+      "Edit(~/.aidp/**)",
+      "Write(~/.aidp/**)",
+      "Read(**/.env*)",
+      "Read(~/.ssh/**)",
+      "Read(~/.aws/**)"
+    ]
+  }
+}

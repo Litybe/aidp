@@ -1,0 +1,29 @@
+{
+  "pr": 7,
+  "repo": "acme/svc",
+  "total": 3,
+  "unresolved": 2,
+  "threads": [
+    {
+      "thread_id": "PRRT_open_1",
+      "is_resolved": false,
+      "path": "src/one.rs",
+      "line": 10,
+      "comments": [{"author": "alice", "body": "rename this"}, {"author": "Me", "body": "renamed"}]
+    },
+    {
+      "thread_id": "PRRT_open_2",
+      "is_resolved": false,
+      "path": "src/two.rs",
+      "line": null,
+      "comments": [{"author": "bob", "body": "add a test"}, {"author": "me", "body": "ok"}, {"author": "carol", "body": "thanks"}]
+    },
+    {
+      "thread_id": "PRRT_done",
+      "is_resolved": true,
+      "path": "src/three.rs",
+      "line": 3,
+      "comments": [{"author": "carol", "body": "already handled"}]
+    }
+  ]
+}

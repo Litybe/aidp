@@ -1,0 +1,196 @@
+version: 5
+id: dev-aidp-viewer
+description: >
+  Develop aidp-viewer, the control UI of the AI Dev Pipeline gateway: a React +
+  Tailwind client (`src/client`), a thin Express layer (`src/server`) that only
+  proxies `/api/*` to the Rust daemon `aidp gateway serve` and reads files
+  (vault runs, templates), and the shared TypeScript types (`src/shared`). Not a
+  Pixelhood service: no Jira, no Confluence, no Mongo. DEMAND is plain text
+  (`prompt`), usually one lot of docs/PLAN-LOTS.md.
+
+  The one rule that shapes every stage: THE VIEWER DISPLAYS, THE DAEMON DECIDES.
+  Business rules (sessions, gates, automations, guards, CI heartbeat, project
+  registry) live in the Rust crate `aidp-gateway` of the aidp repository
+  (AlexisVuk/ai-dev-pipeline-v7), which this pipeline reads but never edits. When the request needs a new
+  daemon capability, the plan writes a `daemon-request.md` describing the HTTP
+  contract to add, and the viewer part is built against that contract with a
+  clearly labelled fallback until the `dev-aidp` run lands it.
+
+  Checks that matter here: `npm run typecheck` (server + client), `npm run
+  build` (Vite + tsc), and a smoke boot of the built server that answers
+  `/api/gateway/status` when a daemon is reachable — the viewer has no runtime
+  tests yet, so the type gate and the build are the safety net. Tracks via track
+  = quick | standard | deep, same semantics as the other dev templates.
+inputs:
+  # The request in plain text - "afficher le heartbeat CI sur la page run",
+  # "ajouter la page automations". Usually one lot of docs/PLAN-LOTS.md. There
+  # is no Jira mode: this repo's work does not live in tickets.
+  prompt: { required: true, kind: string, description: "Demande en langage naturel decrivant le changement a apporter au viewer (ex. \"afficher le heartbeat CI sur la page run\")." }
+  # Names the branch (feat/<feature>), the vault folder and the PR. Required
+  # because nothing else can derive it - there is no ticket list to fall back on.
+  feature: { required: true, kind: string, description: "Nom de la feature : alimente run::feature_key (sa PREMIERE branche testee) - decide le nom de la branche git ET le dossier du vault Obsidian pour ce run." }
+  # Absolute path of the checkout the run works in, usually a dedicated git
+  # worktree. Every stage that touches the repo receives it, because the
+  # sub-agents do not run in the workspace by themselves.
+  workspace: { required: false, kind: string, default: ".", description: "Chemin absolu du checkout (souvent un worktree git dedie) dans lequel le run travaille : chaque stage qui lit, ecrit, teste ou commite le depot le fait uniquement la." }
+  track: { required: true, kind: enum, values: [quick, standard, deep], default: standard, description: "Profondeur du run : quick saute l'etude et le gate de plan, standard fait les deux, deep gate le plan pour validation humaine avant la moindre ligne ecrite." }
+settings:
+  pr_draft: false
+  max_correction_iterations: 2
+  knowledge_graph:
+    enabled: true
+    refresh: never
+    code_only: true
+stages:
+  # Cut the feature branch off an up-to-date master first, so every later stage's
+  # writes, commits and the PR land on feat/<feature>. Everything below reads
+  # `needs` on it, so it runs alone, before the fan-out.
+  - name: prepare_branch
+    model: haiku
+    agent: executor
+    skills: [git-branch-setup]
+    inputs:
+      branch: "feat/{{ feature }}"
+      workspace: "{{ inputs.workspace }}"
+    outputs: [branch.json]
+    when: "true"
+
+  # --- Step 0: what do we already know? The project knowledge base
+  # (<vault>/Knowledge/<repo>/) is documentation of the skill accumulated by
+  # previous runs, so reading it first means the three layer reads below only
+  # have to find what it does not already answer. A root stage like them: no
+  # `needs` beyond `prepare_branch`, so it still fans out in the same
+  # parallel() block.
+  - name: knowledge
+    type: pipeline
+    uses: knowledge-read
+    needs: [prepare_branch]
+    with: { focus: "{{ feature }}" }
+    outputs:
+      - { name: knowledge_context, from: knowledge_read.knowledge_context }
+
+  # Synthesis: one context note the plan is written from, reconciling the three
+  # layers and stating where they already disagree with each other.
+  - name: discover
+    agent: analyzer
+    model: haiku   # delibere : synthese des trois lectures (client/server/docs) en un seul contexte - opus pour ne rien perdre en fusionnant
+    needs: [knowledge]
+    inputs:
+      task: >
+        Merge the three reads into one context note for "{{ inputs.prompt }}".
+        State the change, the full set of files across client / server / shared
+        types / docs that must move together, the daemon endpoints it relies on
+        (existing vs. to be requested), the acceptance criteria taken from
+        PLAN-LOTS.md, and the open questions. Flag any divergence between the
+        documented architecture and the code — a bug to report, not to fix
+        silently inside this change.
+    outputs: [context.md]
+
+  # `plan.json` (schema/plan.schema.json) is the machine contract: one object per
+  # task, each with its own prompt, `needs` and `files` write set. Slice by LAYER
+  # here - pages, components + lib, server + shared types, docs - because those
+  # write sets are naturally disjoint and can run at the same time.
+  # `plan.md` stays the human narrative.
+  - name: plan
+    agent: planner
+    skills: [graphify-context, ticket-to-plan-aidp]
+    needs: [discover]
+    with: { mode: feature }
+    inputs:
+      workspace: "{{ inputs.workspace }}"
+      task: >
+        Write an executable plan for "{{ inputs.prompt }}". Slice into
+        file-disjoint tasks (pages / components + lib / server + shared types /
+        docs) with `needs` only where a task genuinely reads another's output.
+        Every task says which check proves it: `npm run typecheck`, `npm run
+        build`, and for UI tasks the exact manual scenario to replay in the
+        browser (URL, action, expected text). No business rule in `src/server`:
+        if the request needs one, add a task that writes `daemon-request.md`
+        (endpoint, method, JSON in/out, events on the bus) and build the UI
+        against that contract with a labelled fallback. Keep the dark theme
+        tokens and French wording; no Teams or messaging integration.
+    outputs: [plan.json, plan.md]
+
+  # Plan-driven implementation: `aidp workflow emit` loads plan.json, validates
+  # the task graph, serialises any two tasks that would write the same file, and
+  # dispatches one sub-agent per task in the shared working tree. TWO-PASS: the
+  # first emit stops here (`awaiting_plan`); re-emitting after the planner has
+  # written the file compiles the tasks and everything after them.
+  - name: implement
+    agent: executor
+    skills: [graphify-context, lambda-ts-dev-aidp, feature-testing-aidp]
+    needs: [plan]
+    scope: { mode: repo_wide }
+    plan_tasks:
+      from: "{{ stages.plan.outputs.plan }}"
+      max: 5
+      merge_hint: >
+        Apply the shared-file changes the tasks deferred to you
+        (src/shared/types.ts, src/client/lib/api.ts, App.tsx routes,
+        package.json), then run from the repo root: `npm run typecheck` and `npm
+        run build`. Fix cross-task breakage and write the consolidated
+        changed-files.json. Do not touch the aidp repository.
+
+  # The gauntlet as its own stage, on the merged tree. Separate from `implement`
+  # so a green run is an artefact the review and the PR can cite, and so a
+  # correction iteration re-proves it rather than trusting the fixer's word.
+  # The viewer has no runtime test suite, so the type gate, the build and the
+  # smoke boot of the proxy path ARE the safety net.
+  - name: verify
+    agent: executor
+    needs: [implement]
+    scope: { mode: repo_wide }
+    inputs:
+      workspace: "{{ inputs.workspace }}"
+      task: >
+        Prove the tree is green, from the repo root, in this order: `npm run
+        typecheck` (server and client), `npm run build`, then a smoke boot:
+        `AIDP_GATEWAY_AUTOSTART=0 PORT=3999 node
+        --env-file-if-exists=.env dist/server/index.js` in the background, `curl
+        -s localhost:3999/api/gateway/status` (a JSON answer, or a JSON `error`
+        mentioning the gateway when no daemon runs — both prove the proxy path),
+        then stop it. Record each command with its exit code and, on failure,
+        the trimmed real error. Fix only what is trivially and unambiguously
+        broken by the change; anything else is reported as a failure. Write
+        verify.json with one entry per command and an overall `ok` flag.
+    outputs: [verify.json]
+
+ # Review, composed from the reusable `review` sub-pipeline (4 rubric
+  # dimensions in parallel then synthesis). `needs: [implement]` cascades onto
+  # its 4 root stages, so they still fan out in one parallel() block. Because
+  # those axes read `implement` and feed `correction_loop`, the engine does not
+  # pause on `implement`'s `needs_review` (red tests): it hands the report to
+  # the axes, and the correctness axis files it as a blocking finding.
+  - name: review
+    type: pipeline
+    when: "{{ inputs.track == 'deep' }}"
+    uses: review
+    needs: [verify]
+    outputs:
+      - { name: findings, from: review.findings }
+      - { name: summary, from: review.summary }
+
+  - name: correction_loop
+    type: loop
+    when: "{{ stages.review.outputs.findings.has_blocking_findings }}"
+    max_iterations: "{{ settings.max_correction_iterations }}"
+    body:
+      - { name: replan, agent: planner, model: sonnet, with: { mode: correction }, inputs: { findings: "{{ stages.review.outputs.findings }}" } }   # delibere : une reprise de plan est un delta, pas une conception - opus serait surpaye
+      # A failing test in the findings is fixed here, even one that also fails on
+      # master: the run has no other place to fix it. Still red after the fix: reply
+      # `needs_review` naming the tests; the engine passes that on to `rereview`
+      # instead of pausing, and the loop's exhaustion guard is the human checkpoint.
+      - { name: refix, agent: executor, skills: [writing-clearly-and-concisely], scope: { mode: repo_wide }, needs: [replan], inputs: { workspace: "{{ inputs.workspace }}", task: "Apply the correction plan. Fix every blocking finding, failing checks first, including checks that look pre-existing or unrelated to this change. Then re-run from the repo root: `npm run typecheck` and `npm run build`. If anything is still red, reply `needs_review`, name each failing check in `summary` and set `signals.tests_failed`." } }
+      # Re-review the fixed code: the loop must re-produce the `findings` output it loops on, otherwise the loop condition never changes and the review stage is not linked back to the loop.
+      - { name: rereview, agent: reviewer, skills: [graphify-context, code-review-aidp, code-audit-rubric], needs: [refix], inputs: { workspace: "{{ inputs.workspace }}", task: "Re-review the fixed tree. Re-run `npm run typecheck` and `npm run build` from the repo root yourself rather than trusting refix's report: each failing check is a `blocking` finding (category `tests`), pre-existing or not." }, outputs: [findings.json, summary.md] }
+
+  - name: pr
+    policy:
+      - "Open the PR with `aidp gh pr-create --draft` only when the stage input pr_draft is true; otherwise open a regular PR."
+    agent: executor
+    model: haiku   # delibere : ouverture de PR, mecanique - haiku suffit
+    skills: [git-push, writing-clearly-and-concisely]
+    needs: [verify, review]
+    inputs: { pr_draft: "{{ settings.pr_draft }}", workspace: "{{ inputs.workspace }}" }
+    scope: { mode: stage_dir_only }
+    outputs: [pr.json]

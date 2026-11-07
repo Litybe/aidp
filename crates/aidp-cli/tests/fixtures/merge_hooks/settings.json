@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          { "type": "command", "command": "aidp run summary", "blocking": false }
+        ]
+      },
+      {
+        "hooks": [
+          { "type": "command", "command": "aidp ci hook stop" }
+        ]
+      }
+    ]
+  }
+}

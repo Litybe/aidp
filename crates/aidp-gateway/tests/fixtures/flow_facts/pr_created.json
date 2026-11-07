@@ -1,0 +1,7 @@
+{
+  "pr_number": 7,
+  "pr_url": "https://github.com/acme/app/pull/7",
+  "repository": "acme/app",
+  "branch": "feat/LOC-7",
+  "commit_sha": "ddddddd"
+}

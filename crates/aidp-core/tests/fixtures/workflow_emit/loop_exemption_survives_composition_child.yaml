@@ -1,0 +1,9 @@
+version: 5
+id: revsub
+stages:
+  - { name: review_correctness, agent: reviewer, outputs: [findings.json] }
+  - { name: review_security, agent: reviewer, outputs: [findings.json] }
+  - name: review
+    agent: reviewer
+    needs: [review_correctness, review_security]
+    outputs: [findings.json, summary.md]

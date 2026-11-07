@@ -1,0 +1,633 @@
+version: 5
+id: cartography-cheat
+name: Cartographie d'un service Cheat pour la stack locale
+description: >
+  Produit la carte de tout ce qu'un microservice Cheat touche EN DEHORS de son
+  processus, plus le brouillon du descripteur TypeScript qui l'embarque dans
+  `localstack/cheat-stack`. C'est l'artefact numéro un du runbook d'onboarding :
+  sans lui, on écrit un overlay au hasard et on découvre les dépendances une
+  exception de démarrage à la fois.
+  Six balayages en lecture seule (topologie, HTTP, données, configuration,
+  bloqueurs de démarrage, trous de couverture) alimentent deux écrivains — la
+  cartographie en 10 sections et le descripteur `ServiceDescriptor` — puis un
+  relecteur vérifie chaque affirmation contre le code et émet findings.json.
+  Ce pipeline N'ÉCRIT JAMAIS dans le dépôt du service : il le lit. Ses artefacts
+  atterrissent dans le dossier du run, et c'est un humain qui les recopie dans
+  `localstack/cheat-stack/` après relecture — la sortie du premier service d'une
+  famille de runtime est un BROUILLON, pas un livrable.
+  Calibré sur `docs/CARTOGRAPHIE-cheat-profile-service.md`, qui sert de corrigé :
+  relancer ce pipeline sur cheat-profile-service et diffuser contre ce document
+  est la façon de vérifier que le template tient encore.
+inputs:
+  service:
+    required: true
+    kind: string
+    description: >
+      Nom du dépôt et du service, tel qu'il apparaît dans le compose et dans les
+      noms de fichiers produits (ex. cheat-aml-service). Sert à nommer la
+      cartographie et le dossier du descripteur.
+  repo_path:
+    required: true
+    kind: string
+    description: >
+      Racine du checkout à lire (ex. C:\CODE\.Net\cheat-aml-service). Tous les
+      globs des balayages sont relatifs à ce chemin. Lecture seule.
+  runtime:
+    required: false
+    kind: enum
+    values: [csharp, lambda-ts]
+    default: csharp
+    description: >
+      Famille de runtime, qui sélectionne le jeu de globs de chaque balayage.
+      `csharp` est calibré sur les trois services ASP.NET de la squad.
+      `lambda-ts` pose le contrat pour le lot TypeScript mais n'est PAS calibré :
+      traiter sa sortie comme une première ébauche.
+  feature:
+    required: false
+    kind: string
+    default: cartography
+    description: >
+      Alimente `run::feature_key` — sa PREMIÈRE branche (`inputs.get("feature")`)
+      — donc à la fois le nom de la branche git du run ET le dossier du vault
+      Obsidian où atterrissent ses artefacts. Ce pipeline n'a pas de ticket ;
+      sans défaut, chaque cartographie tomberait dans `_no-ticket`.
+settings:
+  knowledge_graph:
+    enabled: true
+    # Un service qu'on cartographie est par définition un service qu'on ne
+    # connaît pas : c'est le cas où construire le graphe est rentable.
+    refresh: lazy
+    code_only: true
+stages:
+  # ================================================================================================
+  # Six balayages en lecture seule. Les cinq premiers n'ont aucun `needs` entre eux → le moteur v7
+  # les lance en un seul bloc parallèle. Chacun reste dans son couloir : deux balayages qui se
+  # recouvrent produisent deux sections qui se contredisent, et c'est exactement ce qui rend une
+  # cartographie inutilisable.
+  #
+  # Règle commune, injectée dans chaque tâche : citer `chemin:ligne` pour chaque fait, et marquer
+  # **[déduit]** tout ce qui n'a pas été lu. Un fait non cité est un fait non vérifié.
+  # ================================================================================================
+
+  - name: scan_topology
+    agent: analyzer
+    model: opus   # delibere : scan de code exhaustif et cite (chemin:ligne) - sonnet perd la rigueur factuelle exigee
+    skills: [graphify-context, event-architecture, pixelhood-dotnet-service]
+    inputs:
+      path: "{{ inputs.repo_path }}"
+      runtime: "{{ inputs.runtime }}"
+      task: >
+        Cartographie la topologie événementielle de {{ inputs.service }} et écris
+        topology.md plus topology.json. Ce balayage porte les sections 1, 3 et 4
+        de la cartographie.
+
+        SI runtime = csharp, lis dans cet ordre : `*.slnx` ; `src/*/*.csproj`
+        (relève les VERSIONS de `Pixelhood.Extensions.EventBus.Subscriber` et de
+        `Pixelhood.Extensions.EventBus.Publisher.All` — un écart de version majeure
+        change le nommage des files et le contrat de la table d'état, c'est un
+        fait de première importance) ; `src/<host>/Program.cs` ;
+        `src/<host>/RegisterDependencies.cs` Y COMPRIS TOUTES LES MÉTHODES
+        D'AIDE qu'il appelle — un abonnement sur trois se cache dans un
+        `AddQueuesForInternalEvents()` ou équivalent, et c'est l'oubli le plus
+        fréquent de tout cet exercice ; `**/Handlers/*.cs` ; `**/Messages/*.cs` ;
+        `**/Publishers/*.cs` ; puis grep `PublishAsync(` sur tout `src/` — chez
+        certains services les publishers vivent dans des `*Repository.cs` et
+        n'apparaissent dans aucun fichier nommé Publisher.
+
+        SI runtime = lambda-ts : `serverless.yml` et `serverless-resources/*.yml`
+        (les événements SNS/SQS et les filter policies y sont déclarés),
+        `src/*/handler.ts`, `src/**/messages/*.ts`, puis grep `publish(` et
+        `EventBusPublisher`. Jeu NON calibré : signale ce que tu n'as pas pu
+        rattacher.
+
+        §1 VUE D'ENSEMBLE : ce que fait le service en un paragraphe, le runtime
+        et le nombre de projets, le préfixe de route effectif et la route de
+        santé (avec la chaîne de configuration qui les produit), puis un décompte
+        chiffré : nombre d'abonnements, nombre de types publiés, nombre de
+        topics, nombre de collections, nombre de clients HTTP, nombre de flags.
+        Ces chiffres seront recoupés avec les sections détaillées : ne les
+        estime pas, compte-les.
+
+        §3 ÉVÉNEMENTS CONSOMMÉS : un tableau avec UNE LIGNE PAR ABONNEMENT (pas
+        par handler — un même handler abonné à deux topics fait deux lignes), et
+        pour chacune : type de message, topic, bus (nom EXACT du bus tel qu'il
+        est écrit dans le code, pas celui d'un service voisin), handler, filtre
+        d'attributs SNS s'il y en a un, et feature flag qui le garde s'il y en a
+        un. Donne aussi, pour chaque type, une charge JSON MINIMALE RÉELLE — les
+        champs que le handler lit vraiment, avec la casse exacte du fil. Précise
+        la politique de sérialisation (snake_case ou non, sensibilité à la casse)
+        et d'où tu la tiens.
+
+        §4 MESSAGES PUBLIÉS : un tableau type / topic / déclencheur métier / site
+        d'appel, et les attributs SNS posés à la publication.
+
+        Dans topology.json, émets un objet lisible par machine :
+        `{ "entry_assembly": ..., "entry_project": ..., "api_path": ...,
+        "health_path": ..., "buses": [{ "name": ..., "side": "sub"|"pub",
+        "default": true|false }], "subscriptions": [{ "topic": ..., "message_type":
+        ..., "bus": ..., "handler": ..., "filter": {...}|null, "flag": ...|null }],
+        "publications": [{ "topic": ..., "message_type": ... }] }`.
+
+        Puis émets `signals.subscription_count` (entier) et
+        `signals.publication_count` (entier). Ce sont eux que le relecteur
+        recoupera avec le tableau §3 et avec le descripteur.
+    outputs: [topology.md, topology.json]
+
+  - name: scan_http
+    agent: analyzer
+    model: opus   # delibere : scan de code exhaustif et cite (chemin:ligne) - sonnet perd la rigueur factuelle exigee
+    skills: [graphify-context, pixelhood-dotnet-service]
+    inputs:
+      path: "{{ inputs.repo_path }}"
+      runtime: "{{ inputs.runtime }}"
+      task: >
+        Cartographie la surface HTTP de {{ inputs.service }} — entrante et
+        sortante — et écris http.md plus http.json. Sections 2 et 6.
+
+        SI runtime = csharp : `src/<host>/Controllers/*.cs` ;
+        `Filters/*ExceptionFilter*.cs` (le mapping des exceptions vers les codes
+        de statut fait partie du contrat observable) ;
+        `src/*.infrastructure/RegisterDependencies.cs` pour l'enregistrement des
+        clients typés ; tous les `**/*Options.cs` portant un `BaseAddress` ; puis
+        TOUTES les valeurs correspondantes dans `appsettings*.json`.
+
+        SI runtime = lambda-ts : les événements ALB de `serverless.yml`,
+        `src/*/handler.ts` pour le routage, et les repositories HTTP sortants.
+
+        §2 API ENTRANTE : chaque route avec son verbe, son chemin COMPLET préfixe
+        compris, ses paramètres et sa forme de réponse. Puis quatre choses qu'on
+        oublie et qui coûtent chacune un scénario faux :
+        - les EN-TÊTES exigés, par route (marque, zone de régulation, claim JWT
+          du demandeur…) : un appel de test sans eux part en 400 et on croit à un
+          problème de routage ;
+        - l'autorisation RÉELLEMENT APPLIQUÉE, distinguée de l'autorisation
+          seulement DOCUMENTÉE. Un attribut qui ne décore que le document Swagger
+          sans middleware correspondant dans le pipeline n'autorise rien : dis
+          laquelle des deux situations tu observes, et cite le pipeline ;
+        - le CONTRAT D'ERREUR : la forme du corps d'erreur et le préfixe des
+          codes, tel que le filtre d'exceptions le produit, avec la
+          correspondance exception → code de statut ;
+        - pour la ROUTE DE SANTÉ, ce qu'elle affirme vraiment. Si une dépendance
+          y est enregistrée en `Degraded` plutôt qu'en `Unhealthy`, la route
+          répond 200 alors que la dépendance est morte, et elle ne peut donc PAS
+          servir de porte de disponibilité. C'est un fait de premier ordre pour
+          la stack locale : énonce-le explicitement dans un sens ou dans l'autre.
+
+        §6 APPELS SORTANTS : un tableau par CLIENT TYPÉ — clé de configuration,
+        hôte, route appelée, use case appelant. DONNE DEUX DÉCOMPTES SÉPARÉS, et ne
+        les confonds jamais : le nombre d'HÔTES DNS distincts dans la
+        configuration déployée, ET le nombre d'INCARNATIONS À CRÉER, c'est-à-dire
+        de dépendances logiquement distinctes. Ils diffèrent, et c'est le SECOND
+        qui commande le nombre de mocks. Trois clés qui partagent un répartiteur
+        de charge en dev — donc un seul nom DNS — restent trois services
+        différents, et dans le réseau compose chacun a son conteneur et son
+        alias. Ne publier que le compte DNS conduit à créer trop peu de mocks et
+        à casser des routes en silence : c'est l'erreur la plus coûteuse de cette
+        section.
+
+        Attention aussi à deux pièges sur les clés : (a) les clés de
+        configuration .NET sont INSENSIBLES À LA CASSE, donc `AccountServiceAPI`
+        et `AccountServiceApi` sont la MÊME section et le même hôte ; à l'inverse
+        une SEULE clé peut servir DEUX clients typés vers deux racines de chemin
+        — dis-le, ça reste une seule incarnation à deux jeux de mappings ;
+        (b) une clé de configuration présente sans `HttpClient` typé enregistré
+        est une clé MORTE — dis-le explicitement, c'est ce qui permet de la
+        pointer vers un port fermé au lieu de lui monter un mock.
+
+        Donne aussi la POLITIQUE DE DÉSÉRIALISATION DES RÉPONSES, et d'où tu la
+        tiens : y a-t-il une naming policy, la casse est-elle respectée ? Une
+        désérialisation sensible à la casse sans naming policy veut dire que les
+        noms de champs des stubs doivent être EXACTS — sinon le stub répond 200
+        et le service lit des nulls, ce qui est le mode d'échec le plus coûteux à
+        diagnostiquer de toute la stack. Relève au passage les en-têtes que
+        l'assistant d'enregistrement injecte dans chaque appel sortant.
+
+        Signale tout `BaseAddress` VIDE ou absent du dépôt : c'est un bloqueur de
+        démarrage que la section 9 doit reprendre.
+
+        Dans http.json : `{ "inbound": [{ "verb": ..., "path": ..., "auth": ... }],
+        "outbound": [{ "config_key": ..., "host": ..., "routes": [...],
+        "typed_client": true|false, "base_address_in_repo": ...|null }] }`.
+        Puis `signals.outbound_host_count` (entier, hôtes DISTINCTS).
+    outputs: [http.md, http.json]
+
+  - name: scan_data
+    agent: analyzer
+    model: opus   # delibere : scan de code exhaustif et cite (chemin:ligne) - sonnet perd la rigueur factuelle exigee
+    skills: [graphify-context, pixelhood-dotnet-service]
+    inputs:
+      path: "{{ inputs.repo_path }}"
+      runtime: "{{ inputs.runtime }}"
+      task: >
+        Cartographie la persistance de {{ inputs.service }} et écris data.md plus
+        data.json. Section 5.
+
+        SI runtime = csharp, dans cet ordre : `deploy/terraform/**/locals.tf` →
+        la valeur `mongodb_database` est le NOM DE BASE DÉPLOYÉ et fait autorité,
+        ne le devine jamais depuis le nom du service ;
+        `deploy/database/mongodb/changelog-master.json` puis
+        `changelogs/*.json` ; les attributs `[BsonElement]` / `[BsonId]` /
+        `[BsonRepresentation]` de chaque `*Document.cs` ; `**/*Job*.cs` et les
+        méthodes de requête des repositories.
+
+        SI runtime = lambda-ts : les tables DynamoDB de `serverless-resources/`,
+        les requêtes Snowflake, et les préfixes S3.
+
+        §5 pour chaque collection : son nom exact, la forme du document avec les
+        NOMS BSON SUR DISQUE (souvent abrégés et différents des noms C#), et le
+        TYPE BSON de chaque champ porteur. Traque et énonce explicitement les
+        asymétries de type, parce qu'elles sont la première cause de seed
+        silencieusement invisible : un `_id` en Int64 chez un service et en
+        ObjectId chez un autre, un identifiant utilisateur en Int64 dans une
+        collection et en String dans une autre, un champ de concurrence
+        optimiste qu'un document semé sans lui rend non modifiable, un
+        sérialiseur custom (`*Serializer`) qui change la représentation disque
+        d'un enum. Chacune de ces asymétries doit apparaître comme un AVERTISSEMENT
+        nommé, pas comme une ligne de tableau parmi d'autres.
+
+        Trie les changeSets Liquibase en deux listes explicites : STRUCTURELS à
+        rejouer en local (createCollection, validateurs `$jsonSchema`, index
+        nommés) et CORRECTIONS DE DONNÉES à sauter (updates, drops, index
+        temporaires). Donne les numéros. Les changelogs se LISENT, ils ne
+        s'exécutent jamais : ne lance aucune cible `make`.
+
+        Dans data.json : `{ "database": ..., "collections": [{ "name": ...,
+        "fields": [{ "bson": ..., "type": ..., "note": ... }] }],
+        "changesets": { "structural": [...], "data_fixes": [...] },
+        "type_traps": [ "..." ] }`.
+        Puis `signals.collection_count` (entier).
+    outputs: [data.md, data.json]
+
+  - name: scan_config
+    agent: analyzer
+    model: opus   # delibere : scan de code exhaustif et cite (chemin:ligne) - sonnet perd la rigueur factuelle exigee
+    skills: [graphify-context, pixelhood-dotnet-service, enforcing-decision-records]
+    inputs:
+      path: "{{ inputs.repo_path }}"
+      runtime: "{{ inputs.runtime }}"
+      task: >
+        Cartographie la configuration et les dépendances cachées de
+        {{ inputs.service }}, et écris config.md plus config.json. Sections 7 et 8.
+
+        SI runtime = csharp : `**/Constants/*Feature*.cs` ; TOUS les sites
+        d'appel `IsEnabled(flag, default)` — c'est la VALEUR PAR DÉFAUT au site
+        d'appel qui décide du comportement hors ligne, pas la déclaration ;
+        `Dockerfile` ; `nuget.config` ; `mise.toml` ;
+        `deploy/terraform/**/*.tf` ; et surtout
+        `deploy/terraform/stacks/fargate-service/containerdef.json.tftpl`.
+
+        CE DERNIER FICHIER EST LE PLUS UTILE DE TOUT LE BALAYAGE : c'est le
+        contrat d'environnement réellement déployé du service. Recopie-en
+        l'intégralité des variables et des secrets sous forme de tableau, avec
+        pour chacune si elle est indispensable au démarrage. C'est de là que
+        sortira l'overlay `appsettings.Local.json`.
+
+        SI runtime = lambda-ts : `serverless.yml` (`provider.environment`), les
+        paramètres SSM lus au runtime, et les flags Flip.
+
+        §7 FEATURE FLAGS : un tableau nom du flag / défaut au site d'appel /
+        effet quand le service est hors ligne (fail open ou fail closed). Un flag
+        fail-closed dont le défaut est `false` désactive silencieusement un
+        chemin entier : signale-les tous, et dis quels parcours deviennent
+        intestables tant qu'il n'y a pas de faux Flip.
+
+        Puis réponds à trois questions sur le CLIENT de flags lui-même, parce
+        qu'elles décident s'il est simulable ou seulement contournable :
+        - comment la liste des flags est-elle enregistrée ? Un enregistrement par
+          réflexion sur une classe de constantes ÉCRASE toute clé de
+          configuration listant les features : le dire évite de croire qu'on
+          pilote les flags par config ;
+        - quel est le TRANSPORT et la nature du client ? Un binding sur une
+          bibliothèque native en gRPC/TLS n'offre aucun `HttpClient` à
+          intercepter et aucun mode bootstrap par fichier — donc aucun mock
+          WireMock possible, et la seule parade est un mode résilient plus un
+          endpoint sur port fermé. Un client HTTP, lui, est mockable. Tranche.
+        - qu'est-ce qui DÉCLENCHE l'initialisation ? Ce n'est pas forcément la
+          première lecture de flag : ça peut être la première résolution d'un
+          singleton qui dépend du client, donc le premier message ou le premier
+          appel API — auquel cas le service démarre *healthy* puis échoue au
+          premier trafic. Dis aussi si la route de santé la déclenche.
+
+        §8 DÉPENDANCES CACHÉES : tout ce qui part en réseau ou touche le système
+        SANS passer par un client HTTP typé — extensions maison appelées au
+        démarrage (`AddIpiReferential()`, `AddCheatContext()`, métriques…),
+        services hébergés (subscriber, Quartz et ses crons, planificateurs),
+        clients SDK AWS instanciés directement, chemins de log attendus sur le
+        disque, sondes de santé. Pour chaque cron, donne l'expression ET dis s'il
+        se déclenchera pendant une suite de tests de quelques minutes — le
+        repousser dans l'overlay est une DIVERGENCE DE COMPORTEMENT vis-à-vis de
+        la production, à consigner ici.
+
+        Ajoute ce que le `Dockerfile` DU SERVICE active de son côté et qu'il
+        faudra neutraliser : profileur APM, agents de télémétrie, variables
+        d'instrumentation. Et donne, comme dernière colonne du tableau §8, le
+        TRAITEMENT LOCAL de chaque dépendance cachée — « créée par setup », « rien
+        à faire », « `mkdir -p` dans la commande du conteneur », « variable à
+        poser ». Une liste de dépendances sans sa colonne de traitement se relit
+        mais ne s'applique pas.
+
+        Dans config.json : `{ "flags": [{ "name": ..., "default": ...,
+        "offline_effect": ... }], "container_env": [{ "key": ..., "value": ...,
+        "required_at_boot": true|false }], "hidden": [ "..." ],
+        "crons": [{ "name": ..., "expression": ..., "fires_during_test": true|false }] }`.
+        Puis `signals.flag_count` (entier).
+    outputs: [config.md, config.json]
+
+  - name: scan_blockers
+    agent: analyzer
+    model: opus   # delibere : scan de code exhaustif et cite (chemin:ligne) - sonnet perd la rigueur factuelle exigee
+    skills: [graphify-context, pixelhood-dotnet-service]
+    inputs:
+      path: "{{ inputs.repo_path }}"
+      runtime: "{{ inputs.runtime }}"
+      task: >
+        Réponds à UNE seule question sur {{ inputs.service }} : qu'est-ce qui
+        empêcherait ce service de DÉMARRER sur une machine sans accès au réseau
+        de l'entreprise ? Écris blockers.md plus blockers.json. Section 9.
+
+        Cherche, en citant `chemin:ligne` pour chacun :
+        - les `ValidateOnStart()` de `Program.cs` et, pour chaque options validé,
+          la liste EXHAUSTIVE de ce que le validateur exige — une valeur qui
+          n'existe que dans `appsettings.json` et qu'un overlay masquerait fait
+          refuser le démarrage ;
+        - les sections de configuration requises sans valeur par défaut ;
+        - les services hébergés qui lèvent au démarrage (`AddEventBusSubscriber`,
+          `AddQuartzHostedService`, planificateurs) ;
+        - tout constructeur qui LÈVE sur une variable d'environnement absente —
+          lis les constructeurs des services d'infrastructure, pas seulement
+          `Program.cs` ;
+        - les `BaseAddress` vides ou absentes du dépôt, en tenant compte du cycle
+          de vie : un use case singleton qui dépend d'un repository HTTP
+          transient fait partir l'exception à la construction du singleton ;
+        - l'absence de section `MongoOptions` et le mode Atlas
+          (`IsMongoAtlasCluster`) ;
+        - Flip : la première résolution de flag sans mode résilient ;
+        - les chemins de log ou de disque attendus ;
+        - la résolution des credentials AWS : profil nommé et exception dédiée si
+          rien n'est résolu, mais AUSSI la chaîne de fallback — un SDK qui finit
+          par interroger les endpoints de métadonnées d'instance (169.254.x.x) ne
+          lève pas, il ATTEND : le symptôme est un démarrage lent puis des
+          timeouts épars, pas une erreur claire ;
+        - la ou les routes de santé exactes, et si plusieurs sont mappées,
+          TOUTES.
+
+        Puis, question distincte et tout aussi importante : le service peut-il
+        devenir *unhealthy* APRÈS avoir été déclaré healthy ? Cherche toute
+        fenêtre de grâce, période de démarrage ou tolérance temporelle autour des
+        health checks. Une fenêtre de grâce fait passer un `wait_healthy` à
+        t≈25 s puis basculer le conteneur en échec à t≈65 s : si tu en trouves
+        une, donne sa durée et dis à quels instants il faut sonder pour obtenir
+        un verdict fiable.
+
+        Classe par gravité, et pour chaque bloqueur donne la CONTRE-MESURE
+        concrète dans un overlay ou une variable d'environnement.
+
+        Dans blockers.json : `{ "blockers": [{ "what": ..., "evidence": ...,
+        "severity": "fatal"|"degraded", "countermeasure": ... }],
+        "health_paths": [...], "health_grace_window_seconds": null|<entier> }`.
+    outputs: [blockers.md, blockers.json]
+
+  # --- Le sixième balayage n'est pas parallèle aux autres : un inventaire des trous ne veut rien
+  # dire tant que les cinq premiers n'ont pas dit ce qu'ils ont couvert. Il les prend en entrée.
+  - name: scan_gaps
+    agent: analyzer
+    model: opus   # delibere : scan de code exhaustif et cite (chemin:ligne) - sonnet perd la rigueur factuelle exigee
+    skills: [graphify-context]
+    needs: [scan_topology, scan_http, scan_data, scan_config, scan_blockers]
+    inputs:
+      path: "{{ inputs.repo_path }}"
+      topology: "{{ stages.scan_topology.outputs.topology }}"
+      http: "{{ stages.scan_http.outputs.http }}"
+      data: "{{ stages.scan_data.outputs.data }}"
+      config: "{{ stages.scan_config.outputs.config }}"
+      blockers: "{{ stages.scan_blockers.outputs.blockers }}"
+      task: >
+        Lis les cinq balayages de {{ inputs.service }} et écris gaps.md : ce que
+        cette cartographie NE couvre PAS. Section 10.
+
+        Une section 10 honnête vaut plus que quatre sections complètes, parce
+        qu'elle dit où le prochain échec viendra. Cherche :
+        - les fichiers du dépôt qu'aucun balayage n'a ouverts, et si ce silence
+          est un choix ou un oubli ;
+        - tout fait marqué **[déduit]** dans les cinq balayages, regroupé — c'est
+          la liste de ce qu'il faut confirmer en démarrant le conteneur ;
+        - les contradictions entre deux balayages, en disant lequel le code
+          soutient ;
+        - les inconnues qui ne peuvent se lever qu'à l'exécution : nommage réel
+          des files pour la version du subscriber en jeu, présence effective d'un
+          service AWS dans cette LocalStack, adressage S3 dans le réseau compose,
+          route de santé réellement servie. Pour chacune, donne la COMMANDE qui
+          la lève.
+        - ce que la stack locale devra divergerdu comportement de production
+          (crons repoussés, flags forcés, endpoints pointés sur un port fermé).
+
+        Ne comble aucun trou en devinant : ton livrable est la liste, pas la
+        réponse.
+    outputs: [gaps.md]
+
+  # ================================================================================================
+  # Deux écrivains, en parallèle, tous deux dérivés des MÊMES balayages. Ils sont volontairement
+  # indépendants : s'ils divergent, le relecteur le voit, et une divergence entre la prose et le
+  # descripteur est précisément le défaut qu'on veut attraper avant d'écrire un scénario.
+  #
+  # `scope: stage_dir_only` : ces stages n'écrivent que dans le dossier du run. Ni le dépôt du
+  # service ni celui de la stack ne sont touchés — c'est un humain qui recopie après relecture.
+  # ================================================================================================
+
+  - name: write_cartography
+    agent: executor
+    model: opus   # delibere : synthese finale de la cartographie a partir des 6 scans - la coherence prime sur le cout
+    skills: [writing-clearly-and-concisely]
+    scope: { mode: stage_dir_only }
+    needs: [scan_topology, scan_http, scan_data, scan_config, scan_blockers, scan_gaps]
+    inputs:
+      topology: "{{ stages.scan_topology.outputs.topology }}"
+      http: "{{ stages.scan_http.outputs.http }}"
+      data: "{{ stages.scan_data.outputs.data }}"
+      config: "{{ stages.scan_config.outputs.config }}"
+      blockers: "{{ stages.scan_blockers.outputs.blockers }}"
+      gaps: "{{ stages.scan_gaps.outputs.gaps }}"
+      task: >
+        Fusionne les six balayages en UN document, `cartography.md`, à recopier
+        ensuite dans `localstack/cheat-stack/docs/CARTOGRAPHIE-{{ inputs.service }}.md`.
+        Dis-le explicitement dans ton résumé, avec le chemin cible.
+
+        Titre : `# Cartographie — {{ inputs.service }}`. Puis, avant la première
+        section, deux phrases sur ce que couvre le document, et la phrase de
+        provenance : chaque fait vient du code de `{{ inputs.repo_path }}`
+        (branche et date), cite son fichier, et ce qui est déduit plutôt que lu
+        est marqué **[déduit]**.
+
+        Les DIX sections, dans cet ordre. Les titres sont EXACTEMENT ceux-ci, aux
+        N et M près, à remplacer par les décomptes réels. Ce qui suit entre
+        parenthèses après le titre est une consigne de CONTENU et ne doit pas
+        finir dans le titre :
+
+        `## 1. Vue d'ensemble`  (y placer les décomptes chiffrés)
+        `## 2. API HTTP entrante`
+        `## 3. Événements consommés (N souscriptions)`
+        `## 4. Messages publiés (N types, M topics)`
+        `## 5. MongoDB`  (une sous-section par collection, puis « Schéma appliqué en local »)
+        `## 6. Appels HTTP sortants (N clients typés, M incarnations à créer)`
+        `## 7. Feature flags`
+        `## 8. Dépendances cachées`
+        `## 9. Ce qui empêcherait le service de démarrer hors ligne`
+        `## 10. Points de couverture restants`
+
+        Mets les décomptes réels dans les titres des sections 3, 4 et 6 : ce sont
+        eux qu'on recoupe, et un titre qui les porte rend une incohérence visible
+        à la lecture.
+
+        Trois règles de fusion :
+        - Un fait vit dans UNE section. Les autres y renvoient.
+        - Là où deux balayages se contredisent, dis lequel le code soutient et
+          pourquoi ; ne moyenne pas.
+        - Ce que tu ne peux rattacher à aucun fichier va en section 10, pas en
+          prose affirmative.
+
+        Écris pour quelqu'un qui doit faire tourner ce service en local demain
+        matin sans avoir lu le dépôt.
+
+        TIENS-TOI À 400 LIGNES, 500 au plus. Le corrigé fait 376 lignes pour un
+        service de 14 souscriptions, 4 collections et 7 clients typés : c'est la
+        densité visée et elle est atteignable. Un document quatre fois plus long
+        n'est pas quatre fois plus utile — il cesse d'être lu, et sa section 9 s'y
+        noie. Pour tenir : des tableaux plutôt que de la prose, un fait une seule
+        fois, aucune reformulation de ce que la ligne citée dit déjà, aucun
+        récapitulatif en fin de section. Si tu dépasses, coupe le commentaire,
+        jamais les faits ni les citations.
+
+        CITATIONS : chaque ligne de tableau porte sa citation `chemin:ligne`, et
+        cette citation doit pointer la ligne que tu as VRAIMENT lue. Ré-ouvre le
+        fichier pour vérifier le numéro avant de l'écrire : citer l'attribut au
+        lieu de la signature, ou une ligne voisine, est l'erreur la plus fréquente
+        de cet exercice, et une citation fausse coûte plus cher que pas de
+        citation — elle envoie le lecteur suivant au mauvais endroit avec
+        confiance. Si tu n'es pas sûr du numéro, cite le fichier seul.
+    outputs: [cartography.md]
+
+  - name: write_descriptor
+    agent: executor
+    model: opus   # delibere : synthese finale de la cartographie a partir des 6 scans - la coherence prime sur le cout
+    skills: [pixelhood-dotnet-service]
+    scope: { mode: stage_dir_only }
+    needs: [scan_topology, scan_http, scan_data, scan_config, scan_blockers]
+    inputs:
+      topology_json: "{{ stages.scan_topology.outputs.topology }}"
+      http_json: "{{ stages.scan_http.outputs.http }}"
+      data_json: "{{ stages.scan_data.outputs.data }}"
+      config_json: "{{ stages.scan_config.outputs.config }}"
+      blockers_json: "{{ stages.scan_blockers.outputs.blockers }}"
+      task: >
+        Écris le BROUILLON du descripteur TypeScript de {{ inputs.service }} pour
+        le harness de `cheat-stack` : `descriptor.ts`, à recopier ensuite dans
+        `harness/src/services/{{ inputs.service }}/index.ts`. Dis le chemin cible
+        dans ton résumé.
+
+        Le descripteur est la SEULE source machine de la topologie de ce service
+        dans le harness ; la cartographie est sa contrepartie lisible. Exporte un
+        `ServiceDescriptor` conforme à `harness/src/services/types.ts` :
+        `name`, `entryAssembly`, `baseUrlEnv`, `baseUrl`, `apiPath`, `healthPath`,
+        `mongo { database, collections }`, `subscriptions[{ topic, messageType,
+        bus, handler, flag? }]`, `publications[{ topic, messageType }]`,
+        `mocks[]`, `flags`, `awsExtras?{ s3Buckets, schedulerGroups }`.
+
+        Trois interdits, chacun pour une raison précise :
+        - N'ÉCRIS AUCUNE LISTE DE NOMS DE FILES. Les files attendues se DÉRIVENT
+          de `subscriptions` via `queueName(entryAssembly, topic, messageType)`.
+          Une liste tapée à la main est fausse dès que la version du subscriber
+          change, et elle est fausse en silence.
+        - Ne recopie pas le nom de base Mongo depuis le nom du service : prends
+          celui que `scan_data` a lu dans terraform.
+        - Ne mets pas un nom de bus « qui ressemble » à celui d'un service
+          voisin. Un mauvais nom de bus n'échoue pas au démarrage, il échoue à la
+          première publication, bien plus tard et bien moins clairement.
+
+        Pour chaque hôte sortant, propose une entrée `mocks[]` en distinguant les
+        trois cas : réutiliser un mock existant de la stack tel quel, y ajouter
+        un mapping, ou créer un dossier de mock. Quand l'hôte est un autre
+        service Cheat, indique-le : il pourra devenir un vrai pair.
+
+        Commente chaque champ dont la valeur est **[déduite]** avec un
+        `// À CONFIRMER: <comment la lever>`. C'est un brouillon : un champ
+        marqué honnêtement vaut mieux qu'un champ plausible.
+    outputs: [descriptor.ts]
+
+  # ================================================================================================
+  # Le contrôle d'acceptation. Le triple recoupement est le cœur : c'est lui qui attrape l'oubli le
+  # plus fréquent de tout l'exercice — un handler enregistré dans une méthode d'aide, donc absent
+  # du tableau §3 alors que le décompte §1 le comptait (ou l'inverse).
+  # ================================================================================================
+
+  - name: review
+    agent: reviewer
+    model: opus   # delibere : verdict gate sur une cartographie d'architecture - une erreur ici est couteuse a rattraper
+    skills: [graphify-context, code-review-aidp, event-architecture]
+    needs: [write_cartography, write_descriptor]
+    inputs:
+      cartography: "{{ stages.write_cartography.outputs.cartography }}"
+      descriptor: "{{ stages.write_descriptor.outputs.descriptor }}"
+      subscription_count: "{{ stages.scan_topology.signals.subscription_count }}"
+      task: >
+        Audite la cartographie et le descripteur de {{ inputs.service }} contre le
+        code réel de `{{ inputs.repo_path }}`, et émets findings.json.
+
+        LE TRIPLE RECOUPEMENT, à faire en premier et à rapporter même s'il passe.
+        Ces trois nombres doivent être ÉGAUX :
+        (a) le décompte d'abonnements annoncé en section 1,
+        (b) le nombre de lignes du tableau de la section 3,
+        (c) `subscriptions.length` dans le descripteur.
+        S'ils diffèrent, va chercher la cause dans le code plutôt que d'aligner
+        les documents : la cause habituelle est un abonnement enregistré dans une
+        méthode d'aide appelée par `RegisterDependencies`, que l'un des trois a vu
+        et pas les autres. C'est un finding BLOQUANT.
+
+        Fais le même recoupement pour les collections (§1 contre §5 contre
+        `mongo.collections`) et les flags (§1 contre §7).
+
+        Pour les sortants, le recoupement est DIFFÉRENT et c'est un piège connu :
+        §6 doit porter DEUX décomptes distincts — hôtes DNS et incarnations à
+        créer — et c'est le second qui doit égaler `mocks[]` du descripteur.
+        Un document qui n'annonce qu'un seul nombre, ou qui aligne `mocks[]` sur
+        le compte DNS, est un finding BLOQUANT : appliqué tel quel il fait créer
+        trop peu de mocks, et les routes des dépendances fusionnées échouent en
+        silence.
+
+        VÉRIFICATION DES CITATIONS, sur un échantillon d'au moins quinze lignes
+        réparties sur les dix sections : ouvre le fichier et confirme que le
+        numéro cité porte bien le fait affirmé. C'est le mode d'échec dominant de
+        cet exercice — attribut cité au lieu de la signature, ligne voisine,
+        chemin dans le mauvais projet. Chaque citation fausse est un finding, et
+        un fichier inexistant ou dans le mauvais projet est BLOQUANT.
+
+        BUDGET : si le document dépasse 500 lignes, c'est un finding — dis quelles
+        sections sont à condenser et de combien, sans jamais proposer de retirer
+        un fait ou une citation.
+
+        Puis vérifie, en LISANT le code — une affirmation seulement plausible
+        n'est pas vérifiée :
+        - chaque ligne de tableau porte une citation `chemin:ligne`, et cette
+          ligne dit bien ce que la cartographie prétend ;
+        - tout ce qui n'a pas été lu est marqué **[déduit]** ; une affirmation non
+          citée et non marquée est un finding bloquant ;
+        - le nom de base Mongo vient de terraform, pas du nom du service ;
+        - les noms de bus sont ceux du code, côté Sub comme côté Pub, avec
+          exactement un `Default` par côté ;
+        - aucune liste de noms de files n'est écrite en dur dans le descripteur ;
+        - la section 9 couvre tout ce que `ValidateOnStart` exige, et rien n'y
+          manque parmi les constructeurs qui lèvent sur une variable absente ;
+        - la section 10 existe et n'est pas vide : une cartographie sans trou
+          déclaré est une cartographie qui n'a pas cherché ;
+        - les quatre pièges de contrat sont tranchés explicitement, dans un sens
+          ou dans l'autre : les en-têtes exigés par route, l'autorisation
+          appliquée contre seulement documentée, la politique de désérialisation
+          des réponses sortantes (casse exacte ou non), et ce que la route de
+          santé affirme réellement — répond-elle 200 quand une dépendance est
+          morte ? Chacun de ces quatre laissé implicite est un finding bloquant,
+          parce que chacun se paie par un scénario qui échoue pour la mauvaise
+          raison.
+
+        Est bloquant ce qui ferait écrire un overlay ou un scénario faux. Le
+        reste est confort. Pour chaque finding, donne le fichier et la ligne qui
+        le prouvent.
+    outputs: [findings.json]

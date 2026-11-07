@@ -1,0 +1,10 @@
+version: 5
+id: dev-csharp
+stages:
+  - name: explore
+    agent: analyzer
+    outputs: [context.md]
+  - name: implement
+    agent: executor
+    needs: [explore]
+    outputs: [changed-files.json]

@@ -1,0 +1,37 @@
+version: 5
+id: test-us-e2e
+description: >
+  Test automatisé de bout en bout d'une US : compose test-scenarios (conception
+  du kit exécutable + run-manifest.json) puis run-tests-dev (déploiement dev
+  optionnel + exécution des scénarios sur dev + rapport pass/fail). C'est
+  l'enchaînement « une fois test-scenarios fini → tests sur dev ».
+inputs:
+  ticket_id: { required: true,  kind: string, description: "Cle du ticket Jira de l'US a tester de bout en bout - transmis tel quel aux deux sous-pipelines composes (test-scenarios puis run-tests-dev)." }
+  deploy:    { required: false, kind: bool,   default: true, description: "Déployer sur dev avant de tester." }
+  branch:    { required: false, kind: string, description: "Branche à déployer/tester (sinon deploy.ref_default du dev-target.json)." }
+
+stages:
+  # 1. Conçoit et génère le kit + le manifest (réutilise tout test-scenarios).
+  - name: design
+    type: pipeline
+    uses: test-scenarios
+    with:
+      ticket_id: "{{ inputs.ticket_id }}"
+    outputs:
+      - { name: kit_dir,  from: build_test_kit.kit_dir }
+      - { name: manifest, from: build_test_kit.run-manifest }
+
+  # 2. Exécute le kit sur dev et produit le rapport (réutilise run-tests-dev).
+  - name: run
+    type: pipeline
+    uses: run-tests-dev
+    needs: [design]
+    with:
+      ticket_id: "{{ inputs.ticket_id }}"
+      kit_dir: "{{ stages.design.outputs.kit_dir }}"
+      run_manifest: "{{ stages.design.outputs.manifest }}"
+      deploy: "{{ inputs.deploy }}"
+      branch: "{{ inputs.branch }}"
+    outputs:
+      - { name: report, from: evaluate.test-report }
+      - { name: results, from: evaluate.results }

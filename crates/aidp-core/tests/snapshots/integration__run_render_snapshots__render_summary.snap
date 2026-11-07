@@ -1,0 +1,14 @@
+---
+source: crates/aidp-core/tests/run_render_snapshots.rs
+expression: render_summary(&deterministic_state())
+---
+# Summary 20260101-000000-abcd
+
+- pipeline: render-snapshots
+- stages success: 2/4
+- cancel: 1
+- skipped: 1
+- total duration: 4m 15s
+- total tokens: 1.3M
+- run_dir: run
+- last workflow status: done

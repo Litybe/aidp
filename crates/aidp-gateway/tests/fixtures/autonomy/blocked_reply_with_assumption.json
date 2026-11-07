@@ -1,0 +1,6 @@
+{
+  "status": "blocked",
+  "summary": "s",
+  "assumptions": [{ "choice": "c", "reason": "r" }],
+  "ask_user_questions": [{ "id": "q1", "question": "which?" }]
+}

@@ -1,0 +1,49 @@
+---
+source: crates/aidp-cli/tests/cli_surface.rs
+expression: normalized
+---
+The resident control plane: headless claude sessions, automations (cron / webhook / event), HTTP API + SSE for the viewer
+
+Usage: <BIN> gateway [OPTIONS] <COMMAND>
+
+Commands:
+  serve        Run the gateway daemon (sessions, automations, HTTP API + SSE)
+  status       Daemon status: sessions, automations, rate-limit windows
+  sessions     List sessions
+  start        Start a session: a pipeline (`--template`, `--target`) or a free prompt (`--prompt`)
+  reply        Send free text to a running session (gate answers go through the viewer)
+  cancel       Cancel a running session
+  automations  Manage automations
+  projects     Manage the project registry the gateway launches sessions in
+  presets      Manage launch presets
+  queue        Inspect and steer the per-project launch queue
+  worktrees    Inspect and prune the per-ticket git worktrees
+  dispatcher   Manage the ticket-autopilot dispatcher (lot 9a): the resident loop that turns `todo` tickets into running sessions
+  events       Recent gateway events
+  help         Print this message or the help of the given subcommand(s)
+
+Options:
+      --workspace-root <PATH>
+          Workspace to act on instead of the current directory
+
+      --vault <PATH>
+          Obsidian vault to use instead of `AIDP_VAULT`, `~/.aidp/config.json` or auto-detection
+
+      --no-vault
+          Ignore any vault and keep artefacts in the repo (`.aidp/pipelines/`)
+
+      --format <FORMAT>
+          Output format. Each command keeps its own default when omitted
+
+          Possible values:
+          - json-compact: One compact JSON document on a single line
+          - json-pretty:  One indented JSON document
+          - ndjson:       One compact JSON value per line
+          - text:         Human-readable text
+          - footer:       The one-line cost footer of a report, for `<BIN> cost ticket`; text elsewhere
+
+  -v, --verbose...
+          More diagnostics on stderr; repeat for more (`-vv`)
+
+  -h, --help
+          Print help (see a summary with '-h')

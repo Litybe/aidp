@@ -1,0 +1,12 @@
+version: 5
+id: native-out-of-scope
+kind: pipeline
+description: An executor limited to one directory, run by the native executor with a scripted provider.
+inputs:
+  feature: { required: false, kind: string, default: native-scope }
+stages:
+  - name: edit
+    description: Edit files under allowed/ only.
+    agent: executor
+    scope: { mode: custom, allowed: ["allowed/**"] }
+    outputs: [edit.md]

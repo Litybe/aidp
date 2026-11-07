@@ -1,0 +1,42 @@
+{
+  "schema": "aidp-plan.v1",
+  "summary": "Four tasks: two on their own files, two writing the same file.",
+  "tasks": [
+    {
+      "id": "T1",
+      "title": "Write the first file",
+      "kind": "code",
+      "prompt": "Create src/a.txt.",
+      "instructions": ["Create the file"],
+      "needs": [],
+      "files": ["src/a.txt"]
+    },
+    {
+      "id": "T2",
+      "title": "Write the second file",
+      "kind": "code",
+      "prompt": "Create src/b.txt.",
+      "instructions": ["Create the file"],
+      "needs": [],
+      "files": ["src/b.txt"]
+    },
+    {
+      "id": "T3",
+      "title": "Write the shared file first",
+      "kind": "code",
+      "prompt": "Create src/shared_one.txt.",
+      "instructions": ["Create the file"],
+      "needs": [],
+      "files": ["src/shared_one.txt"]
+    },
+    {
+      "id": "T4",
+      "title": "Write the shared file second",
+      "kind": "code",
+      "prompt": "Extend src/shared_one.txt.",
+      "instructions": ["Extend the file"],
+      "needs": [],
+      "files": ["src/shared_one.txt"]
+    }
+  ]
+}

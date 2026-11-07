@@ -1,0 +1,12 @@
+version: 5
+id: fogroup
+stages:
+  - name: a
+    agent: analyzer
+    outputs: [a.md]
+  - name: b
+    agent: executor
+    fan_out: { items: ["x", "y"] }
+  - name: c
+    agent: analyzer
+    outputs: [c.md]

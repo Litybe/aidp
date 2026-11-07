@@ -1,0 +1,9 @@
+version: 5
+id: scoped-stage
+description: One executor stage declaring a tests-only scope, for scope resolve/scope_json parity.
+inputs: {}
+stages:
+  - name: implement
+    agent: executor
+    scope:
+      mode: tests

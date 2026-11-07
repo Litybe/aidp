@@ -1,0 +1,15 @@
+version: 5
+id: native-autonomous
+kind: pipeline
+description: Two analyzer stages without outputs, run autonomously by the native executor.
+inputs:
+  feature: { required: false, kind: string, default: native-autonomous }
+stages:
+  - name: ask
+    description: Raise a question or escalate a decision.
+    agent: analyzer
+
+  - name: after
+    description: Run once the first stage is settled.
+    agent: analyzer
+    needs: [ask]

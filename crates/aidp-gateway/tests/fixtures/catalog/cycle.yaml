@@ -1,0 +1,9 @@
+version: 5
+id: cyclic
+stages:
+  - name: first
+    needs: [second]
+    outputs: [first.md]
+  - name: second
+    needs: [first]
+    outputs: [second.md]

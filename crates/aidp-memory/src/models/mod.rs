@@ -1,0 +1,24 @@
+//! Data models of this crate: one struct per file, constants and enums apart.
+
+pub mod add_outcome;
+pub mod chunk;
+pub mod constants;
+pub mod context_block;
+pub mod context_request;
+pub mod enums;
+pub mod hit;
+pub mod index_options;
+pub mod index_report;
+pub mod index_root;
+pub mod ingest_report;
+pub mod memory;
+pub mod memory_filter;
+pub mod memory_patch;
+pub mod memory_ref;
+pub mod memory_scope;
+pub mod new_memory;
+pub mod packed;
+pub mod project_ref;
+pub mod raw_chunk;
+pub mod search_query;
+pub mod store_stats;

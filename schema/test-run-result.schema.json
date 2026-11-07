@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/ai-dev-pipeline/schema/test-run-result.schema.json",
+  "title": "test-run-result.json",
+  "description": "Per-scenario result produced by the run-tests-dev `run_scenarios` stage (one file per scenario, e.g. results/SC-1.json). Records each executed step's observed outcome versus expected, and the scenario verdict.",
+  "type": "object",
+  "required": ["schema_version", "run_id", "scenario_id", "status", "steps"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": { "type": "integer", "enum": [1], "default": 1 },
+    "run_id": { "type": "string" },
+    "scenario_id": { "type": "string", "pattern": "^SC-[0-9A-Za-z_-]+$" },
+    "acceptance_criterion": { "type": ["string", "null"] },
+    "status": { "type": "string", "enum": ["pass", "fail", "error"] },
+    "notes": { "type": ["string", "null"] },
+    "steps": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["order", "kind", "phase", "status"],
+        "additionalProperties": false,
+        "properties": {
+          "order": { "type": "integer", "minimum": 1 },
+          "kind": { "type": "string", "enum": ["http", "mongo", "sqs"] },
+          "phase": { "type": "string", "enum": ["setup", "trigger", "verify", "cleanup"] },
+          "artifact": { "type": ["string", "null"] },
+          "command": { "type": ["string", "null"], "description": "The aidp command executed (secrets redacted)." },
+          "expected": { "type": ["object", "string", "null"] },
+          "observed": { "type": ["object", "string", "number", "boolean", "null"], "description": "Captured result (status/body/rows/message_id...)." },
+          "status": { "type": "string", "enum": ["pass", "fail", "error", "skipped"] },
+          "evidence": { "type": ["string", "null"], "description": "Short human-readable proof, e.g. 'HTTP 200, body.id=42'." }
+        }
+      }
+    }
+  }
+}

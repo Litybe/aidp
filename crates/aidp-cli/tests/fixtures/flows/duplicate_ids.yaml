@@ -1,0 +1,9 @@
+id: duplicate-ids
+version: 1
+steps:
+  - id: first
+    kind: action
+    use: noop
+  - id: first
+    kind: action
+    use: noop

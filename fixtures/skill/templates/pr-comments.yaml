@@ -1,0 +1,169 @@
+version: 5
+id: pr-comments
+description: >-
+  Process a GitHub PR's review comments end-to-end — analyze & classify the
+  threads, plan a fix per comment, apply the fixes, then commit/push, reply
+  per-thread with the decision taken and resolve the threads that settings.resolve_policy
+  allows. An optional selection restricts the run to chosen threads and extra
+  remarks. Tracks via track = quick | standard | deep.
+
+  Runs autonomously in native mode: gates are pre-approved, and decisions that
+  need a human (`needs-reviewer`) are reported in `signals.escalations`, not
+  blocking.
+# The PR to process is the run TARGET (`--target <pr-number|url>`), which `aidp`
+# maps to `inputs.target`. When no target is given, the collect/reply stages
+# auto-detect the PR from the current git branch (see pr-comments-collect-aidp).
+inputs:
+  pr:
+    required: false
+    kind: string
+    description: >-
+      PR number or URL. Normally passed as the run target (--target); the value
+      lands in inputs.target. If absent, the pipeline auto-detects the PR from
+      the current branch.
+  feature:
+    required: false
+    kind: string
+    description: >-
+      Jira ticket key the PR implements (e.g. PIXEL-5694). Set automatically by
+      the CI autopilot from the PR's branch name; it names the run's vault
+      folder (<vault>/Pipelines/<repo>/<feature>/) so a CI fix run sits beside
+      the ticket's other runs instead of in a PR-numbered bucket. Absent when
+      the branch carries no ticket key - the run then groups under the PR
+      number, which is correct for a hand-made PR.
+  track:
+    required: true
+    kind: enum
+    values: [quick, standard, deep]
+    default: standard
+    description: >-
+      Run depth: quick plans fixes without test work, standard/deep plan each
+      fix together with its tests. Defaults to standard.
+  selection:
+    required: false
+    kind: string
+    description: >-
+      JSON string {threads:[threadId], points:[{id, body}], note}. When present,
+      only the listed threads are processed and each point becomes a thread-less
+      remark answered in the global PR comment. When absent, every unresolved
+      thread is processed.
+  stack:
+    required: false
+    kind: enum
+    values: [auto, generic, rust, csharp, lambda-ts]
+    default: auto
+    description: >-
+      Language stack of the repo, which picks the language skills of the
+      code/tests stages via skills_by. auto (default) lets `aidp run init`
+      detect it from marker files (Cargo.toml, *.sln / *.csproj,
+      serverless.* + package.json); generic keeps the multi-stack C# +
+      Lambda TS skill set.
+  publish:
+    required: false
+    kind: enum
+    values: [agent, host]
+    default: agent
+    description: >-
+      Who publishes the branch: agent (default) commits and pushes; host (a
+      ticket flow) publishes after the run, so the run only commits and never
+      runs git push.
+settings:
+  max_correction_iterations: 2
+  resolve_policy: fixed_and_not_relevant
+  knowledge_graph:
+    enabled: true
+    refresh: never
+    code_only: true
+stages:
+  # 1) ANALYZE — fetch the PR diff + review threads (with GraphQL node IDs),
+  #    classify every comment, emit the comments.json contract.
+  - name: collect
+    agent: analyzer
+    skills: [pr-comments-collect-aidp, graphify-context, enforcing-decision-records]
+    description: >-
+      Selection: `{{ inputs.selection }}`. When it is a non-empty JSON object,
+      keep ONLY the threads it lists and turn each entry of `points` into a
+      thread-less remark (no thread id, answered by the global PR comment).
+      When it is empty, process every unresolved thread.
+    policy:
+      - "A non-empty selection filters the threads to the listed ids; every point becomes a remark with no thread id."
+      - "An empty selection changes nothing: collect every unresolved thread."
+      - "Read GitHub only through `aidp gh`: `pr-resolve` for the PR and its owner/repo, `pr-diff` for the diff, `pr-review-threads` for the threads with their node ids, `pr-comments` for the conversation comments. Never call `gh` itself."
+    inputs: { pr: "{{ inputs.target }}", selection: "{{ inputs.selection }}" }
+    outputs: [comments.json, context.md]
+    when: "true"
+
+  # 2) PLAN — one decision per comment (fix | reply_only | wontfix | obsolete),
+  #    with the concrete change and the drafted reply. Gated: the user approves
+  #    the plan before any code is touched.
+  - name: plan
+    agent: planner
+    skills: [graphify-context, pr-comments-plan-aidp, code-review-aidp, enforcing-decision-records]
+    needs: [collect]
+    with: { mode: feature }
+    policy:
+      - "Every decision carries an issue: fix gives `fixed`, wontfix or obsolete gives `not-relevant` (the reply says why), reply_only gives `needs-reviewer`."
+      - "Report every `needs-reviewer` decision in `signals.escalations` (array of {id, decision, reason}) and name each one in the summary. It never sets status `blocked` and never pauses the run."
+    inputs:
+      comments: "{{ stages.collect.outputs.comments }}"
+      task: >
+        Besides decisions.json, write plan.json: one task per group of `fix`
+        decisions that touch the same files, so tasks stay file-disjoint and
+        run in parallel. A task carries the production change AND its tests
+        (kind `code`); add a separate `tests` task only when a test file is
+        shared by several fixes. Track `{{ inputs.track }}`: on `quick`, plan
+        no test work at all. `reply_only`, `wontfix` and `obsolete` decisions
+        get no task. When no decision needs a code change, emit exactly one
+        `chore` task whose only file is `changed-files.json` and whose prompt
+        is to write an empty changes list there.
+    outputs: [decisions.json, plan.json, plan.md]
+
+  # 3a) FIX — plan-driven: `aidp workflow emit` compiles one sub-agent per task
+  #     of plan.json (code + its tests), serialises any two tasks writing the
+  #     same file, then a merge sub-agent builds and runs the suite once.
+  #     TWO-PASS: the first emit stops here (`awaiting_plan`).
+  - name: fix
+    agent: executor
+    skills: [graphify-context]
+    skills_by: { input: stack, map: { rust: [rust-dev-aidp, rust-testing-aidp], csharp: [csharp-dev-aidp, feature-testing-aidp], lambda-ts: [lambda-ts-dev-aidp, feature-testing-aidp] }, default: [csharp-dev-aidp, lambda-ts-dev-aidp, feature-testing-aidp] }
+    needs: [plan]
+    inputs: { decisions: "{{ stages.plan.outputs.decisions }}" }
+    scope: { mode: repo_wide }
+    plan_tasks:
+      from: "{{ stages.plan.outputs.plan }}"
+      max: 4
+      merge_hint: >
+        Apply the shared-file changes the tasks deferred to you, then build and
+        run the full test suite once. Fix cross-task breakage and write the
+        consolidated changed-files.json. For anything still red, reply
+        `needs_review`, name each failing test in `summary` and set
+        `signals.tests_failed`: the commit stage reports it.
+    outputs: [changed-files.json]
+
+  # 4) COMMIT & REPLY — commit/push the fixes to the PR branch (commit only with
+  #    `publish: host`), then reply to each thread with the decision (+ commit
+  #    sha) and post a summary comment.
+  #    Gated: nothing is pushed or posted to GitHub before the user approves.
+  - name: commit_and_reply
+    agent: executor
+    skills: [pr-comments-reply-aidp, writing-clearly-and-concisely]
+    skills_by: { input: publish, map: { host: [] }, default: [git-push] }
+    needs: [plan, fix]
+    inputs:
+      pr: "{{ inputs.target }}"
+      decisions: "{{ stages.plan.outputs.decisions }}"
+      changed: "{{ stages.fix.outputs.changed-files }}"
+      publish: "{{ inputs.publish }}"
+    description: >-
+      Resolve policy for this run: `{{ settings.resolve_policy }}`.
+    policy:
+      - "Write replies.json in the stage dir with, per thread, {thread_id, decision, issue, reply_posted}."
+      - "When the input `publish` is `host`, commit the fixes and never run git push: the host publishes the branch right after the run as one new commit. Reply without a commit sha, saying the fix ships with that publish."
+      - "Write to GitHub only through `aidp gh`: `thread-reply <thread_id> --body-file -` per thread, `thread-resolve`, then `pr-comment <owner/repo> <number> --body-file -` for the summary. Never call `gh` itself and never write a GraphQL mutation."
+      - "Resolve threads only AFTER a successful push (a successful commit when `publish` is `host`) and a successful reply, with `aidp gh thread-resolve`."
+      - "Policy never resolves nothing; fixed resolves issue `fixed`; fixed_and_not_relevant resolves `fixed` and `not-relevant`."
+      - "Issue `needs-reviewer` is always left open. A thread whose reply failed is never resolved. Skip threads already resolved, so a resume stays idempotent."
+      - "The final summary comment starts with `<!-- aidp:pr-comments-summary -->` and lists resolved, left open and failures."
+      - "Answer point remarks (no thread id) in that global summary comment."
+    scope: { mode: stage_dir_only }   # git and aidp gh are Bash, not file writes
+    outputs: [replies.json]

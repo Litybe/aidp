@@ -1,0 +1,8 @@
+id: perso-delivery
+version: 1
+steps:
+  - id: approve
+    kind: human
+    phase: Review
+    prompt: Approve the result?
+    choices: [approve, reject]

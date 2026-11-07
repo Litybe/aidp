@@ -1,0 +1,66 @@
+{
+  "_comment": "ai-dev-pipeline-v7 CI autopilot hooks. Merge into ~/.claude/settings.json with `aidp setup merge-hooks --example <this file> --target ~/.claude/settings.json` (idempotent), or via /pipeline-setup-v7. These are SEPARATE from hooks/settings.example.json, which guards a running pipeline; these START one.",
+
+  "_why_these_three": "Claude Code hooks fire on Claude's lifecycle, not GitHub's — there is no 'CI failed' event. So the autopilot hooks onto the three moments where reacting is useful: right after a push (background wait for the verdict), at the end of a turn (pick up anything pending), and on the next prompt (inject the current picture as context). All three are the same binary reading the hook JSON on stdin, so settings.json holds one-liners and there is no PowerShell quoting to get wrong — `aidp ci hook` is cross-platform as written.",
+
+  "_behaviour": "Each hook is a no-op (exit 0, silent) unless `.aidp/ci-autopilot.json` is enabled AND the current branch has an OPEN, non-draft PR with a real problem. A problem is fingerprinted on (kind, repo, pr, head sha, detail), so the same failure wakes the session at most `max_notifications` times (default 1) and a fix that changes the head sha produces a fresh signal. `aidp ci ack --all` silences what is pending; `aidp ci config --enable false --save` turns the whole thing off for one repo.",
+
+  "_cost": "The Stop hook is the only one that runs on every turn. It reads a cached probe: 120s TTL when a live PR is being watched, 900s when there is nothing to watch (no PR, draft, master, merged). In a repo with no PR it is one `gh` call per 15 minutes.",
+
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "aidp ci hook post-tool",
+            "asyncRewake": true,
+            "timeout": 2100,
+            "statusMessage": "aidp: watching CI in the background"
+          }
+        ]
+      }
+    ],
+
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "aidp ci hook stop",
+            "timeout": 90
+          }
+        ]
+      }
+    ],
+
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "aidp ci hook prompt",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  },
+
+  "_hook_notes": {
+    "PostToolUse": "Fires on every Bash call; `aidp ci hook post-tool` reads `tool_input.command` and returns immediately unless it was a `git push` / `gh pr create` / `gh pr ready` / `gh run rerun` (matched loosely, so `rtk git push` counts too). When it was, `asyncRewake: true` lets it sit in the background for up to `watch_timeout_seconds` (default 1800) polling the checks, and wake the session on exit 2 the moment the build goes red. `timeout` is set above that so the hook is not killed before the CI concludes. This is the hook that makes the whole thing feel automatic: you push, you carry on, and Claude comes back to you when CI complains.",
+
+    "Stop": "Fires when Claude finishes responding. Exits 2 with the directive when a signal is pending, which makes the session continue instead of going idle — so the fix pipeline starts without you typing anything. Guarded three ways against loops: `stop_hook_active` from the hook input, the `max_notifications` cap, and a hard skip while `.aidp/active-run` exists (never interrupt a running pipeline to start another).",
+
+    "UserPromptSubmit": "Cache-only, never touches the network, so your prompt is never held up. Its stdout becomes context Claude sees, which is how a session that was not woken still knows the PR has three unresolved comments and a red gate.",
+
+    "SessionStart": "Deliberately NOT installed. SessionStart cannot inject context (it only supports `systemMessage`), and probing GitHub on every session start costs more than it returns. `aidp ci hook session-start` exists if you want a one-line human notice — add it yourself if so."
+  },
+
+  "_prerequisites": {
+    "aidp": "must be on PATH (`/pipeline-setup-v7` puts it there).",
+    "gh": "authenticated (`gh auth status`). Without it every probe is a silent no-op.",
+    "sonar": "optional. Without SONAR_TOKEN + a resolvable host the `sonar` signal degrades to nothing and the other two keep working. Set it up with `aidp sonar config --host https://sonarqube.pixelhood.net --save` plus `SONAR_TOKEN` in the environment."
+  }
+}

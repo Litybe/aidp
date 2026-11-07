@@ -1,0 +1,9 @@
+version: 5
+id: inloop
+stages:
+  - { name: plan, agent: planner, outputs: [plan.json] }
+  - name: fix_loop
+    type: loop
+    max_iterations: 2
+    body:
+      - { name: refix, agent: executor, plan_tasks: { from: "{{ stages.plan.outputs.plan }}" } }

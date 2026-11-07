@@ -1,0 +1,7 @@
+id: unknown-when
+version: 1
+steps:
+  - id: first
+    kind: action
+    use: noop
+    when: steps.ghost.outputs.ready == true

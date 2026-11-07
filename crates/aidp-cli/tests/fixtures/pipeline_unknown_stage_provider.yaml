@@ -1,0 +1,7 @@
+version: 5
+id: unknown-stage-provider
+description: Stage naming a provider that is not configured.
+stages:
+  - name: build
+    agent: executor
+    provider: nonexistent-provider

@@ -1,0 +1,1 @@
+{"servers":[{"name":"private-http","transport":"http","url":"https://example.invalid/${TOKEN}","headers":{"Authorization":"Bearer ${TOKEN}"}},{"name":"private-stdio","transport":"stdio","command":"mcp-worker","args":["${TOKEN}"],"env":{"WORKER_TOKEN":"${TOKEN}"}}],"environment":{"TOKEN":"confidential-fixture-value"}}

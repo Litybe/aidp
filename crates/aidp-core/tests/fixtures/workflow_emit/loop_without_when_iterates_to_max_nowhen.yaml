@@ -1,0 +1,12 @@
+version: 5
+id: nowhenloop
+settings: { max_correction_iterations: 3 }
+stages:
+  - name: seed
+    agent: analyzer
+    outputs: [x.md]
+  - name: spin
+    type: loop
+    max_iterations: 3
+    body:
+      - { name: step, agent: executor, needs: [seed] }

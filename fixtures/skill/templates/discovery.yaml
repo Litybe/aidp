@@ -1,0 +1,33 @@
+version: 5
+id: discovery
+description: Brainstorm a backlog from a PRD or vague brief, exploring multi-source context.
+inputs:
+  brief: { required: true, kind: string, description: "Free-text PRD or vague brief describing the feature area to brainstorm a backlog for." }
+  create_tickets: { required: false, kind: bool, default: false, description: "Creer reellement les tickets Jira du backlog (sinon le stage stories_optional reste saute)" }
+settings:
+  knowledge_graph:
+    enabled: true
+    refresh: never
+    code_only: true
+stages:
+  - name: gather
+    agent: analyzer
+    skills: [pipeline-discovery, graphify-context, analyze-confluence-docs-aidp, analyze-jira-ticket-aidp]
+    inputs: { brief: "{{ inputs.brief }}" }
+    outputs: [signals.md]
+
+  - name: ideate
+    agent: planner
+    skills: [pipeline-discovery]
+    needs: [gather]
+    with: { mode: decomposition }
+    outputs: [backlog.json]
+    gate: true
+
+  - name: stories_optional
+    agent: executor
+    skills: [create-ticket, ticket-decomposition]
+    needs: [ideate]
+    scope: { mode: stage_dir_only }
+    when: "{{ inputs.create_tickets | default(false) }}"
+    outputs: [created-tickets.json]

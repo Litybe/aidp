@@ -1,0 +1,8 @@
+version: 5
+id: bigbudget
+settings: { max_stages_per_pass: 2 }
+stages:
+  - name: big
+    type: pipeline
+    uses: bigchild
+  - { name: pr, agent: executor, needs: [big] }

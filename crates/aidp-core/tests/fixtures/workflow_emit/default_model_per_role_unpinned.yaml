@@ -1,0 +1,6 @@
+version: 5
+id: model-defaults
+stages:
+  - name: replan
+    agent: planner
+  - name: notify

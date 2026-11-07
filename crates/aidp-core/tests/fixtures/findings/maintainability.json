@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "run_id": "run-c6-fixture",
+  "iter": 0,
+  "generated_at": "2026-09-09T10:00:00Z",
+  "severity_counts": { "blocking": 0, "major": 0, "minor": 1, "info": 0 },
+  "has_blocking_findings": false,
+  "findings": [
+    {
+      "id": "F-1",
+      "severity": "minor",
+      "category": "maintainability",
+      "file": "src/util.rs",
+      "line": 7,
+      "title": "Duplicated parsing helper",
+      "description": "The parse_record function is duplicated in three places instead of being extracted to a shared utility.",
+      "suggestion": "Extract parse_record to a shared module and import it.",
+      "related_ids": []
+    }
+  ],
+  "checks": [
+    { "id": "C-lint-run", "name": "Ran the linter", "status": "pass", "evidence": "cargo clippy --workspace clean", "finding_ids": [] }
+  ]
+}

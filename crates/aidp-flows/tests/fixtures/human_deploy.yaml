@@ -1,0 +1,9 @@
+id: human-deploy
+version: 1
+steps:
+  - id: deploy_approval
+    kind: human
+    choices: [approve, reject]
+  - id: deploy
+    kind: action
+    use: deploy.dev

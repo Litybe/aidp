@@ -1,0 +1,24 @@
+version: 5
+id: native-plan-tasks
+kind: pipeline
+description: Plan tasks run by the native executor with a scripted provider.
+inputs:
+  feature: { required: false, kind: string, default: native-plan-tasks }
+settings:
+  max_parallel: @MAX_PARALLEL@
+  on_item_failure: @POLICY@
+stages:
+  - name: plan
+    description: Write the task plan.
+    agent: planner
+    outputs: [plan.json, plan.md]
+
+  - name: implementation
+    description: Apply the plan tasks to the working tree.
+    agent: executor
+    needs: [plan]
+    scope: { mode: repo_wide }
+    plan_tasks:
+      from: "{{ stages.plan.outputs.plan }}"
+      max: @STAGE_MAX@
+    outputs: [changed-files.json]

@@ -1,0 +1,105 @@
+version: 5
+id: func-doc
+description: Produce functional documentation (user stories, parcours, edge cases) for a feature.
+inputs:
+  # Feature name/label — also the run's grouping folder (see `{{ feature }}`).
+  feature: { required: true, kind: string, description: "Feature name/label to document — also names the run's grouping folder." }
+  # --- DEMAND. At most one of `jira_keys` / `prompt` carries what to document;
+  # `gather` resolves whichever arrived into the same analysis.md, so `write` /
+  # `review` / `knowledge_sync` are identical between the modes. Both empty is
+  # legal and is this template's historical mode: a feature-only run documenting
+  # `feature` from the knowledge base and the code graph, with no demand at all.
+  #
+  # Mode A (Jira): optional Jira US backing this feature — one or several
+  # (unitary US slicing). Empty list => not Jira-driven.
+  jira_keys: { required: false, kind: list, default: [] }
+  # Mode B (prompt): the demand in plain text, with no ticket behind it — a local
+  # ticket's body arrives here, and `gather` turns it into the same requirements
+  # note it would have derived from the US. `feature` stays REQUIRED in this mode:
+  # nothing else names the run's grouping folder (in prompt mode `aidp` sets it to
+  # the ticket key). The default is `""` and not the `false` sentinel
+  # `dev-discovery` uses, because nothing here substitutes it into a `when:`
+  # guard — this is a top-level template, like dev-csharp.
+  prompt: { required: false, kind: string, default: "" }
+settings:
+  knowledge_graph:
+    enabled: true
+    refresh: never
+    code_only: true
+stages:
+  # What the knowledge base already says about this service's behaviour — read
+  # before writing, so the doc extends the existing understanding.
+  - name: knowledge
+    type: pipeline
+    uses: knowledge-read
+    with: { focus: "{{ inputs.feature }}" }
+    outputs:
+      - { name: knowledge_context, from: knowledge_read.knowledge_context }
+
+  # The demand stage: it reads whichever demand arrived and turns it into
+  # analysis.md, the requirements note `write` documents from. Unlike
+  # `dev-discovery`, this stage is NOT split into a Jira half and a prompt half —
+  # it carries no Jira-only skill and already ran ticket-less (`jira_keys` has
+  # always been optional and unguarded here), so a pair of mutually exclusive
+  # `when:` stages would break the existing feature-only run and rename the stage
+  # the downstream `knowledge_sync` addresses. Instead it takes BOTH demand
+  # inputs, like `dev-discovery`'s own dual-mode `discover_confluence` /
+  # `discover_code`, and the task below says which one to believe.
+  - name: gather
+    agent: analyzer
+    skills: [graphify-context, analyze-confluence-docs-aidp]
+    needs: [knowledge]
+    inputs:
+      feature: "{{ inputs.feature }}"
+      jira_keys: "{{ inputs.jira_keys }}"
+      prompt: "{{ inputs.prompt }}"
+      knowledge_context: "{{ stages.knowledge.outputs.knowledge_context }}"
+      task: >
+        Gather everything needed to document `feature` functionally and write it
+        to analysis.md. At most one of `jira_keys` / `prompt` carries a demand —
+        both can also be empty. When `jira_keys` is non-empty the run is
+        Jira-driven: read those US and
+        the Confluence pages they link, exactly as before — `prompt` is empty and
+        you must ignore it. When `jira_keys` is empty (`[]`) and `prompt` is
+        non-empty the run is prompt-driven and `prompt` IS the demand, with no
+        ticket to read: quote it
+        verbatim at the top of the note so nothing is lost, restate it as the
+        behaviour to document, and seed the Confluence and code-graph reads from
+        it and from `feature` rather than from ticket links. In that mode also be
+        explicit about what the request does NOT say — assumptions you filled in,
+        and open questions a human must answer — so the writer can tell which
+        parts of the doc come from the demand and which from the code. When BOTH
+        are empty there is no demand: this is the historical feature-only run, and
+        `feature` alone is the subject. Document the behaviour that exists today,
+        from the knowledge base and the code graph (plus whatever Confluence
+        `feature` leads you to); do NOT read the empty `prompt` as a demand, and do
+        not invent one to fill the hole. State plainly that no ticket and no
+        written request back this doc, and list the open questions a human must
+        answer. Invent no requirement neither source supports.
+    outputs: [analysis.md]
+
+  - name: write
+    agent: executor
+    skills: [functional-doc-authoring, writing-clearly-and-concisely]
+    needs: [gather]
+    scope: { mode: stage_dir_only }
+    outputs: [functional-doc.md]
+
+  - name: review
+    agent: reviewer
+    skills: [code-review-aidp, writing-clearly-and-concisely]
+    needs: [write]
+    outputs: [findings.json]
+    gate: true
+
+  # The functional doc itself stays a per-feature artefact of this run (its
+  # filename is fixed, so several features would collide in the shared base).
+  # What DOES belong to the service — the behaviour, rules and edge cases this
+  # feature revealed — is merged into the knowledge base here, after the review
+  # gate so only validated content lands there.
+  - name: knowledge_sync
+    type: pipeline
+    uses: knowledge-update
+    needs: [review]
+    with:
+      sources: "{{ stages.write.outputs.functional-doc }}, {{ stages.gather.outputs.analysis }}"

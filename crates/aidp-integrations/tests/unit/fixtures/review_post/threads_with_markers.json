@@ -1,0 +1,22 @@
+{
+  "threads": [
+    {
+      "thread_id": "T-1",
+      "path": "src/a.rs",
+      "line": 11,
+      "body": "<!-- aidp:finding id=F-1 run=run-7 pass=1 -->\n**[major]** Deleted guard"
+    },
+    {
+      "thread_id": "T-2",
+      "path": "src/new_name.rs",
+      "line": 2,
+      "body": "<!-- aidp:finding id=F-2 run=run-7 pass=1 -->\n**[minor]** Renamed file issue"
+    },
+    {
+      "thread_id": "T-9",
+      "path": "src/a.rs",
+      "line": 12,
+      "body": "<!-- aidp:finding id=F-1 run=run-7 pass=0 -->\nolder pass"
+    }
+  ]
+}

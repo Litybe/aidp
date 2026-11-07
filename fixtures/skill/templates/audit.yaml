@@ -1,0 +1,68 @@
+version: 5
+id: audit
+description: >
+  Audit a service / codebase against the quality + security rubric. v7 runs the
+  four rubric dimensions in PARALLEL (independent reviewer stages → the engine
+  emits a single parallel() block), then an adversarial verify stage challenges
+  every blocking finding before the report.
+inputs:
+  target_path: { required: true, kind: string, description: "Chemin du service / de la codebase a auditer, relatif ou absolu (ex. src/cheat-profile-service)." }
+settings:
+  knowledge_graph:
+    enabled: true
+    refresh: never
+    code_only: true
+stages:
+  - name: explore
+    agent: analyzer
+    skills: [graphify-context]
+    inputs: { path: "{{ inputs.target_path }}" }
+    outputs: [exploration.md]
+
+  # Four independent dimensions — no `needs` between them, so the v7 engine
+  # groups them into one parallel() fan-out. Each returns signals.has_blocking.
+  - name: dim_correctness
+    agent: reviewer
+    skills: [graphify-context, code-review-aidp, code-audit-rubric]
+    needs: [explore]
+    inputs: { axis: correctness, path: "{{ inputs.target_path }}" }
+    outputs: [findings.json]
+
+  - name: dim_security
+    agent: reviewer
+    skills: [graphify-context, code-review-aidp, code-audit-rubric]
+    needs: [explore]
+    inputs: { axis: security, path: "{{ inputs.target_path }}" }
+    outputs: [findings.json]
+
+  - name: dim_perf
+    agent: reviewer
+    skills: [graphify-context, code-review-aidp, code-audit-rubric]
+    needs: [explore]
+    inputs: { axis: performance, path: "{{ inputs.target_path }}" }
+    outputs: [findings.json]
+
+  - name: dim_maintainability
+    agent: reviewer
+    skills: [graphify-context, code-review-aidp, code-audit-rubric]
+    needs: [explore]
+    inputs: { axis: maintainability, path: "{{ inputs.target_path }}" }
+    outputs: [findings.json]
+
+  # Adversarial pass: for each blocking finding across all four dimensions,
+  # argue AGAINST it and rate confidence; only survivors stay blocking. Cuts
+  # false positives. Sets signals.confirmed_blocking_count.
+  - name: verify
+    agent: reviewer
+    model: opus   # delibere : passe adversariale qui doit refuter chaque finding bloquant - opus pour la rigueur du contradictoire
+    skills: [graphify-context, code-audit-rubric]
+    needs: [dim_correctness, dim_security, dim_perf, dim_maintainability]
+    outputs: [confirmed.json, scores.json]
+
+  - name: report
+    agent: executor
+    skills: [writing-clearly-and-concisely]
+    needs: [verify]
+    scope: { mode: stage_dir_only }
+    outputs: [audit-report.md]
+    gate: true

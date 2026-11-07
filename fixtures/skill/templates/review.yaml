@@ -1,0 +1,127 @@
+version: 5
+id: review
+kind: fragment
+description: >
+  Multi-dimension code review shared across dev-* pipelines: run the 4 rubric
+  dimensions (correctness ‖ security ‖ perf ‖ maintainability) in parallel over
+  the current diff, then synthesize into the canonical findings.json (with
+  has_blocking_findings) + summary.md. Extracted from dev-csharp so other
+  dev-* templates can compose it via `type: pipeline` instead of re-declaring
+  these 5 stages. No `explore`/`report` stages here (unlike `audit.yaml`,
+  which is its own standalone, path-driven audit pipeline) — this one reviews
+  whatever the composing pipeline's `code`/`tests` stages just produced.
+# Optional rule from the composing pipeline on how to evaluate the tests check when this
+# review cannot run the tests itself (pr-review reads the PR's CI instead). Empty: the
+# reviewer's default rule applies.
+inputs:
+  tests_evidence: { required: false, kind: string, default: "" }
+settings:
+  knowledge_graph:
+    enabled: true
+    refresh: never
+    code_only: true
+stages:
+  # --- 4 independent rubric dimensions, each read-only over the diff, each
+  # writing only its own stage_dir findings.json. No `needs` between them
+  # (they are this sub-pipeline's roots) — a parent composite stage's `needs`
+  # (e.g. [code, tests]) cascades onto all four at composition time, and
+  # adjacency still lets the v7 engine group them into one parallel() block.
+  - name: review_correctness
+    agent: reviewer
+    skills: [graphify-context, code-review-aidp, code-audit-rubric]
+    inputs:
+      axis: correctness
+      tests_evidence: "{{ inputs.tests_evidence }}"
+      # The findings.json contract, restated in the prompt on purpose. It used to
+      # live ONLY in agents/reviewer.md, i.e. in the deployed `~/.claude/agents/
+      # reviewer.md` — and that copy is installed by nothing (neither bootstrap
+      # nor /pipeline-setup-v7 touches the agent registry), so it silently drifted
+      # to a pre-schema shape and all four axes emitted path/summary/nit instead
+      # of file/title/info. `aidp findings merge` then exited 1 and stranded the
+      # synthesis stage. Restating it here makes the contract travel with the
+      # pipeline rather than with a hand-installed file.
+      findings_contract: &findings_contract >-
+        findings.json MUST validate against schema/findings.schema.json in the ai-dev-pipeline-v7
+        skill root (additionalProperties is false everywhere — read that file before writing).
+        Required top-level keys: run_id, iter, generated_at, severity_counts, has_blocking_findings,
+        findings, checks. Do NOT emit schema, run, stage, ticket or axis at top level — they are
+        rejected. findings[] entries require id (matching ^F-), severity (blocking|major|minor|info —
+        there is NO nit tier), category (one of correctness, completeness, tests, security,
+        performance, maintainability, conventions, scope, documentation) and title; file, line,
+        description, suggestion and related_ids are optional. The keys path, summary and
+        failure_scenario do NOT exist in this schema and are rejected — use file, title and
+        description instead. severity_counts has exactly blocking, major, minor and info.
+        checks[] entries require id (matching ^C-), name (the key is name, NOT note) and status
+        (pass|fail|skip), with a non-null harness_gap when status is skip and a non-empty
+        finding_ids when status is fail. `aidp findings merge` validates this file in the synthesis
+        stage and exits 1 on any deviation, which blocks the whole review phase.
+    outputs: [findings.json]
+
+  - name: review_security
+    agent: reviewer
+    skills: [graphify-context, code-review-aidp, code-audit-rubric]
+    inputs:
+      axis: security
+      tests_evidence: "{{ inputs.tests_evidence }}"
+      findings_contract: *findings_contract
+    outputs: [findings.json]
+
+  - name: review_perf
+    agent: reviewer
+    skills: [graphify-context, code-review-aidp, code-audit-rubric]
+    inputs:
+      axis: performance
+      tests_evidence: "{{ inputs.tests_evidence }}"
+      findings_contract: *findings_contract
+    outputs: [findings.json]
+
+  - name: review_maintainability
+    agent: reviewer
+    skills: [graphify-context, code-review-aidp, code-audit-rubric]
+    inputs:
+      axis: maintainability
+      tests_evidence: "{{ inputs.tests_evidence }}"
+      findings_contract: *findings_contract
+    outputs: [findings.json]
+
+  # Synthesis: merges the 4 dimension findings into the canonical findings.json
+  # (with has_blocking_findings) + summary.md that correction_loop and pr read.
+  # Needs all four → breaks the parallel group and runs once after the fan-out.
+  # C6 (Lot 3, Capitalisation): the merge itself is mechanical (`aidp findings
+  # merge`, injected into this stage's prompt by `merge_contracts()`) — the
+  # four `inputs.*_findings` below stay for narration only, the agent no longer
+  # hand-synthesizes severity_counts/has_blocking_findings from them.
+  # `on_harness_gap: pause` is set ONLY here, the run's one synthesis point.
+  - name: review
+    agent: reviewer
+    skills: [graphify-context, code-review-aidp, code-audit-rubric]
+    needs: [review_correctness, review_security, review_perf, review_maintainability]
+    inputs:
+      axis: synthesis
+      tests_evidence: "{{ inputs.tests_evidence }}"
+      skill_rules_step: >
+        Before merging, from the repo root run
+        `aidp skill-rules check --base master --out <your stage_dir>/skill-rules.json`.
+        Then pass that file to `aidp findings merge` as
+        `--label skill_rules=<your stage_dir>/skill-rules.json` alongside the four axes,
+        and list every skill-rules finding (file:line) in summary.md. If the command
+        fails (not a git repository, base ref missing), continue without it and say so
+        in summary.md.
+      correctness_findings: "{{ stages.review_correctness.outputs.findings }}"
+      security_findings: "{{ stages.review_security.outputs.findings }}"
+      perf_findings: "{{ stages.review_perf.outputs.findings }}"
+      maintainability_findings: "{{ stages.review_maintainability.outputs.findings }}"
+      # Same contract as the four axes: this stage does not write findings.json
+      # itself. Its `aidp findings merge` call (see merge_contracts() in
+      # workflow_emit.rs) degrades a per-axis findings.json that is missing,
+      # unreadable or invalid JSON into that one axis's own `skip` check —
+      # named in the command's `degraded_axes` output — rather than failing;
+      # it only exits 1 (a `blocked` reply naming the offending field) when an
+      # axis's severity_counts contradicts its own findings[], i.e. it lied
+      # about its own tally (LOC-42, Lot 3 Capitalisation).
+      findings_contract: *findings_contract
+    merge_findings:
+      from: [review_correctness, review_security, review_perf, review_maintainability]
+      out: findings.json
+    on_harness_gap: pause
+    outputs: [findings.json, summary.md]

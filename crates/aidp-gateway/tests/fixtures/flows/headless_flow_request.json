@@ -1,0 +1,13 @@
+{
+  "executionKey": "ADA-HEADLESS-1",
+  "ticket": { "key": "PIXEL-1" },
+  "flow": "perso-delivery",
+  "policy": {
+    "autonomous": false,
+    "permissionMode": "default",
+    "strictMcpConfig": true,
+    "mcpConfigId": "ada-ticket",
+    "deniedShellCommands": ["git push", "az"],
+    "headless": true
+  }
+}

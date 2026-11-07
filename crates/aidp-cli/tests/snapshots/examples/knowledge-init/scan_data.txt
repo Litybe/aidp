@@ -1,0 +1,57 @@
+# Stage `scan_data`
+
+**Agent:** `analyzer`
+
+**Pipeline:** `knowledge-init` (run `<RUN_ID>`)
+
+## Environment
+
+You are a sub-agent dispatched by the `ai-dev-pipeline-v7` workflow engine. Do your work, write any file artifacts into your stage directory, then return the reply envelope as your FINAL answer — the runtime validates it against a JSON schema, so there is no `reply.md` to write and no free-text parsing.
+
+Working environment variables for this stage:
+
+```
+AIDP_RUN=<RUN_ID>
+AIDP_STAGE=scan_data
+AIDP_AGENT_SESSION=1
+```
+
+Do your work, write outputs into the stage directory, then emit the reply envelope.
+
+## Goal
+
+Execute the `scan_data` stage of pipeline `knowledge-init`.
+
+## Project knowledge — READ THIS FIRST
+
+`./.aidp/knowledge` is the durable knowledge base for this project, accumulated by previous documentation and discovery runs. It is the pipeline's primary source of context: read the relevant notes BEFORE exploring the code, and only investigate the repo for what the base does not already answer (or to verify a claim that looks stale).
+
+It is currently **empty** (no documentation run yet), so you have to work from the code. Note in your summary what a future documentation run should capture.
+
+## Shared research — reuse across runs
+
+This is a research / discovery stage. Its output directory `./.aidp/pipelines/knowledge-init/scan_data` is at the **ticket root**, SHARED by every pipeline run for this ticket — not inside this run's folder. Before doing any new work, list and read the artifacts already there from previous runs. If they exist and are still relevant, REUSE them and only incrementally update what is stale or missing, instead of redoing the research from scratch. This is how repeated discovery/study over the same ticket avoids duplicated work.
+
+## Inputs (paths or values)
+
+- `path`: .
+- `task`: Map persistence and write data.md: every store the service owns or reads (Mongo collections, DynamoDB tables and their key schema and GSIs, SQL tables, S3 prefixes, caches), the shape of what is stored, the access patterns in the code, TTL/retention, migrations, and which fields are personal data (GDPR-relevant). Distinguish stores the service OWNS from stores it merely reads — the difference decides who may change them.
+
+
+## Needs (upstream stage_dirs)
+
+- `knowledge__knowledge_read`: `./.aidp/pipelines/knowledge-init/knowledge__knowledge_read`
+
+## Outputs (write into `./.aidp/pipelines/knowledge-init/scan_data`)
+
+- `data.md`
+
+## Reply envelope
+
+Your FINAL answer is the reply envelope (it is schema-validated by the runtime — return it directly, do NOT write `reply.md`). Fields:
+- `status`: one of `completed` | `blocked` | `needs_review` | `failed`.
+- `summary`: one short paragraph (no artifact bodies inlined).
+- `outputs`: map of declared output name → absolute file path (string values only).
+- `signals`: object of booleans/counters the orchestrator branches on. If you are a reviewer, you MUST set `signals.has_blocking_findings` (boolean). Optionally add `findings_count`, `confidence`, etc. `signals.escalations`: optional array of `{id, decision, reason}` for items that need a human without blocking the run.
+- `assumptions`: optional array of `{choice, reason, rejected_alternative?, question_id?, question?}` for each choice taken in place of a question.
+- `follow_ups`: optional array of strings. `ask_user_questions`: array of `{id, question, answer?, options?, recommended?}` (`options` an array of strings, `recommended` a string) — leave it EMPTY unless a real blocker stops you. Decide open points yourself and record the decision and its rationale in `follow_ups` or your artifact. An entry with a non-empty `answer` on a `completed` stage is only informational; one with no `answer` pauses the whole run for a human. `scope_violations`: array of blocked paths. `metrics`: optional `{tool_calls, duration_ms, tokens_used}`.

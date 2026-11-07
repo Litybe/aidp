@@ -1,0 +1,22 @@
+id: test-flow
+version: 1
+blocks:
+  ci:
+    - id: ci-noop
+      kind: action
+      use: noop
+steps:
+  - id: prepare
+    kind: action
+    use: noop
+  - id: develop
+    kind: pipeline
+    use: dev-aidp
+    pushes: false
+  - id: approve
+    kind: human
+    prompt: Approve the result?
+    choices: [approve, reject]
+  - id: finish
+    kind: action
+    use: noop

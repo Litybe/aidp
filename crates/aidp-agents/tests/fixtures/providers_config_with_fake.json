@@ -1,0 +1,7 @@
+{
+  "providers": {
+    "fake": {},
+    "zeta": {},
+    "other": { "program": "other-cli" }
+  }
+}

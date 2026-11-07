@@ -1,0 +1,9 @@
+version: 5
+id: unknown-settings-provider
+description: Settings mapping a role to a provider that is not configured.
+settings:
+  providers:
+    executor: nonexistent-provider
+stages:
+  - name: build
+    agent: executor

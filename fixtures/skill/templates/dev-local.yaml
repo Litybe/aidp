@@ -1,0 +1,165 @@
+version: 5
+id: dev-local
+description: >
+  Implement a feature end-to-end on a PURELY LOCAL project — no Jira, no
+  Confluence, no git, no PR. The feature to build is described in a local .txt
+  file (input `feature_file`); an analyzer reads it instead of a Jira ticket.
+  Tracks via track = quick | standard | deep. The review phase is composed
+  from the reusable `review` sub-pipeline (`type: pipeline`, `uses: review`)
+  — same as dev-csharp/dev/dev-lambda-ts. The discover/study group stays
+  inline here (not composed from `dev-discovery`) because it reads a local
+  feature file + code-graph only (2-way fan-out, no Jira/Confluence) — a
+  genuinely different shape, not the generic sub-pipeline's contract;
+  code/tests still fan out into shards. Stack-agnostic: no C#/TS skills are
+  attached — the executor codes in general mode. The run ends on a
+  human-gated `summary` (there is no branch to push or PR to open).
+inputs:
+  # The feature spec lives in a local text file. Pass its path at run init via
+  # --inputs '{"feature_file":"<path/to/feature.txt>"}'.
+  feature_file:
+    required: true
+    kind: string
+    description: Path to the .txt file describing the feature to implement.
+  # Root of the local project code the pipeline reads and modifies.
+  target_path:
+    required: false
+    kind: string
+    default: "."
+    description: Root of the local project code to read/analyse/modify.
+  track:
+    required: true
+    kind: enum
+    values: [quick, standard, deep]
+    default: standard
+    description: Run depth - quick, standard, or deep (deep adds a human gate before planning); defaults to standard.
+settings:
+  max_correction_iterations: 2
+  knowledge_graph:
+    enabled: true
+    refresh: never
+    code_only: true
+stages:
+  # --- Context gathering: 2 independent, read-only reads (feature spec ‖ local
+  # code-graph). Both are root stages with no `needs` and no edge between them →
+  # the engine groups them into one parallel() fan-out, overlapping the spec
+  # read with the code exploration.
+  - name: discover_feature
+    agent: analyzer
+    # No skill needed: the analyzer reads input paths by default. It ingests the
+    # .txt spec and distils it into a structured feature_context (goal, scope,
+    # acceptance criteria, open questions).
+    inputs:
+      feature_file: "{{ inputs.feature_file }}"
+    outputs: [feature_context.md]
+    when: "true"
+
+  - name: discover_code
+    agent: analyzer
+    skills: [graphify-context]
+    inputs:
+      path: "{{ inputs.target_path }}"
+    outputs: [code_context.md]
+    when: "true"
+
+  # Synthesis: merges the 2 parallel reads into the canonical context.md that
+  # study/plan consume. Needs both → runs once after the fan-out.
+  - name: discover
+    agent: analyzer
+    skills: [graphify-context]
+    needs: [discover_feature, discover_code]
+    inputs:
+      feature_context: "{{ stages.discover_feature.outputs.feature_context }}"
+      code_context: "{{ stages.discover_code.outputs.code_context }}"
+    outputs: [context.md]
+    when: "true"
+
+  - name: study
+    agent: analyzer
+    skills: [graphify-context, study-synthesis]
+    needs: [discover]
+    inputs: { context: "{{ stages.discover.outputs.context }}" }
+    outputs: [study.md]
+    when: "{{ inputs.track in ['standard','deep'] }}"
+
+  # `plan.json` (schema/plan.schema.json) is the machine contract: ONE OBJECT PER
+  # TASK - prompt, instructions, `needs` (real dependencies) and `files` (the
+  # task's write set). `aidp` compiles the implementation stage from it, so the
+  # run's parallelism is decided here, by how the work is sliced into file-disjoint
+  # tasks. The contract itself is injected into this stage's prompt by the emitter.
+  # `plan.md` stays the human narrative (design, risks, rollback).
+  - name: plan
+    agent: planner
+    # Stack-agnostic + local: no ticket-to-plan-aidp (Jira) and no
+    # enforcing-decision-records (Pixelhood ADRs). The planner turns the feature
+    # spec + code context into an ordered implementation plan.
+    skills: [graphify-context]
+    needs: [study, discover]
+    with: { mode: feature }
+    outputs: [plan.json, plan.md]
+    gate: "{{ inputs.track == 'deep' }}"
+
+  # Plan-driven implementation: `aidp workflow emit` loads `plan.json`, validates
+  # the task graph (unknown deps, cycles), inserts an ordering wherever two tasks
+  # would write the same file, and emits one sub-agent per task - each starting as
+  # soon as its OWN dependencies are done (no wave barrier), up to `max` at a time
+  # in the shared working tree. A final merge sub-agent applies the shared-file
+  # work the tasks deferred to it, builds, runs the suite, and writes the
+  # consolidated changed-files.json. A single-task plan short-circuits the merge
+  # and costs exactly what a plain stage costs.
+  #
+  # TWO-PASS stage: the first `workflow emit` stops here (the workflow returns
+  # `awaiting_plan`); re-emitting once the planner has written the file compiles
+  # the tasks plus everything after them. The v7 skill drives that round-trip.
+  #
+  # `scope: repo_wide` because the plan's tasks cover production code AND tests.
+  - name: implement
+    agent: executor
+    skills: [graphify-context, feature-testing-aidp]
+    needs: [plan]
+    scope: { mode: repo_wide }
+    plan_tasks:
+      from: "{{ stages.plan.outputs.plan }}"
+      max: 4
+      merge_hint: >
+        Apply every shared-file change the tasks deferred to you (wiring, imports,
+        module/DI registration), then build/compile the project and run the FULL
+        test suite once. Fix cross-task breakage and write the consolidated
+        changed-files.json covering every task.
+    outputs: [changed-files.json]
+
+  # Review, composed from the reusable `review` sub-pipeline (4 rubric
+  # dimensions in parallel → synthesis). `needs: [implement]` cascades onto
+  # its 4 root dimension stages, reproducing the exact same parallel fan-out
+  # as before.
+  - name: review
+    type: pipeline
+    uses: review
+    needs: [implement]
+    outputs:
+      - { name: findings, from: review.findings }
+      - { name: summary, from: review.summary }
+
+  - name: correction_loop
+    type: loop
+    when: "{{ stages.review.outputs.findings.has_blocking_findings }}"
+    max_iterations: "{{ settings.max_correction_iterations }}"
+    body:
+      # delibere : une reprise de plan est un delta, pas une conception - opus serait surpaye
+      - { name: replan, agent: planner, model: sonnet, with: { mode: correction }, inputs: { findings: "{{ stages.review.outputs.findings }}" } }
+      - { name: refix, agent: executor, scope: { mode: repo_wide }, needs: [replan] }
+      - { name: rereview, agent: reviewer, skills: [graphify-context, code-review-aidp], needs: [refix], outputs: [findings.json, summary.md] }
+
+  # Local endpoint (no git / no PR): the executor writes a human-readable
+  # summary of what was implemented, the changed files, and the residual review
+  # findings. Gated so a human validates before the run is marked done.
+  - name: summary
+    agent: executor
+    skills: [writing-clearly-and-concisely]
+    needs: [review]
+    scope: { mode: stage_dir_only }
+    inputs:
+      feature_context: "{{ stages.discover_feature.outputs.feature_context }}"
+      changed_files: "{{ stages.implement.outputs.changed-files }}"
+      findings: "{{ stages.review.outputs.findings }}"
+    outputs: [summary.md]
+    gate: true

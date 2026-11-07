@@ -1,0 +1,10 @@
+{
+  "query": "mutation($input: CreateRefInput!) { createRef(input: $input) { ref { name } } }",
+  "variables": {
+    "input": {
+      "repositoryId": "R_kgDOwidgets",
+      "name": "refs/heads/feat/PIXEL-1",
+      "oid": "base123"
+    }
+  }
+}

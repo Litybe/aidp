@@ -1,0 +1,16 @@
+version: 5
+id: loop-body-valid-deps
+stages:
+  - name: gate
+    agent: reviewer
+  - name: correction
+    type: loop
+    when: "{{ stages.gate.outputs.findings.has_blocking_findings }}"
+    max_iterations: 2
+    body:
+      - name: replan
+        agent: planner
+        needs: [gate]
+      - name: refix
+        agent: executor
+        needs: [replan]

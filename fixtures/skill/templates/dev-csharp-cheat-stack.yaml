@@ -1,0 +1,280 @@
+version: 5
+id: dev-csharp-cheat-stack
+name: Dev C# — avec porte de qualité sur la stack locale Cheat
+description: >
+  `dev-csharp`, plus une porte de qualité : entre l'implémentation et la revue,
+  le service est RECOMPILÉ depuis l'arbre de travail du run — modifications non
+  committées comprises — et la suite de non-régression de la stack locale Cheat
+  est rejouée contre lui. Le changement est donc prouvé sur un service qui tourne
+  vraiment, avec ses vraies files SQS, son vrai Mongo et ses dépendances HTTP
+  mockées, avant que quiconque le relise et bien avant qu'il parte en PR.
+  La porte est composée (`type: pipeline`, `uses: cheat-stack-test`), donc elle
+  reste le même pipeline que celui qu'on lance à la main — un seul jeu de
+  scénarios, une seule définition d'attendus.
+  Ce que ça change concrètement par rapport à `dev-csharp` : la revue reçoit le
+  verdict des tests et ne relit plus à l'aveugle ; et la boucle de correction se
+  déclenche AUSSI sur un échec de la stack, avec un stage qui recompile et rejoue
+  la suite à chaque itération — le pipeline corrige donc la régression qu'il
+  vient de détecter, au lieu de la signaler en fin de course.
+  Comme `dev-csharp`, il est plan-driven : `plan` écrit un `plan.json` exécutable
+  et `aidp` compile `implement` à partir de lui (code de production ET tests
+  unitaires dans le même plan).
+inputs:
+  # --- DEMANDE. Exactement UN de `jira_keys` / `prompt` porte la demande et doit
+  # être non vide ; en aval de `discover` le pipeline est identique dans les deux
+  # modes — même plan, même porte de qualité sur la stack locale, même PR.
+  #
+  # Mode A (Jira) : une ou plusieurs US Jira de la MÊME feature. Une seule US = liste à un élément.
+  jira_keys: { required: false, kind: list, default: [], description: "Une ou plusieurs US Jira de la MEME feature, en tableau JSON (ex. [\"PIXEL-1\",\"PIXEL-2\"])." }
+  # Mode B (prompt) : la demande en texte libre, sans aucun ticket derrière —
+  # `discover_prompt` en fait la MÊME note d'exigences que `discover_jira` aurait
+  # produite, donc `plan` / `implement` / `local_stack` / `review` / `pr` ne
+  # changent pas d'un octet. Dans ce mode `feature` est OBLIGATOIRE : rien d'autre
+  # ne peut nommer la branche git, le dossier du vault ni la PR.
+  prompt: { required: false, kind: string, default: "", description: "Demande en texte libre, utilisee quand il n'y a pas de ticket Jira : exactement UN de jira_keys / prompt doit etre non vide. Dans ce mode c'est `feature` qui nomme la branche git ET le dossier du run dans le vault." }
+  # Label epic/feature → dossier de regroupement du run et nom de branche.
+  feature: { required: false, kind: string, description: "Nom de la feature : alimente run::feature_key (sa PREMIERE branche testee) - decide le nom de la branche git ET le dossier du vault Obsidian pour ce run." }
+  track: { required: true, kind: enum, values: [quick, standard, deep], default: standard, description: "Profondeur du run : quick saute l'etude et le gate de plan, standard fait les deux, deep gate le plan pour validation humaine avant la moindre ligne ecrite." }
+  # --- porte de qualité ----------------------------------------------------
+  service:
+    required: true
+    kind: enum
+    values: [cheat-profile-service]
+    default: cheat-profile-service
+    description: >
+      Service testé par la stack locale. Un seul aujourd'hui — la stack
+      n'embarque que cheat-profile-service. Utilise `dev-csharp` tel quel pour un
+      service qui n'y est pas encore.
+  service_repo:
+    required: true
+    kind: string
+    default: "/mnt/c/CODE/.Net/cheat-profile-service"
+    description: >
+      Chemin WSL du checkout que CE run modifie — c'est lui qui sera compilé.
+      Il doit être en forme WSL (/mnt/c/...) parce que le docker CLI vit dans WSL,
+      alors que le workspace du run est un chemin Windows : il n'y a pas de
+      conversion automatique, d'où cet input explicite. Si le run travaille dans
+      un git worktree, passe le chemin du worktree, pas celui du dépôt principal.
+  stack_dir:
+    required: false
+    kind: string
+    default: "/mnt/c/CODE/Tools/cheat-local-environment/localstack/cheat-stack"
+    description: Chemin WSL de la stack locale Cheat.
+  author_scenarios:
+    required: false
+    kind: bool
+    default: false
+    description: >
+      Laisser la porte AJOUTER un scénario à la suite quand la charte identifie
+      un trou de couverture sur ce changement. Écrit uniquement dans la stack,
+      jamais dans le repo du service. À false, le trou est signalé dans le
+      rapport et rien n'est écrit.
+settings:
+  pr_draft: false
+  max_correction_iterations: 2
+  knowledge_graph:
+    enabled: true
+    refresh: never
+    code_only: true
+stages:
+  # Branche de feature fraîche sur un master à jour, avant tout le reste.
+  - name: prepare_branch
+    agent: executor
+    skills: [git-branch-setup]
+    inputs:
+      jira_keys: "{{ inputs.jira_keys }}"
+      branch: "feat/{{ feature }}"
+    outputs: [branch.json]
+    when: "true"
+
+  # Contexte + étude, depuis le sous-pipeline réutilisable dev-discovery
+  # (demande ‖ discover_confluence ‖ discover_code → discover → study), où
+  # « demande » est `discover_jira` ou `discover_prompt` selon celui des deux
+  # inputs qui est non vide — l'autre est éliminé à la compilation et ne coûte
+  # rien. C'est ce sous-pipeline qui fait converger les deux modes vers la même
+  # context.md : tout ce qui suit ici est donc inchangé.
+  - name: discover
+    type: pipeline
+    uses: dev-discovery
+    needs: [prepare_branch]
+    with:
+      jira_keys: "{{ inputs.jira_keys }}"
+      prompt: "{{ inputs.prompt }}"
+      track: "{{ inputs.track }}"
+    outputs:
+      - { name: context, from: discover.context }
+      - { name: study, from: study.study }
+
+  # `plan.json` : un objet par tâche, avec son prompt, ses `needs` et son write
+  # set. C'est lui qui décide la parallélisation de l'implémentation.
+  - name: plan
+    agent: planner
+    skills: [graphify-context, enforcing-decision-records, ticket-to-plan-aidp, cheat-stack-local]
+    needs: [discover]
+    with: { mode: feature }
+    outputs: [plan.json, plan.md]
+    gate: "{{ inputs.track == 'deep' }}"
+
+  # Implémentation compilée depuis le plan. Stage à DEUX PASSES : le premier
+  # `workflow emit` s'arrête ici (`awaiting_plan`), le second compile les tâches
+  # et toute la suite. Le skill v7 pilote cet aller-retour.
+  - name: implement
+    agent: executor
+    skills: [graphify-context, csharp-dev-aidp, feature-testing-aidp, reqnroll-testing-aidp]
+    needs: [plan]
+    scope: { mode: repo_wide }
+    plan_tasks:
+      from: "{{ stages.plan.outputs.plan }}"
+      max: 4
+      merge_hint: >
+        Applique les changements de fichiers partagés que les tâches t'ont
+        délégués (enregistrements DI dans AddXxxDependencies(), entrées
+        csproj/.sln), puis compile la solution et lance UNE fois la suite
+        `dotnet test` complète — y compris un projet de test qu'une tâche aurait
+        créé (ajoute-le d'abord au .sln). Corrige la casse inter-tâches et écris
+        le changed-files.json consolidé couvrant toutes les tâches.
+    outputs: [changed-files.json]
+
+  # LA PORTE. Le même pipeline que celui qu'on lance à la main, composé ici.
+  # `rebuild: always` est délibéré : `up` réutilise le binaire déjà publié si le
+  # service tourne, et tester l'ancien binaire en croyant tester le nouveau est
+  # le seul vrai piège de ce montage.
+  # `teardown: false` : la stack reste debout entre les itérations de la boucle
+  # de correction, et reste inspectable à la main après le run.
+  - name: local_stack
+    type: pipeline
+    uses: cheat-stack-test
+    needs: [implement]
+    with:
+      ticket_id: "{{ feature }}"
+      service: "{{ inputs.service }}"
+      stack_dir: "{{ inputs.stack_dir }}"
+      service_repo: "{{ inputs.service_repo }}"
+      change_context: "{{ stages.implement.outputs.changed-files }}"
+      rebuild: always
+      author_scenarios: "{{ inputs.author_scenarios }}"
+      teardown: false
+    outputs:
+      - { name: results, from: report.results }
+      - { name: stack_report, from: report.cheat-stack-report }
+
+  # Revue, depuis le sous-pipeline réutilisable `review` (4 dimensions en
+  # parallèle → synthèse). Elle `needs` la porte : le rapport et le results.json
+  # de la stack sont donc des sorties amont, injectées dans le prompt des quatre
+  # dimensions — les relecteurs voient le verdict des tests plutôt que de relire
+  # à l'aveugle. Rien n'est passé par `with:` : `review` ne déclare aucun input,
+  # et lui en ajouter un impacterait tous les templates dev-* qui le composent.
+  - name: review
+    type: pipeline
+    uses: review
+    needs: [implement, local_stack]
+    outputs:
+      - { name: findings, from: review.findings }
+      - { name: summary, from: review.summary }
+
+  # Verdict unique sur les deux sources : les findings de la revue et le résultat
+  # de la stack. Une régression prouvée par un scénario rouge mérite autant une
+  # correction qu'une remarque de relecteur, et le planificateur de correction a
+  # besoin des deux dans un seul input.
+  #
+  # Ce stage existe AUSSI pour une raison mécanique : `aidp pipeline expand` ne
+  # réécrit qu'UNE référence de sortie de composite par expression (vérifié —
+  # `{{ stages.a.outputs.x or stages.b.outputs.y }}` ne voit que `a` renommée en
+  # `a__<stage>`, `b` reste non résolue et l'expression s'évalue faux en
+  # silence). Une référence par chaîne fonctionne, plusieurs chaînes séparées
+  # aussi : d'où ce stage à deux inputs distincts, et un `when` de boucle qui ne
+  # cible plus qu'un stage simple.
+  - name: quality_gate
+    agent: reviewer
+    skills: [code-audit-rubric, writing-clearly-and-concisely]
+    needs: [review, local_stack]
+    inputs:
+      findings: "{{ stages.review.outputs.findings }}"
+      test_results: "{{ stages.local_stack.outputs.results }}"
+    outputs: [gate.json, gate.md]
+    scope: { mode: stage_dir_only }
+    with:
+      instructions: >-
+        Consolide les deux verdicts sans en requalifier aucun. Écris gate.json :
+        { has_blocking_findings: bool, sources: { review: { blocking: bool,
+        count: n }, local_stack: { blocking: bool, failed_scenarios: [...] } },
+        blocking_items: [ { origin: review|local_stack, id, summary,
+        evidence } ] }. has_blocking_findings = true si l'UNE des deux sources
+        bloque — un scénario de la stack au rouge est une régression prouvée sur
+        un service qui tourne, elle pèse au moins autant qu'une remarque de
+        relecteur. Pose signals.has_blocking_findings identique.
+        Écris gate.md : en tête la décision et sa cause, puis les items bloquants
+        dans l'ordre où il faut les traiter — un scénario rouge d'abord (le
+        comportement est cassé), les remarques de revue ensuite. Reprends
+        textuellement la section « ce que ce run NE prouve pas » du rapport de la
+        stack : elle doit survivre jusqu'à la PR, sinon « tests verts » sera lu
+        comme une couverture qui n'existe pas.
+
+  - name: correction_loop
+    type: loop
+    when: "{{ stages.quality_gate.outputs.gate.has_blocking_findings }}"
+    max_iterations: "{{ settings.max_correction_iterations }}"
+    body:
+      - name: replan
+        agent: planner
+        model: sonnet   # delibere : une reprise de plan est un delta, pas une conception - opus serait surpaye
+        with: { mode: correction }
+        inputs:
+          gate: "{{ stages.quality_gate.outputs.gate }}"
+      - name: refix
+        agent: executor
+        scope: { mode: repo_wide }
+        needs: [replan]
+      # Rejoue la porte à chaque itération. Stage plat (et non un
+      # `type: pipeline` imbriqué) : la boucle prend une liste de stages, et
+      # recompiler + rejouer la suite n'a besoin que du skill de la stack.
+      - name: retest_stack
+        agent: executor
+        skills: [cheat-stack-local]
+        needs: [refix]
+        inputs:
+          stack_dir: "{{ inputs.stack_dir }}"
+          service_repo: "{{ inputs.service_repo }}"
+        outputs: [retest-results.json]
+        scope: { mode: stage_dir_only }
+        with:
+          instructions: >-
+            Recompile le service avec la correction et rejoue la suite, depuis
+            WSL : `wsl bash -lc "cd <stack_dir> && CHEAT_PROFILE_REPO=<service_repo>
+            bash stack.sh build"` puis `... bash stack.sh test`. Le `build` n'est
+            pas optionnel : sans lui la suite retesterait le binaire d'avant la
+            correction et passerait au vert pour de mauvaises raisons.
+            Parse le bloc `Summary` et écris retest-results.json : { exit_code,
+            scenarios: [ { name, status, checks, failed_checks: [...] } ],
+            totals: { scenarios, passed, failed }, still_failing: [...] }. Pose
+            signals.has_blocking_findings = true tant qu'un scénario est rouge.
+            Un échec de compilation est un échec de test : renvoie-le tel quel
+            avec les erreurs du compilateur.
+      - name: rereview
+        agent: reviewer
+        skills: [graphify-context, code-review-aidp]
+        needs: [retest_stack]
+        outputs: [findings.json, summary.md]
+
+  # La PR porte le verdict de la stack : c'est ce qui permet au relecteur humain
+  # de savoir sur quoi le changement a été prouvé, et sur quoi il ne l'a pas été.
+  - name: pr
+    policy:
+      - "Open the PR with `aidp gh pr-create --draft` only when the stage input pr_draft is true; otherwise open a regular PR."
+    agent: executor
+    skills: [git-push, writing-clearly-and-concisely, teams-pr-notification]
+    needs: [review, local_stack, quality_gate]
+    inputs:
+      pr_draft: "{{ settings.pr_draft }}"
+      stack_report: "{{ stages.local_stack.outputs.stack_report }}"
+      stack_results: "{{ stages.local_stack.outputs.results }}"
+    scope: { mode: stage_dir_only }
+    with:
+      instructions: >-
+        Ouvre la PR comme d'habitude, et ajoute une section « Vérifié en local »
+        au corps : le verdict de la stack (N scénarios / M checks), la branche et
+        le fait que le binaire testé a été compilé depuis l'arbre de travail,
+        puis — recopiée du rapport — la section « ce que ce run NE prouve pas ».
+        Cette dernière n'est pas optionnelle : sans elle un relecteur lit « tests
+        verts » et en conclut une couverture qui n'existe pas, notamment sur les
+        parcours derrière les feature flags que la stack ne peut pas activer.

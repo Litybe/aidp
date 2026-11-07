@@ -1,0 +1,7 @@
+{"viewer":{"login":"me"},"repository":{"pullRequest":{
+"number":9,"url":"u","title":"Odd","state":"OPEN","isDraft":false,
+"headRefName":"feat/X-4","headRefOid":"123abc","baseRefName":"master","mergeable":"MERGEABLE","reviewDecision":"APPROVED",
+"author":{"login":"dev"},
+"latestOpinionatedReviews":{"nodes":[]},"reviewRequests":{"nodes":[]},
+"commits":{"nodes":[{"commit":{"statusCheckRollup":{}}}]},
+"reviewThreads":{"nodes":[]}}}}

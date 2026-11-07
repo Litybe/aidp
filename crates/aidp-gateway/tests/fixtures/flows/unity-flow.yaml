@@ -1,0 +1,10 @@
+id: unity-flow
+version: 1
+steps:
+  - id: develop
+    kind: pipeline
+    use: dev-aidp
+    resource: unity-editor
+  - id: finish
+    kind: action
+    use: count

@@ -1,0 +1,8 @@
+version: 5
+id: retryish
+settings: { max_stage_retries: 2 }
+stages:
+  - name: code
+    agent: executor
+    scope: { mode: production }
+    outputs: [changed-files.json]

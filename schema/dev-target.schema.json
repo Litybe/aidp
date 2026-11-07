@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/ai-dev-pipeline/schema/dev-target.schema.json",
+  "title": "dev-target.json",
+  "description": "Non-secret connection config for the dev environment, read by the aidp http/mongo/sqs runners and `aidp dev`. Lives at `.aidp/dev-target.json` (git-ignore it in the target repo). Secrets are NOT stored here — they come from AIDP_DEV_* env vars at request time.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "http": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "base_url": { "type": "string", "description": "Prepended to relative URLs (those starting with '/')." },
+        "default_headers": {
+          "type": "object",
+          "additionalProperties": { "type": "string" },
+          "description": "Headers added to every request."
+        },
+        "token_env": { "type": "string", "description": "Env var holding a bearer token, added as `Authorization: Bearer <value>`." },
+        "health_path": { "type": "string", "description": "Path appended to base_url by `aidp dev check --ping`." }
+      }
+    },
+    "mongo": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "uri_env": { "type": "string", "description": "Env var holding the full connection URI with credentials (default AIDP_DEV_MONGO_URI)." },
+        "default_db": { "type": "string" }
+      }
+    },
+    "sqs": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "region": { "type": "string" },
+        "profile": { "type": "string", "description": "AWS CLI profile used for credentials/SSO." },
+        "queues": {
+          "type": "object",
+          "additionalProperties": { "type": "string" },
+          "description": "Logical queue name -> full queue URL."
+        }
+      }
+    },
+    "deploy": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "workflow": { "type": "string", "description": "GitHub Actions workflow file to dispatch, e.g. deploy-dev.yml." },
+        "ref_default": { "type": "string", "description": "Default git ref/branch to deploy." },
+        "repo": { "type": "string", "description": "owner/repo for gh, if not the current directory's repo." }
+      }
+    }
+  }
+}

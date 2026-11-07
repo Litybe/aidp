@@ -1,0 +1,7 @@
+version: 5
+id: fobadfrom
+stages:
+  - name: code
+    agent: executor
+    fan_out:
+      from: "{{ stages.plan.outputs.plan }}"

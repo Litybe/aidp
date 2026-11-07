@@ -1,0 +1,9 @@
+{
+    "run_id": "r1",
+    "pipeline_path": "p.yaml",
+    "pipeline_id": "dev-flow",
+    "workspace_root": "WORKSPACE_ROOT",
+    "run_dir": "RUN_DIR",
+    "started_at": "2026-10-08T00:00:00Z",
+    "stages": []
+}

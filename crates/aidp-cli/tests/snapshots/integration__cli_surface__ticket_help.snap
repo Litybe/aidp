@@ -1,0 +1,54 @@
+---
+source: crates/aidp-cli/tests/cli_surface.rs
+expression: normalized
+---
+The local ticket backlog under `<vault>/TODO/`, only ever written by `<BIN>`: an agent must never hand-edit a ticket's status or frontmatter
+
+Usage: <BIN> ticket [OPTIONS] <COMMAND>
+
+Commands:
+  new       Create a new local ticket. Body precedence: `--body-file` > `--body` > `--stdin` > the default template. Prints `{key, path, warnings}`
+  list      List tickets in dequeue order
+  show      Show one ticket: frontmatter + body (json = `Ticket` + body)
+  render    Print a ticket's body exactly as it will be passed as the `prompt` input (lot 9a) — no frontmatter, no added heading
+  edit      Edit a ticket's frontmatter (never the body). `--service` delegates to the same code path as `route`
+  status    Manual status transition, actor=human, journalled. Refused explicitly (non-zero exit) if illegal
+  route     Move a ticket to another service (and, optionally, set its template), or — with `--from-unrouted` — re-route the whole `unrouted/` backlog in one non-interactive batch. Exactly one of "a KEY and --service" or `--from-unrouted` is required; see [`route_mode`] for the exact validation
+  cancel    `status <KEY> cancelled`, actor=human, default reason `cancelled-by-user`
+  log       Read the transition journal, most recent last
+  reindex   Regenerate `_TODO.md` and every `_<service>.md`, sweeping old done/cancelled tickets into `archive/` first
+  start     Start a dispatcher-driven pipeline run for one ticket right now, bypassing the scheduler. Declared here only so `clap` renders its help and parses its arguments — this crate stays HTTP-free by decision (no `ureq`, no `aidp-gateway` dependency), so `aidp-cli`'s `main.rs` (which already depends on both crates) intercepts `<BIN> ticket start` and calls the gateway client itself before [`crate::run`] is ever invoked. Reaching the `Start` arm in `run_inner` means that interception in `main.rs` was removed
+  adopt     Adopt an existing PR for a ticket (actor human). Declared here for help and parsing only; `aidp-cli` serves it through the gateway client
+  sync      Mirror the open issues of the configured GitHub repositories as tickets (`TODO/<repo>/GH-<n>.md`), then write each mirror's state label back. Prints the sync report
+  label     Replace the single `aidp:*` state label of a GitHub mirror's issue. `STATE` is a suffix such as `review` or a full label such as `aidp:review`
+  comment   Post a comment on the issue of a GitHub mirror
+  plan      What the dispatcher would launch right now, computed LOCALLY with no running daemon: opens the store directly, lists `todo` + `queued` tickets, builds a [`plan::TemplateCatalog`] from the injected skill root (an empty catalog, with a stderr warning, when it is absent or unreadable), and calls [`plan::plan`] with an EMPTY `running` slice and [`plan::Verdict::unconstrained`] — a CLI invocation outside the daemon cannot see the daemon's running sessions or its budget verdict, so this answers "what would launch if nothing else were running and the budget were unconstrained", not "what will the daemon do on its next tick". For the daemon-aware answer, including real occupancy and the real budget, use `<BIN> gateway dispatcher status` instead. Prints the resulting [`plan::DispatchPlan`]
+  dispatch  Ask the running daemon to run one dispatch tick now, instead of waiting for its next scheduled tick. Declared here only so `clap` renders its help and parses its arguments — like [`Op::Start`], this is served by `aidp-cli`'s `main.rs` (via the gateway client) and never reaches [`crate::run`]. Reaching the `Dispatch` arm in `run_inner` means that interception in `main.rs` was removed. For the local, no-daemon preview of what a tick would launch, use [`Op::Plan`] instead
+  budget    Explain the token-budget verdict the daemon computed on its last tick: windows (utilization and reset instant), thresholds, reserve (learned or configured), sessions not yet reflected in the snapshot, and the resulting verdict. Declared here only so `clap` renders its help and parses its arguments — like [`Op::Start`] and [`Op::Dispatch`], this verb is served by `aidp-cli`'s `main.rs` through the gateway client and never reaches [`crate::run`], because this crate is deliberately HTTP-free
+  help      Print this message or the help of the given subcommand(s)
+
+Options:
+      --workspace-root <PATH>
+          Workspace to act on instead of the current directory
+
+      --vault <PATH>
+          Obsidian vault to use instead of `AIDP_VAULT`, `~/.aidp/config.json` or auto-detection
+
+      --no-vault
+          Ignore any vault and keep artefacts in the repo (`.aidp/pipelines/`)
+
+      --format <FORMAT>
+          Output format. Each command keeps its own default when omitted
+
+          Possible values:
+          - json-compact: One compact JSON document on a single line
+          - json-pretty:  One indented JSON document
+          - ndjson:       One compact JSON value per line
+          - text:         Human-readable text
+          - footer:       The one-line cost footer of a report, for `<BIN> cost ticket`; text elsewhere
+
+  -v, --verbose...
+          More diagnostics on stderr; repeat for more (`-vv`)
+
+  -h, --help
+          Print help (see a summary with '-h')

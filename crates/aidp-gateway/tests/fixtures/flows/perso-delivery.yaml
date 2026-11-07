@@ -1,0 +1,20 @@
+id: perso-delivery
+version: 1
+steps:
+  - id: prepare
+    kind: action
+    use: count
+    phase: Preparation
+  - id: ready
+    kind: action
+    use: count
+    phase: Peer review
+  - id: approve
+    kind: human
+    phase: Merge
+    prompt: Merge the pull request?
+    choices: [approve, reject]
+  - id: merge
+    kind: action
+    use: count
+    phase: Merge

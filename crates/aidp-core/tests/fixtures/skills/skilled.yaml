@@ -1,0 +1,13 @@
+version: 5
+id: skilled
+stages:
+  - name: code
+    agent: executor
+    skills: [a, b]
+  - name: review
+    agent: reviewer
+    needs: [code]
+    skills: [c]
+  - name: note
+    agent: executor
+    needs: [review]

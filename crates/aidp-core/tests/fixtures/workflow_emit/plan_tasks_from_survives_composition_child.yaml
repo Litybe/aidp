@@ -1,0 +1,9 @@
+version: 5
+id: planchild
+stages:
+  - { name: plan, agent: planner, outputs: [plan.json] }
+  - name: build
+    agent: executor
+    needs: [plan]
+    plan_tasks: { from: "{{ stages.plan.outputs.plan }}", max: 2 }
+    outputs: [changed-files.json]

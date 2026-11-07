@@ -1,0 +1,20 @@
+id: publish-loop
+version: 1
+blocks:
+  publish:
+    - id: git_push
+      kind: action
+      use: noop
+steps:
+  - id: fix_loop
+    kind: loop
+    max: 2
+    until: steps.check.outputs.green == true
+    body:
+      - id: fix
+        kind: pipeline
+        use: dev
+        pushes: true
+      - id: check
+        kind: action
+        use: noop

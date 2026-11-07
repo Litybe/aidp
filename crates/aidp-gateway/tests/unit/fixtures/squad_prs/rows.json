@@ -1,0 +1,44 @@
+{
+  "fetched_at": "2026-10-03T09:00:00Z",
+  "me": "alice",
+  "repos": ["acme/svc", "acme/api"],
+  "degraded": [],
+  "prs": [
+    {
+      "repo": "acme/svc", "number": 1, "title": "Add exclusion", "url": "https://github.com/acme/svc/pull/1",
+      "is_draft": false, "author": "bob", "created_at": "2026-10-01T08:00:00Z", "updated_at": "2026-10-02T08:00:00Z",
+      "base_ref": "master", "head_ref": "feat/1", "head_sha": "sha1", "mergeable": "mergeable",
+      "review_decision": null, "review_requests": ["alice"], "my_reviews": [], "commits": 1,
+      "checks_state": "SUCCESS", "unresolved_threads": 0, "comments": 0, "labels": []
+    },
+    {
+      "repo": "acme/svc", "number": 2, "title": "PR 2", "url": "https://github.com/acme/svc/pull/2",
+      "is_draft": false, "author": "alice", "created_at": "2026-10-01T08:00:00Z", "updated_at": "2026-10-02T08:00:00Z",
+      "base_ref": "master", "head_ref": "feat/2", "head_sha": "sha2", "mergeable": "mergeable",
+      "review_decision": "changes_requested", "review_requests": [], "my_reviews": [], "commits": 1,
+      "checks_state": "SUCCESS", "unresolved_threads": 0, "comments": 0, "labels": []
+    },
+    {
+      "repo": "acme/api", "number": 3, "title": "Bump serde", "url": "https://github.com/acme/api/pull/3",
+      "is_draft": false, "author": "dependabot[bot]", "created_at": "2026-10-01T08:00:00Z", "updated_at": "2026-10-02T08:00:00Z",
+      "base_ref": "master", "head_ref": "dependabot/3", "head_sha": "sha3", "mergeable": "mergeable",
+      "review_decision": null, "review_requests": [], "my_reviews": [], "commits": 1,
+      "checks_state": "SUCCESS", "unresolved_threads": 0, "comments": 0, "labels": []
+    },
+    {
+      "repo": "acme/api", "number": 4, "title": "Fix cache", "url": "https://github.com/acme/api/pull/4",
+      "is_draft": true, "author": "carol", "created_at": "2026-10-01T08:00:00Z", "updated_at": "2026-10-02T08:00:00Z",
+      "base_ref": "master", "head_ref": "feat/4", "head_sha": "sha4", "mergeable": "mergeable",
+      "review_decision": null, "review_requests": [], "my_reviews": [], "commits": 1,
+      "checks_state": "SUCCESS", "unresolved_threads": 0, "comments": 0, "labels": []
+    },
+    {
+      "repo": "acme/svc", "number": 5, "title": "PR 5", "url": "https://github.com/acme/svc/pull/5",
+      "is_draft": false, "author": "carol", "created_at": "2026-10-01T08:00:00Z", "updated_at": "2026-10-02T08:00:00Z",
+      "base_ref": "master", "head_ref": "feat/5", "head_sha": "sha5", "mergeable": "mergeable",
+      "review_decision": null, "review_requests": [],
+      "my_reviews": [{ "author": "alice", "state": "APPROVED", "commit_oid": "old", "submitted_at": "2026-09-30T08:00:00Z" }],
+      "commits": 1, "checks_state": "SUCCESS", "unresolved_threads": 0, "comments": 0, "labels": []
+    }
+  ]
+}

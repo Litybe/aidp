@@ -1,0 +1,9 @@
+{"data":{"viewer":{"login":"me"},"repository":{"pullRequest":{
+"number":42,"url":"u","title":"Colleague change","state":"CLOSED","isDraft":false,
+"headRefName":"feat/X-7","headRefOid":"abc123","baseRefName":"master","mergeable":"UNKNOWN","reviewDecision":"REVIEW_REQUIRED",
+"author":{"login":"dev"},
+"latestOpinionatedReviews":{"nodes":[]},"reviewRequests":{"nodes":[]},
+"commits":{"nodes":[{"commit":{"statusCheckRollup":null}}]},
+"reviewThreads":{"nodes":[]}}}},
+"user":{"login":"other"}
+}

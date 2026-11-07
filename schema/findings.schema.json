@@ -1,0 +1,128 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/ai-dev-pipeline/schema/findings.schema.json",
+  "title": "findings.json",
+  "description": "Artifact produced by a `reviewer` stage. Lists review findings in structured form. C6 (Lot 3, Capitalisation): $schema is draft-07, matching pipeline.schema.json / plan.schema.json / run-state.schema.json — the only three schemas any Rust code compiles (via the `jsonschema` crate, always with `Draft::Draft7`) before this one. Nothing here needs 2020-12; the `checks[]` if/then below is a draft-07 feature too.",
+  "type": "object",
+  "required": ["run_id", "iter", "generated_at", "severity_counts", "has_blocking_findings", "findings", "checks"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": { "type": "integer", "enum": [1], "default": 1 },
+    "run_id": { "type": "string" },
+    "iter": { "type": "integer", "minimum": 0 },
+    "generated_at": { "type": "string", "format": "date-time" },
+    "severity_counts": {
+      "type": "object",
+      "required": ["blocking", "major", "minor", "info"],
+      "additionalProperties": false,
+      "properties": {
+        "blocking": { "type": "integer", "minimum": 0 },
+        "major":    { "type": "integer", "minimum": 0 },
+        "minor":    { "type": "integer", "minimum": 0 },
+        "info":     { "type": "integer", "minimum": 0 }
+      }
+    },
+    "has_blocking_findings": { "type": "boolean" },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "severity", "category", "title"],
+        "additionalProperties": false,
+        "properties": {
+          "id": { "type": "string", "pattern": "^F-[0-9A-Za-z_-]+$" },
+          "severity": { "type": "string", "enum": ["blocking", "major", "minor", "info"] },
+          "category": {
+            "type": "string",
+            "enum": [
+              "correctness",
+              "completeness",
+              "tests",
+              "security",
+              "performance",
+              "maintainability",
+              "conventions",
+              "scope",
+              "documentation"
+            ]
+          },
+          "file": { "type": ["string", "null"] },
+          "line": { "type": ["integer", "null"], "minimum": 1 },
+          "location": {
+            "type": "object",
+            "required": ["path", "line", "side"],
+            "additionalProperties": false,
+            "properties": {
+              "path": { "type": "string" },
+              "line": { "type": "integer", "minimum": 1 },
+              "side": { "type": "string", "enum": ["LEFT", "RIGHT"] },
+              "start_line": { "type": "integer", "minimum": 1 }
+            }
+          },
+          "title": { "type": "string", "minLength": 1 },
+          "description": { "type": ["string", "null"] },
+          "suggestion": { "type": ["string", "null"] },
+          "related_ids": {
+            "type": "array",
+            "items": { "type": "string" },
+            "default": []
+          }
+        }
+      }
+    },
+    "checks": {
+      "description": "C6 (Lot 3, Capitalisation): the three-state controls this review actually ran — as opposed to `findings[]`, which only models what was FOUND, this models what was CONTROLLED. A control not actually executed is `skip` with a `harness_gap`, never `pass`.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "name", "status"],
+        "additionalProperties": false,
+        "properties": {
+          "id": { "type": "string", "pattern": "^C-[0-9A-Za-z_-]+$" },
+          "name": { "type": "string", "minLength": 1 },
+          "status": { "type": "string", "enum": ["pass", "fail", "skip"] },
+          "harness_gap": {
+            "type": ["string", "null"],
+            "description": "Why this control could NOT be executed. Required (and non-null) when status is `skip`."
+          },
+          "evidence": {
+            "type": ["string", "null"],
+            "description": "What was actually done/observed to justify `pass` (or `fail`) — not a guarantee, a paper trail."
+          },
+          "finding_ids": {
+            "type": "array",
+            "items": { "type": "string" },
+            "default": []
+          }
+        },
+        "allOf": [
+          {
+            "if": {
+              "properties": { "status": { "const": "skip" } },
+              "required": ["status"]
+            },
+            "then": {
+              "required": ["harness_gap"],
+              "properties": { "harness_gap": { "type": "string", "minLength": 1 } }
+            }
+          },
+          {
+            "if": {
+              "properties": { "status": { "const": "fail" } },
+              "required": ["status"]
+            },
+            "then": {
+              "required": ["finding_ids"],
+              "properties": { "finding_ids": { "type": "array", "minItems": 1 } }
+            }
+          }
+        ]
+      }
+    },
+    "scores": {
+      "description": "code-audit-rubric axis scores, e.g. {\"correctness\":4,\"correctness_note\":\"...\"}. Opened (additionalProperties) rather than typed key-by-key: the axis names are the rubric's, not this schema's, to own.",
+      "type": "object",
+      "additionalProperties": { "type": ["integer", "string"] }
+    }
+  }
+}

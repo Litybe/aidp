@@ -1,0 +1,351 @@
+version: 5
+id: cheat-stack-test
+name: Cheat stack — tests de non-régression en local
+description: >
+  Joue la suite de non-régression de la stack locale Cheat (skill
+  cheat-stack-local) contre un microservice Cheat qui tourne POUR DE VRAI en
+  conteneur, chaque dépendance sortante étant simulée par un conteneur de la
+  stack (6 WireMock nommés d'après les services réels, LocalStack pour
+  SNS/SQS/DynamoDB, MongoDB pour la persistance).
+  Deux usages, un seul pipeline. EN AUTONOME : `/run-pipeline-v7
+  cheat-stack-test` rejoue la suite sur le code committé — c'est le filet de
+  non-régression de la squad. COMPOSÉ (`type: pipeline`, `uses:
+  cheat-stack-test`) : inséré après l'étape d'implémentation d'un pipeline de
+  dev, il RECOMPILE le service depuis l'arbre de travail — donc avec les
+  modifications non committées — et prouve que le changement ne casse rien,
+  avant la revue et bien avant la PR. C'est `service_repo` qui porte cette
+  bascule : il pointe sur le checkout (ou le worktree) contenant le changement.
+  Le service est monté en lecture seule ; les scénarios, les mocks et les
+  fixtures appartiennent à la stack.
+inputs:
+  ticket_id:
+    required: false
+    kind: string
+    default: "NO-TICKET"
+    description: Identifiant repris dans results.json et le rapport (ex. PIXEL-5559).
+  service:
+    required: false
+    kind: enum
+    values: [cheat-profile-service]
+    default: cheat-profile-service
+    description: >
+      Service sous test. Un seul aujourd'hui : la stack n'embarque que
+      cheat-profile-service. En ajouter un demande un service de build et un mock
+      par API sortante nouvelle (section « Ajouter un service » du README de la
+      stack) — ce n'est pas un simple changement de valeur ici.
+  stack_dir:
+    required: false
+    kind: string
+    default: "/mnt/c/CODE/Tools/cheat-local-environment/localstack/cheat-stack"
+    description: Chemin WSL de la stack (le docker CLI vit dans WSL).
+  service_repo:
+    required: false
+    kind: string
+    description: >
+      Chemin WSL du checkout du service à compiler. Vide = le défaut du
+      docker-compose (../../../../.Net/<service>), donc le code committé.
+      RENSEIGNÉ = c'est ce code-là qui est compilé, modifications non committées
+      comprises. C'est l'input qui fait de ce pipeline une porte de qualité dans
+      un run de dev : passe-lui la racine du workspace du run.
+  scenarios:
+    required: false
+    kind: string
+    description: >
+      Sous-ensemble de scénarios à jouer, séparés par une espace (ex.
+      "update-cheat-profile-event scheduled-closures-pt-infinite-suspension").
+      Vide = toute la suite. La charte peut le restreindre elle-même quand un
+      contexte de changement est fourni.
+  change_context:
+    required: false
+    kind: string
+    description: >
+      Ce que le run a changé, ou ce qu'il faut couvrir : une référence de ticket,
+      un résumé, ou le chemin d'un changed-files.json. Quand il est fourni, la
+      charte cible les scénarios concernés et dit ce que la suite NE couvre PAS
+      pour ce changement.
+  author_scenarios:
+    required: false
+    kind: bool
+    default: false
+    description: >
+      Autoriser l'ajout de scénarios à la suite quand la charte identifie un trou
+      de couverture. Écrit UNIQUEMENT sous <stack_dir> (harness/src/scenarios.ts,
+      mocks/) — jamais dans un repo de service. Laissé à false, le run se contente
+      de signaler le trou dans le rapport.
+  rebuild:
+    required: false
+    kind: enum
+    values: [auto, always, never]
+    default: auto
+    description: >
+      Recompiler le service avant de tester. `auto` = recompile si service_repo
+      est renseigné (le cas d'un run de dev), sinon réutilise le binaire publié.
+      `always` force, `never` teste ce qui tourne déjà.
+  teardown:
+    required: false
+    kind: bool
+    default: false
+    description: >
+      Arrêter la stack après le rapport. Faux par défaut, à l'inverse du harness
+      GDPR : garder la stack debout permet d'inspecter un échec à la main
+      (`stack.sh cli calls`, `stack.sh logs`) et fait gagner 40 s au run suivant.
+stages:
+  # 1. Preflight READ-ONLY. Rien n'est démarré, rien n'est compilé. On vérifie
+  #    seulement que le run est jouable, et on dit comment réparer sinon. Un
+  #    preflight rouge vaut mieux qu'un scénario rouge qui ressemble à une
+  #    régression alors que c'est l'environnement.
+  - name: preflight
+    agent: executor
+    skills: [cheat-stack-local]
+    inputs:
+      stack_dir: "{{ inputs.stack_dir }}"
+      service: "{{ inputs.service }}"
+      service_repo: "{{ inputs.service_repo }}"
+      rebuild: "{{ inputs.rebuild }}"
+    outputs: [preflight.json]
+    scope: { mode: stage_dir_only }
+    with:
+      instructions: >-
+        Vérifications NON destructives uniquement : ne lance ni `stack.sh up`, ni
+        `stack.sh build`, ne compile rien, ne crée aucun conteneur. (a) WSL répond
+        (`wsl bash -lc "echo ok"`) et le docker CLI y est disponible — n'appelle
+        JAMAIS docker depuis Windows, il n'y est pas installé. (b) stack_dir
+        existe et contient stack.sh ; vérifie aussi que stack.sh est en LF (un
+        CRLF le rend illisible par bash WSL, symptôme `set: pipefail: invalid
+        option name`). (c) LocalStack répond sur
+        http://localhost:4566/_localstack/health — check INFORMATIF, `up` le
+        démarre, donc son absence ne doit PAS faire tomber stack_ready. (d) Si
+        service_repo est renseigné : le chemin existe, contient bien le service
+        attendu (src/<...>.service/*.csproj), et dis quelle branche git y est
+        sortie — c'est ce code-là qui sera compilé, dis-le explicitement. (e) Si
+        une compilation est prévue (rebuild=always, ou rebuild=auto avec
+        service_repo renseigné), le feed NuGet d'entreprise doit être joignable :
+        un GET sur https://repository.pixelhood.net/artifactory/api/nuget/v3/nuget/
+        (un 200 ou un 401 prouvent la joignabilité ; seul un échec DNS/connexion
+        est un échec). Ne substitue jamais api.nuget.org : il est bloqué sur ce
+        poste, c'est normal, et ce n'est pas ce que la stack utilise.
+        Écris preflight.json : { checks: [ { id, ok, detail, fix } ], stack_ready,
+        will_rebuild: bool, service_repo_resolved, git_branch }. Pose
+        signals.stack_ready et signals.will_rebuild. Renvoie status: blocked si le
+        run n'est pas jouable, en listant les `fix`.
+
+  # 2. La charte : le référentiel d'attendus que le rapport comparera. Sans
+  #    change_context c'est la baseline (toute la suite verte). Avec, c'est une
+  #    matrice ciblée — et surtout la liste honnête de ce que la suite ne couvre
+  #    PAS pour ce changement, qui est la vraie valeur du stage.
+  #    Pas de `needs` sur stack_up : la charte s'écrit pendant que la stack monte.
+  - name: charter
+    agent: planner
+    skills: [cheat-stack-local]
+    needs: [preflight]
+    inputs:
+      ticket_id: "{{ inputs.ticket_id }}"
+      service: "{{ inputs.service }}"
+      scenarios: "{{ inputs.scenarios }}"
+      change_context: "{{ inputs.change_context }}"
+      stack_dir: "{{ inputs.stack_dir }}"
+    outputs: [test-charter.md, expectations.json]
+    scope: { mode: stage_dir_only }
+    with:
+      instructions: >-
+        Lis le skill cheat-stack-local, puis, dans stack_dir, le README, la
+        cartographie (docs/CARTOGRAPHIE-*.md) et harness/src/scenarios.ts — la
+        description de chaque scénario dit ce qu'il PROUVE, c'est le matériau de
+        la charte. Si `scenarios` est fourni, reprends cette liste ; sinon, en
+        l'absence de change_context, prends toute la suite. Avec un
+        change_context : détermine quels scénarios touchent le code changé
+        (handlers, use cases, repositories, publishers concernés) et mets-les en
+        tête, mais NE RESTREINS PAS la suite en dessous de la moitié — un
+        changement de profil triche a des effets de bord larges, et la suite
+        complète coûte quelques minutes.
+        Pose signals.scenarios = le tableau EXACT des noms de scénarios à jouer.
+        expectations.json DOIT porter la baseline : { suite: { scenarios: [...],
+        expected_total: 20, expected_checks: 128 }, focus: [...],
+        coverage_gaps: [...], known_limitations: [...] }. Dans
+        known_limitations, reprends explicitement, parce que ce sont des « verts
+        qui ne prouvent rien » et non des échecs : les 3 feature flags qui
+        résolvent à false hors ligne (`…anonymisation-enabled`,
+        `…refund-policy-enabled`, `…birthdate-update-elderly-enabled`), donc les
+        parcours anonymisation GDPR / refund policy / règle PT âge NON couverts ;
+        et le fait que la boucle `marker_operation_completed_v2` n'est pas encore
+        scénarisée. Dans coverage_gaps, dis ce que le changement introduit qui
+        n'est couvert par AUCUN scénario existant — c'est ce que lira le stage
+        d'écriture de scénarios, et à défaut le rapport. N'écris aucun code ici.
+
+  # 3. Monte la stack. Pas de gate : tout est local à la machine, rien de partagé
+  #    n'est touché, et `up` est idempotent.
+  - name: stack_up
+    agent: executor
+    policy:
+      - "Zéro appel externe : chaque dépendance sortante passe par un conteneur de la stack (WireMock, LocalStack, MongoDB), jamais par un service externe réel."
+      - "Ce pipeline n'écrit jamais dans un repo de service : le service y est monté en lecture seule."
+    skills: [cheat-stack-local]
+    needs: [preflight]
+    inputs:
+      stack_dir: "{{ inputs.stack_dir }}"
+      service_repo: "{{ inputs.service_repo }}"
+      rebuild: "{{ inputs.rebuild }}"
+    outputs: [stack-up.log, stack-state.json]
+    scope: { mode: stage_dir_only }
+    with:
+      instructions: >-
+        Toujours depuis WSL et depuis stack_dir — p.ex. `wsl bash -lc "cd
+        <stack_dir> && bash stack.sh up"`. Si service_repo est renseigné, préfixe
+        par `CHEAT_PROFILE_REPO=<service_repo>` : c'est CE code qui est compilé,
+        modifications non committées comprises. `up` enchaîne LocalStack + Mongo,
+        les 6 WireMock, la publication du service depuis la source montée, la
+        provision (topics, queues espionnes, table DynamoDB, schéma Mongo) puis le
+        démarrage du service, et attend qu'il soit healthy. Compte ~2 min au
+        premier build, ~40 s ensuite.
+        Si rebuild vaut `always`, ou `auto` avec service_repo renseigné ET que la
+        stack tournait déjà, lance en plus `CHEAT_PROFILE_REPO=<service_repo> bash
+        stack.sh build` : `up` réutilise le binaire publié si le service tourne
+        déjà, et tester l'ancien binaire en croyant tester le nouveau est le seul
+        vrai piège de ce pipeline. Si rebuild vaut `never`, ne recompile pas.
+        Capture stdout+stderr dans stack-up.log. Vérifie ensuite `bash stack.sh
+        cli status` et écris stack-state.json : { up: bool, healthy: bool,
+        queues_created: n/14, mocks: {...}, rebuilt: bool, service_repo_used,
+        notes: [...] }. Un échec de compilation est un ÉCHEC DE TEST à part
+        entière (le changement ne compile pas) : renvoie status: failed avec les
+        erreurs du compilateur, ne tente pas de corriger le code toi-même.
+        INTERDIT : écrire quoi que ce soit dans le repo du service — il est monté
+        en lecture seule et se configure par un appsettings monté.
+
+  # 4. Écriture de scénarios, seulement si la charte a trouvé un trou ET que le
+  #    run l'autorise. Écrit dans la STACK, ce qui permet d'ajouter des tests
+  #    sans polluer le repo qu'on teste.
+  - name: author_scenarios
+    agent: executor
+    model: opus   # delibere : ecriture de scenarios de non-regression triche - sonnet manque la rigueur metier requise
+    policy:
+      - "Les scénarios, mocks et fixtures ajoutés appartiennent à la stack ; ce pipeline n'écrit jamais dans un repo de service."
+    skills: [cheat-stack-local, feature-testing-aidp]
+    needs: [charter, stack_up]
+    when: "{{ inputs.author_scenarios }}"
+    inputs:
+      stack_dir: "{{ inputs.stack_dir }}"
+      expectations: "{{ stages.charter.outputs.expectations }}"
+      charter: "{{ stages.charter.outputs.test-charter }}"
+      change_context: "{{ inputs.change_context }}"
+    outputs: [authored-scenarios.json]
+    scope: { mode: stage_dir_only }
+    with:
+      instructions: >-
+        Lis coverage_gaps dans expectations.json. S'il est vide, n'écris rien et
+        renvoie { authored: [] } — un scénario ajouté sans trou à combler est du
+        bruit. Sinon, ajoute UN scénario par trou dans
+        <stack_dir>/harness/src/scenarios.ts, et si besoin un mapping par défaut
+        sous <stack_dir>/mocks/<service>/mappings/. TU N'AS LE DROIT D'ÉCRIRE QUE
+        SOUS <stack_dir> : jamais dans un repo de service, jamais ailleurs.
+        Respecte le cadre du harness : le framework donne au scénario ses propres
+        user_id et purge Mongo, draine les queues espionnes et réinitialise les
+        stubs avant de le lancer — n'ajoute pas ta propre isolation. N'asserte que
+        l'observable de l'extérieur : le document Mongo (`mongo.*`), les messages
+        des queues espionnes (`expectEvent` / `expectNoEvent`), les appels
+        enregistrés (`wiremock.requestsTo`). Le champ `description` du scénario
+        dit ce qu'il PROUVE, pas ce qu'il fait. Deux pièges qui feront échouer un
+        scénario neuf pour de mauvaises raisons : un `operation_timestamp` qui
+        n'est pas strictement postérieur au `dt` du profil seedé fait ignorer
+        l'update en silence, et un stub `account` sans nœud `identity` complet
+        envoie le message en DLQ.
+        Vérifie ensuite que ça compile ET que ça passe : `wsl bash -lc "cd
+        <stack_dir> && bash stack.sh test <nom du nouveau scénario>"`. Un scénario
+        qui échoue à son premier run est soit faux, soit la preuve d'un vrai
+        défaut : dis lequel, ne le rends pas vert en affaiblissant l'assertion.
+        Écris authored-scenarios.json : { authored: [ { name, gap, files_touched,
+        first_run: pass|fail, evidence } ] } et pose signals.authored_scenarios =
+        le tableau des noms ajoutés.
+
+  # 5. La suite. SÉQUENTIEL et volontairement sans fan_out : les scénarios
+  #    partagent une seule stack — un seul Mongo, un seul jeu de WireMock dont les
+  #    stubs sont réinitialisés entre chaque — donc les sharder ferait s'écraser
+  #    mutuellement leurs stubs et leurs queues espionnes.
+  - name: run_suite
+    agent: executor
+    skills: [cheat-stack-local]
+    needs: [stack_up, charter, author_scenarios]
+    inputs:
+      stack_dir: "{{ inputs.stack_dir }}"
+      expectations: "{{ stages.charter.outputs.expectations }}"
+    outputs: [suite-run.log, suite-results.json]
+    scope: { mode: stage_dir_only }
+    with:
+      instructions: >-
+        Joue les scénarios retenus par la charte (signals.scenarios), plus ceux
+        que author_scenarios a ajoutés s'il a tourné : `wsl bash -lc "cd
+        <stack_dir> && bash stack.sh test [noms...]"` — sans nom = toute la suite.
+        Capture TOUT stdout+stderr dans suite-run.log, ainsi que le code de sortie.
+        Puis parse le bloc `Summary` (lignes `PASS|FAIL <scénario> (n checks)`
+        puis `N passed, M failed, K skipped`) et écris suite-results.json : {
+        exit_code, scenarios: [ { name, status: pass|fail|skip, checks,
+        failed_checks: [ { label, expected, actual } ] } ], totals: { scenarios,
+        passed, failed, skipped } }.
+        Pour CHAQUE check en échec, récupère l'evidence que le runner imprime
+        déjà : les événements vus sur les queues espionnes et les appels HTTP que
+        le service a réellement faits. Si elle ne suffit pas, `bash stack.sh logs
+        --tail 200` et `bash stack.sh cli calls --json`. Compare à
+        expectations.json : la baseline est 20 scénarios / 128 checks verts.
+        NE RELANCE PAS un scénario en boucle pour le faire passer, ne modifie
+        aucun scénario ici, et ne touche à aucun repo de service. Un échec est un
+        résultat, pas un problème à contourner.
+
+  # 6. Verdict. Reviewer => signals.has_blocking_findings porte le gate final et,
+  #    en composition, décide si le pipeline appelant continue.
+  - name: report
+    agent: reviewer
+    model: opus   # delibere : verdict gate sur une suite de non-regression triche - opus limite les faux verts
+    skills: [cheat-stack-local, feature-testing-aidp, writing-clearly-and-concisely]
+    needs: [run_suite]
+    inputs:
+      ticket_id: "{{ inputs.ticket_id }}"
+      service: "{{ inputs.service }}"
+      expectations: "{{ stages.charter.outputs.expectations }}"
+      charter: "{{ stages.charter.outputs.test-charter }}"
+      change_context: "{{ inputs.change_context }}"
+    outputs: [cheat-stack-report.md, results.json]
+    gate: true
+    scope: { mode: stage_dir_only }
+    with:
+      instructions: >-
+        Consolide stack-state.json, suite-results.json et authored-scenarios.json
+        (celui qui existe). Écris results.json conforme à
+        schema/test-report.schema.json, en normalisant les identifiants en
+        `SC-<nom du scénario>` (le pattern exige le préfixe `SC-`), avec
+        has_blocking_findings = true dès qu'un scénario est fail ou error. Pose
+        signals.has_blocking_findings identique au champ du rapport.
+        Écris cheat-stack-report.md : le verdict, puis par scénario en échec
+        l'attendu / l'observé / l'evidence (événement de queue espionne, appel
+        HTTP enregistré, ligne de log). Si le run a recompilé depuis un
+        service_repo, dis-le en tête avec la branche : le lecteur doit savoir que
+        le verdict porte sur du code non committé.
+        Deux sections obligatoires, parce qu'un rapport de test local ment par
+        omission sans elles. « Ce que ce run NE prouve pas » : reprends
+        known_limitations d'expectations.json — les 3 flags fail-closed rendent
+        les parcours anonymisation GDPR, refund policy et règle PT âge
+        inatteignables, donc verts par absence et non par succès ; la boucle
+        `marker_operation_completed_v2` n'est pas scénarisée. « Couverture du
+        changement » : si change_context est fourni, dis quels scénarios couvrent
+        effectivement le changement et lesquels de ses effets ne sont couverts par
+        aucun — un run tout vert sur un changement non couvert est un faux
+        positif, et c'est la conclusion qu'il faut écrire.
+        Ne requalifie jamais un échec en « connu » s'il n'est pas dans
+        known_limitations. Ne recopie aucun identifiant de connexion.
+
+  # 7. Nettoyage, désactivé par défaut : une stack laissée debout s'inspecte à la
+  #    main après un échec et fait gagner le build du run suivant.
+  - name: teardown
+    agent: executor
+    model: haiku   # delibere : demontage mecanique, aucun raisonnement
+    skills: [cheat-stack-local]
+    needs: [report]
+    when: "{{ inputs.teardown }}"
+    inputs:
+      stack_dir: "{{ inputs.stack_dir }}"
+    outputs: [teardown.json]
+    scope: { mode: stage_dir_only }
+    with:
+      instructions: >-
+        `wsl bash -lc "cd <stack_dir> && bash stack.sh down"`. LocalStack, MongoDB
+        et Mongo Express appartiennent au docker-compose parent et ne sont PAS
+        arrêtés — d'autres harness de ce repo s'en servent. Écris teardown.json :
+        { stack_down: bool, containers_left: [...], notes }.

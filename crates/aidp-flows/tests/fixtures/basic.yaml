@@ -1,0 +1,31 @@
+id: basic
+version: 1
+settings:
+  threshold: 2
+blocks:
+  ci:
+    - id: wait-ci
+      kind: wait
+      use: timer
+steps:
+  - id: prepare
+    kind: action
+    use: noop
+    phase: prepare
+  - id: build
+    kind: pipeline
+    use: dev
+    pushes: true
+    phase: build
+  - id: review
+    kind: human
+    prompt: Approve the delivery
+    choices: [approve, reject]
+  - id: publish
+    kind: action
+    use: noop
+    when: steps.review.outputs.decision == "approve"
+  - id: local-only
+    kind: action
+    use: noop
+    skip_on: [local]

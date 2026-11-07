@@ -1,0 +1,38 @@
+# TODO/routing.yaml for PixelHood (plan gamedev §3.1 and §3.2).
+#
+# Copy it to <vault>/TODO/routing.yaml. It is not part of the vault: the vault only holds
+# the notes aidp writes.
+#
+# A GitHub issue is routed by its labels, first matching rule wins. `service:` (or its synonym
+# `route:`) names an entry of `repos:`; that entry gives the route family (`route:`: code, art,
+# map or doc), the delivery flow the dispatcher starts (`flow:`) and the run depth (`track:`).
+# The mirror stays filed under the service of its repository (`github.repos` in config.yaml).
+#
+# A label matches case-insensitively; a trailing `*` makes it a prefix (`pixel:*`).
+# `keywords` match whole words of the title and of the body, case-insensitively.
+# An issue no rule matches is `unrouted`: it waits on `aidp:triage` (blocked: needs-routing)
+# until a label or `aidp ticket route` settles it.
+
+defaults: { track: standard }
+
+rules:
+  # 1. Labels, in the order of the plan's table.
+  - { match: { labels: [pixelart, art, sprite, "pixel:*", "asset:*"] }, route: pixelhood-art }
+  - { match: { labels: [map, ldtk, level, salle] }, route: pixelhood-map }
+  - { match: { labels: [doc, bible, documentation] }, route: pixelhood-doc }
+  - { match: { label: bug }, route: pixelhood-bug }
+  - { match: { labels: [dev, code, feature, enhancement, tech] }, route: pixelhood-code }
+
+  # 2. No route label: the keywords of the title and of the body.
+  - { match: { keywords: [sprite, pixelart, animation, tileset, palette, icône, icone] }, route: pixelhood-art }
+  - { match: { keywords: [map, ldtk, salle, niveau, room, level] }, route: pixelhood-map }
+  - { match: { keywords: [bible, documentation, lore, dialogue] }, route: pixelhood-doc }
+  - { match: { keywords: [bug, crash, régression, regression] }, route: pixelhood-bug }
+  - { match: { keywords: [script, controller, système, systeme, shader, ui] }, route: pixelhood-code }
+
+repos:
+  pixelhood-code: { route: code, flow: game-code, track: standard }
+  pixelhood-bug:  { route: code, flow: game-code, track: bug }      # failing repro test first
+  pixelhood-art:  { route: art,  flow: game-art }
+  pixelhood-map:  { route: map,  flow: game-map }
+  pixelhood-doc:  { route: doc,  flow: game-doc }

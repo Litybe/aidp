@@ -1,0 +1,7 @@
+version: 5
+id: t05-minimal
+description: Minimal test pipeline with one executor stage, no fan_out, no plan_tasks, no parallel group.
+inputs: {}
+stages:
+  - name: only
+    agent: executor

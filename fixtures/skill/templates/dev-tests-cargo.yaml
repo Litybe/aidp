@@ -1,0 +1,51 @@
+version: 5
+id: dev-tests-cargo
+kind: fragment
+description: >
+  Reusable test phase for Rust dev pipelines: one executor stage writes
+  or extends Rust tests for the change just implemented, runs them, and emits
+  changed-files.json plus test-report.md. Same input contract and output names
+  as dev-tests-csharp-split, so a parent swaps composites with `when:`.
+  Writes tests only, no production code. Declares no gate and is fully autonomous.
+inputs:
+  changed_files: { required: false, kind: string, default: "" }
+  context: { required: false, kind: string, default: "" }
+settings:
+  knowledge_graph:
+    enabled: true
+    refresh: never
+    code_only: true
+stages:
+  - name: tests_suite
+    agent: executor
+    skills: [graphify-context, rust-testing-aidp]
+    scope: { mode: tests }
+    inputs:
+      changed_files: "{{ inputs.changed_files }}"
+      context: "{{ inputs.context }}"
+      task: >
+        Write the Rust tests for the change this run just implemented, run them,
+        and nothing else. No production code.
+
+        WHAT TO COVER. Read `changed_files` for the exact write set; when it
+        is empty, take the working-tree diff against the base branch. Cover the
+        happy path, every business rule and threshold, every guard clause and
+        the error paths. Derive cases from the acceptance criteria in `context`
+        when given, from the code otherwise. Assert behaviour and values, never
+        only "did not throw". Follow the conventions of the loaded skills.
+
+        RUN. Run `cargo nextest run` on the touched crates, falling back to `cargo test` when nextest is absent, then the whole workspace once. Fix test-side failures. If the suite is red because the
+        production code is wrong, do NOT bend the test and do NOT edit
+        production code: record the failure under `pre_existing_issues` in
+        changed-files.json with expected vs observed value, and name it in
+        test-report.md.
+
+        AUTONOMOUS. Never ask the user a question. Decide open points yourself
+        and record the decision in `follow_ups`.
+
+        ARTIFACTS. changed-files.json (schema/changed-files.schema.json) lists
+        every test file you created or modified, with `build_status` set and
+        any new package under `new_dependencies`. test-report.md gives what was
+        added, the suite result (total / passed / failed / skipped), the
+        acceptance criteria with no test, and what is still not covered.
+    outputs: [changed-files.json, test-report.md]

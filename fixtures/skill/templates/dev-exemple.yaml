@@ -1,0 +1,36 @@
+version: 5
+id: dev-exemple
+kind: pipeline
+description: >
+  Minimal demonstration pipeline: collect context, plan, implement. No skills
+  and no gates, so it runs end to end with any agent provider, including a fake one.
+inputs:
+  prompt: { required: true, kind: string, description: "Request in plain text." }
+  feature: { required: true, kind: string, description: "Feature name: names the branch and the vault folder." }
+stages:
+  - name: collect
+    description: Read the repository and write a short context note for the request.
+    agent: analyzer
+    inputs:
+      prompt: "{{ inputs.prompt }}"
+      feature: "{{ inputs.feature }}"
+    outputs: [context.md]
+
+  - name: plan
+    description: Turn the context into an executable task plan.
+    agent: planner
+    needs: [collect]
+    with: { mode: feature }
+    inputs:
+      context: "{{ stages.collect.outputs.context }}"
+    outputs: [plan.json, plan.md]
+
+  - name: implementation
+    description: Apply the plan's tasks to the working tree.
+    agent: executor
+    needs: [plan]
+    scope: { mode: repo_wide }
+    plan_tasks:
+      from: "{{ stages.plan.outputs.plan }}"
+      max: 1
+    outputs: [changed-files.json]

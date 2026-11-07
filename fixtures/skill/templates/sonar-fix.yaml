@@ -1,0 +1,185 @@
+version: 5
+id: sonar-fix
+description: >-
+  Turn a red SonarQube quality gate on a pull request back to green — honestly.
+  Pulls the gate conditions, the unresolved issues on new code and the security
+  hotspots, reads the rule behind each one, decides per issue (fix / write the
+  missing test / false-positive with justification / won't-fix), applies the
+  fixes, re-checks the gate after the analysis re-runs.
+
+  Dispatched automatically by the CI autopilot (`aidp ci`) when the gate goes
+  red, and runnable by hand: `/run-pipeline-v7 sonar-fix <pr-number>`.
+
+  Runs autonomously in native mode: gates are pre-approved, and decisions that
+  need a human (`false_positive`) are reported in `signals.escalations`, not
+  blocking.
+policy:
+  - "The gate is never gamed: raising a coverage exclusion, adding `// NOSONAR`, or marking an issue false-positive to make a number move is a blocking review finding, not a fix."
+  - "Coverage debt is paid with tests that actually assert behaviour."
+inputs:
+  pr:
+    required: false
+    kind: string
+    description: >-
+      PR number or URL. Normally passed as the run target (--target); the value
+      lands in inputs.target. If absent, the collect stage auto-detects the PR
+      of the current branch.
+  feature:
+    required: false
+    kind: string
+    description: >-
+      Jira ticket key the PR implements (e.g. PIXEL-5694). Set automatically by
+      the CI autopilot from the PR's branch name; it names the run's vault
+      folder (<vault>/Pipelines/<repo>/<feature>/) so a CI fix run sits beside
+      the ticket's other runs instead of in a PR-numbered bucket. Absent when
+      the branch carries no ticket key - the run then groups under the PR
+      number, which is correct for a hand-made PR.
+  scope:
+    required: true
+    kind: enum
+    values: [new_code, gate_only, all_issues]
+    default: new_code
+    description: >-
+      new_code  = every unresolved issue Sonar attributes to this PR (default).
+      gate_only = only what actually fails a gate condition — the minimum to go
+                  green, for when the PR is urgent.
+      all_issues = the PR's issues plus pre-existing ones in the files it
+                  touches. Bigger diff, better file; use deliberately.
+  track:
+    required: true
+    kind: enum
+    values: [quick, standard, deep]
+    default: standard
+    description: >-
+      Run depth: quick applies fixes only, standard/deep also run the tests
+      stage. Gates the tests stage (`inputs.track in ['standard','deep']`);
+      defaults to standard.
+  stack:
+    required: false
+    kind: enum
+    values: [auto, generic, rust, csharp, lambda-ts]
+    default: auto
+    description: >-
+      Language stack of the repo, which picks the language skills of the
+      code/tests stages via skills_by. auto (default) lets `aidp run init`
+      detect it from marker files (Cargo.toml, *.sln / *.csproj,
+      serverless.* + package.json); generic keeps the multi-stack C# +
+      Lambda TS skill set.
+  publish:
+    required: false
+    kind: enum
+    values: [agent, host]
+    default: agent
+    description: >-
+      Who publishes the branch: agent (default) commits and pushes; host (a
+      ticket flow) publishes after the run, so the run only commits and never
+      runs git push.
+settings:
+  max_correction_iterations: 2
+  knowledge_graph:
+    enabled: true
+    refresh: never
+    code_only: true
+stages:
+  # 1) COLLECT — the only stage that talks to SonarQube. `aidp sonar report`
+  #    gives gate + measures + issues + hotspots in one call; this stage adds
+  #    what the API does not: the rule's intent, and the code around each issue.
+  - name: collect
+    agent: analyzer
+    skills: [sonar-issues-collect-aidp, graphify-context]
+    inputs:
+      pr: "{{ inputs.target }}"
+      scope: "{{ inputs.scope }}"
+    outputs: [sonar-issues.json, context.md]
+    when: "true"
+
+  # 2) PLAN — one decision per issue, and the honesty gate of this pipeline.
+  #    Gated.
+  - name: plan
+    agent: planner
+    policy:
+      - "A `false_positive` decision must carry a reason a reviewer would accept."
+      - "Report every `false_positive` decision in `signals.escalations` (array of {id, decision, reason}) and name each one in the summary. It never sets status `blocked` and never pauses the run."
+      - "A coverage condition becomes test tasks, never an exclusion."
+    skills: [sonar-fix-plan-aidp, code-audit-rubric, graphify-context, enforcing-decision-records]
+    needs: [collect]
+    with: { mode: feature }
+    inputs:
+      issues: "{{ stages.collect.outputs.sonar-issues }}"
+      scope: "{{ inputs.scope }}"
+      track: "{{ inputs.track }}"
+    outputs: [decisions.json, plan.md]
+    gate: true
+
+  # 3a) FIX — apply the code changes. Production scope.
+  - name: fix
+    agent: executor
+    policy:
+      - "A maintainability issue is fixed in the code, not silenced in sonar-project.properties."
+    skills: [graphify-context]
+    skills_by: { input: stack, map: { rust: [rust-dev-aidp], csharp: [csharp-dev-aidp], lambda-ts: [lambda-ts-dev-aidp, ts-refactoring-catalog] }, default: [csharp-dev-aidp, lambda-ts-dev-aidp, ts-refactoring-catalog] }
+    needs: [plan]
+    inputs:
+      decisions: "{{ stages.plan.outputs.decisions }}"
+    scope: { mode: production }
+    outputs: [changed-files.json]
+
+  # 3b) TESTS — the other half of most red gates. Also re-greens any test the
+  #     fix stage broke.
+  - name: tests
+    agent: executor
+    policy:
+      - "A `new_coverage` failure below threshold is fixed only here, with tests that assert behaviour on the new lines."
+    skills: [graphify-context]
+    skills_by: { input: stack, map: { rust: [rust-testing-aidp, rust-dev-aidp], csharp: [feature-testing-aidp, reqnroll-testing-aidp, csharp-dev-aidp], lambda-ts: [feature-testing-aidp, lambda-ts-dev-aidp] }, default: [feature-testing-aidp, reqnroll-testing-aidp, csharp-dev-aidp, lambda-ts-dev-aidp] }
+    needs: [fix]
+    inputs:
+      decisions: "{{ stages.plan.outputs.decisions }}"
+      issues: "{{ stages.collect.outputs.sonar-issues }}"
+    scope: { mode: tests }
+    outputs: [changed-files.json]
+    when: "{{ inputs.track in ['standard','deep'] }}"
+
+  # 3c) REVIEW — the anti-gaming pass. Must set signals.has_blocking_findings.
+  - name: review
+    agent: reviewer
+    policy:
+      - "Re-read every decision against the diff: was the issue fixed, or made invisible?"
+    skills: [graphify-context, code-review-aidp, code-audit-rubric]
+    needs: [fix, tests]
+    inputs:
+      decisions: "{{ stages.plan.outputs.decisions }}"
+      issues: "{{ stages.collect.outputs.sonar-issues }}"
+    outputs: [findings.json, summary.md]
+
+  # 3d) CORRECTION LOOP.
+  - name: correction_loop
+    type: loop
+    when: "{{ stages.review.outputs.findings.has_blocking_findings }}"
+    max_iterations: "{{ settings.max_correction_iterations }}"
+    body:
+      - { name: replan, agent: planner, model: sonnet, with: { mode: correction }, inputs: { findings: "{{ stages.review.outputs.findings }}" }, outputs: [plan.md] }  # delibere : une reprise de plan est un delta, pas une conception - opus serait surpaye
+      - { name: refix, agent: executor, skills: [graphify-context], skills_by: { input: stack, map: { rust: [rust-dev-aidp], csharp: [csharp-dev-aidp], lambda-ts: [lambda-ts-dev-aidp] }, default: [csharp-dev-aidp, lambda-ts-dev-aidp] }, scope: { mode: production }, needs: [replan], outputs: [changed-files.json] }
+      - { name: rereview, agent: reviewer, skills: [graphify-context, code-review-aidp, code-audit-rubric], needs: [refix], outputs: [findings.json, summary.md] }
+
+  # 4) PUSH & RE-CHECK — commit, push, wait for the CI to re-run the analysis,
+  #    then read the gate again and report whether it is actually green. Gated.
+  #    Issues decided `false_positive` are listed for a human to mark in the
+  #    Sonar UI.
+  - name: push_and_recheck
+    agent: executor
+    policy:
+      - "This pipeline never mutates Sonar state itself."
+      - "When the input `publish` is `host`: run the local checks, commit on the PR branch and never run git push. Do not wait for the analysis and post no PR comment: the host publishes the branch after the run and the flow re-reads the gate."
+      - "With `publish: host`, write gate-result.json with `pushed: false`, the local commit sha and the false positives a human must mark, and reply `completed` with `signals.pushed: false`."
+    skills: [sonar-fix-verify-aidp, writing-clearly-and-concisely]
+    skills_by: { input: publish, map: { host: [] }, default: [git-push] }
+    needs: [plan, fix, review]
+    inputs:
+      pr: "{{ inputs.target }}"
+      decisions: "{{ stages.plan.outputs.decisions }}"
+      changed: "{{ stages.fix.outputs.changed-files }}"
+      publish: "{{ inputs.publish }}"
+    scope: { mode: stage_dir_only }
+    outputs: [gate-result.json]
+    gate: true

@@ -1,0 +1,57 @@
+[package]
+name = "aidp-gateway"
+autotests = false
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "aidp gateway: the resident control plane — headless claude sessions, automations (cron / webhook / event / CI heartbeat), HTTP API + SSE for the viewer"
+
+[lints]
+workspace = true
+
+[dependencies]
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+tracing-appender = { workspace = true }
+aidp-core = { path = "../aidp-core" }
+aidp-integrations = { path = "../aidp-integrations" }
+aidp-agents = { path = "../aidp-agents" }
+aidp-tickets = { path = "../aidp-tickets" }
+aidp-memory = { path = "../aidp-memory" }
+aidp-flows = { path = "../aidp-flows" }
+serde.workspace = true
+jsonschema.workspace = true
+serde_json.workspace = true
+base64 = "0.22"
+serde_yaml.workspace = true
+anyhow.workspace = true
+chrono.workspace = true
+ureq.workspace = true
+thiserror.workspace = true
+tiny_http = "0.12"
+uuid = { version = "1", features = ["v4"] }
+sha2.workspace = true
+ctrlc.workspace = true
+aidp-workspace-hack = { version = "0.1", path = "../aidp-workspace-hack" }
+
+[dev-dependencies]
+aidp-testkit.workspace = true
+tempfile.workspace = true
+insta.workspace = true
+proptest.workspace = true
+
+[[test]]
+name = "pr_routes"
+path = "src/tests/units/pr_routes.rs"
+
+[[test]]
+name = "pr_detail_http"
+path = "src/tests/units/pr_detail_http.rs"
+
+[[test]]
+name = "integration"
+path = "tests/integration.rs"
+
+[[test]]
+name = "concurrency_background"
+path = "tests/concurrency_background.rs"

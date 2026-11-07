@@ -1,0 +1,59 @@
+[package]
+name = "aidp-core"
+autotests = false
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+include = ["src/**/*", "assets/**/*", "tests/fixtures/**/*", "Cargo.toml"]
+
+[lints]
+workspace = true
+
+[dependencies]
+tracing = { workspace = true }
+serde.workspace = true
+serde_json.workspace = true
+serde_yaml.workspace = true
+anyhow.workspace = true
+thiserror.workspace = true
+jsonschema.workspace = true
+glob.workspace = true
+walkdir.workspace = true
+once_cell.workspace = true
+regex.workspace = true
+chrono.workspace = true
+aidp-workspace-hack = { version = "0.1", path = "../aidp-workspace-hack" }
+
+[dev-dependencies]
+aidp-testkit.workspace = true
+tempfile.workspace = true
+insta.workspace = true
+proptest.workspace = true
+tracing-subscriber.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+rustix = { version = "1.1", features = ["process"] }
+
+[[test]]
+name = "integration"
+path = "tests/integration.rs"
+
+[[test]]
+name = "clock_ports"
+path = "tests/clock_ports.rs"
+
+[[test]]
+name = "invalid_prices_reconcile"
+path = "tests/invalid_prices_reconcile.rs"
+
+[[test]]
+name = "ledger_error_reconcile"
+path = "tests/ledger_error_reconcile.rs"
+
+[[test]]
+name = "run_fs_vault"
+path = "tests/run_fs_vault.rs"
+
+[[test]]
+name = "vault_resolve_global"
+path = "tests/vault_resolve_global.rs"

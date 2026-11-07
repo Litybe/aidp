@@ -1,0 +1,664 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://aidp.local/schema/execution-plan.v1.json",
+  "title": "aidp execution plan — what one Workflow pass runs",
+  "description": "The typed plan compiled from a pipeline and a run state: ordered steps, gates, warnings and how the pass ends.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "run_id",
+    "template",
+    "steps",
+    "warnings",
+    "gates",
+    "end"
+  ],
+  "properties": {
+    "run_id": {
+      "type": "string"
+    },
+    "template": {
+      "type": "string"
+    },
+    "steps": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/step"
+      }
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "gates": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "end": {
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "$ref": "#/definitions/pass_end"
+        }
+      ]
+    }
+  },
+  "definitions": {
+    "string_list": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "nullable_string": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "skip_reason": {
+      "type": "string",
+      "enum": [
+        "static_when",
+        "composite_when"
+      ]
+    },
+    "reply_schema_kind": {
+      "type": "string",
+      "enum": [
+        "standard",
+        "standard_with_skills",
+        "reviewer",
+        "reviewer_with_skills"
+      ]
+    },
+    "knowledge_layer": {
+      "type": "string",
+      "enum": [
+        "service",
+        "feature",
+        "all"
+      ]
+    },
+    "contract_flag": {
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "fanout_producer",
+            "plan_producer",
+            "merge_findings",
+            "review_dimension",
+            "review_synthesis",
+            "harness_gap_pause"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "knowledge"
+          ],
+          "properties": {
+            "knowledge": {
+              "$ref": "#/definitions/knowledge_layer"
+            }
+          }
+        }
+      ]
+    },
+    "gate_spec": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "approved"
+      ],
+      "properties": {
+        "approved": {
+          "type": "boolean"
+        }
+      }
+    },
+    "scope_spec": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mode",
+        "allowed",
+        "denied",
+        "writes",
+        "reads"
+      ],
+      "properties": {
+        "mode": {
+          "$ref": "#/definitions/nullable_string"
+        },
+        "allowed": {
+          "$ref": "#/definitions/string_list"
+        },
+        "denied": {
+          "$ref": "#/definitions/string_list"
+        },
+        "writes": {
+          "$ref": "#/definitions/string_list"
+        },
+        "reads": {
+          "$ref": "#/definitions/string_list"
+        }
+      }
+    },
+    "stage_spec": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "agent",
+        "agent_type",
+        "model",
+        "effort",
+        "skills",
+        "needs",
+        "outputs",
+        "scope",
+        "isolation",
+        "gate",
+        "when",
+        "retries",
+        "soft_pause",
+        "loop_linked",
+        "reply_schema",
+        "contracts"
+      ],
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "agent": {
+          "type": "string"
+        },
+        "agent_type": {
+          "type": "string"
+        },
+        "model": {
+          "type": "string"
+        },
+        "effort": {
+          "$ref": "#/definitions/nullable_string"
+        },
+        "skills": {
+          "$ref": "#/definitions/string_list"
+        },
+        "needs": {
+          "$ref": "#/definitions/string_list"
+        },
+        "outputs": {
+          "$ref": "#/definitions/string_list"
+        },
+        "scope": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/definitions/scope_spec"
+            }
+          ]
+        },
+        "isolation": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "enum": [
+            "worktree",
+            null
+          ]
+        },
+        "gate": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/definitions/gate_spec"
+            }
+          ]
+        },
+        "when": {
+          "$ref": "#/definitions/nullable_string"
+        },
+        "retries": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "soft_pause": {
+          "type": "boolean"
+        },
+        "loop_linked": {
+          "type": "boolean"
+        },
+        "reply_schema": {
+          "$ref": "#/definitions/reply_schema_kind"
+        },
+        "contracts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/contract_flag"
+          }
+        }
+      }
+    },
+    "fanout_items": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "source",
+            "value"
+          ],
+          "properties": {
+            "source": {
+              "type": "string",
+              "enum": [
+                "static"
+              ]
+            },
+            "value": {
+              "$ref": "#/definitions/string_list"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "source",
+            "value"
+          ],
+          "properties": {
+            "source": {
+              "type": "string",
+              "enum": [
+                "from_signal"
+              ]
+            },
+            "value": {
+              "type": "string"
+            }
+          }
+        }
+      ]
+    },
+    "pass_end": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "stage",
+            "producer",
+            "plan_path"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "awaiting_plan"
+              ]
+            },
+            "stage": {
+              "type": "string"
+            },
+            "producer": {
+              "type": "string"
+            },
+            "plan_path": {
+              "type": "string"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "stage",
+            "composite"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "awaiting_composite"
+              ]
+            },
+            "stage": {
+              "type": "string"
+            },
+            "composite": {
+              "type": "string"
+            }
+          }
+        }
+      ]
+    },
+    "step": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "name",
+            "agent",
+            "agent_type",
+            "model",
+            "effort",
+            "skills",
+            "needs",
+            "outputs",
+            "scope",
+            "isolation",
+            "gate",
+            "when",
+            "retries",
+            "soft_pause",
+            "loop_linked",
+            "reply_schema",
+            "contracts"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "stage"
+              ]
+            },
+            "name": {
+              "type": "string"
+            },
+            "agent": {
+              "type": "string"
+            },
+            "agent_type": {
+              "type": "string"
+            },
+            "model": {
+              "type": "string"
+            },
+            "effort": {
+              "$ref": "#/definitions/nullable_string"
+            },
+            "skills": {
+              "$ref": "#/definitions/string_list"
+            },
+            "needs": {
+              "$ref": "#/definitions/string_list"
+            },
+            "outputs": {
+              "$ref": "#/definitions/string_list"
+            },
+            "scope": {
+              "oneOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "$ref": "#/definitions/scope_spec"
+                }
+              ]
+            },
+            "isolation": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "enum": [
+                "worktree",
+                null
+              ]
+            },
+            "gate": {
+              "oneOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "$ref": "#/definitions/gate_spec"
+                }
+              ]
+            },
+            "when": {
+              "$ref": "#/definitions/nullable_string"
+            },
+            "retries": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "soft_pause": {
+              "type": "boolean"
+            },
+            "loop_linked": {
+              "type": "boolean"
+            },
+            "reply_schema": {
+              "$ref": "#/definitions/reply_schema_kind"
+            },
+            "contracts": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/contract_flag"
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "stages"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "parallel"
+              ]
+            },
+            "stages": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/stage_spec"
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "container",
+            "condition",
+            "source_stage",
+            "signal",
+            "body_producer",
+            "max",
+            "body"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "loop"
+              ]
+            },
+            "container": {
+              "type": "string"
+            },
+            "condition": {
+              "$ref": "#/definitions/nullable_string"
+            },
+            "source_stage": {
+              "$ref": "#/definitions/nullable_string"
+            },
+            "signal": {
+              "$ref": "#/definitions/nullable_string"
+            },
+            "body_producer": {
+              "$ref": "#/definitions/nullable_string"
+            },
+            "max": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "body": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/step"
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "stage",
+            "items",
+            "max",
+            "fold",
+            "merge_hint"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "fanout"
+              ]
+            },
+            "stage": {
+              "$ref": "#/definitions/stage_spec"
+            },
+            "items": {
+              "$ref": "#/definitions/fanout_items"
+            },
+            "max": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "fold": {
+              "type": "boolean"
+            },
+            "merge_hint": {
+              "$ref": "#/definitions/nullable_string"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "stage",
+            "from",
+            "plan_path",
+            "max",
+            "kinds",
+            "merge_hint",
+            "skills_by_kind"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "plan_tasks"
+              ]
+            },
+            "stage": {
+              "$ref": "#/definitions/stage_spec"
+            },
+            "from": {
+              "type": "string"
+            },
+            "plan_path": {
+              "type": "string"
+            },
+            "max": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "kinds": {
+              "$ref": "#/definitions/string_list"
+            },
+            "merge_hint": {
+              "$ref": "#/definitions/nullable_string"
+            },
+            "skills_by_kind": {
+              "type": "object",
+              "additionalProperties": {
+                "$ref": "#/definitions/string_list"
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "stage",
+            "composite"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "composite_boundary"
+              ]
+            },
+            "stage": {
+              "type": "string"
+            },
+            "composite": {
+              "type": "string"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "stage",
+            "reason"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "skipped"
+              ]
+            },
+            "stage": {
+              "type": "string"
+            },
+            "reason": {
+              "$ref": "#/definitions/skip_reason"
+            }
+          }
+        }
+      ]
+    }
+  }
+}

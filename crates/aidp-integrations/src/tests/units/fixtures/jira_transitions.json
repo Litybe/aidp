@@ -1,0 +1,8 @@
+{
+  "expand": "transitions",
+  "transitions": [
+    {"id": "21", "name": "Start review", "to": {"id": "3", "name": "In Review"}},
+    {"id": "31", "name": "Done", "to": {"id": "5", "name": "Done"}},
+    {"name": "Broken entry without id", "to": {"name": "Nowhere"}}
+  ]
+}

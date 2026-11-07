@@ -1,0 +1,43 @@
+---
+source: crates/aidp-cli/tests/cli_surface.rs
+expression: normalized
+---
+Validate a pipeline YAML (schema + composition: refs, cycles, inputs)
+
+Usage: <BIN> validate [OPTIONS] <ID_OR_PATH|--all>
+
+Arguments:
+  [ID_OR_PATH]
+          Pipeline id or path to validate
+
+Options:
+      --all
+          Validate every discoverable pipeline
+
+      --workspace-root <PATH>
+          Workspace to act on instead of the current directory
+
+      --inputs <INPUTS>
+          Cold-validate a JSON inputs object against the pipeline's `inputs:` contract (required/values/default), without starting a run
+
+      --vault <PATH>
+          Obsidian vault to use instead of `AIDP_VAULT`, `~/.aidp/config.json` or auto-detection
+
+      --no-vault
+          Ignore any vault and keep artefacts in the repo (`.aidp/pipelines/`)
+
+      --format <FORMAT>
+          Output format. Each command keeps its own default when omitted
+
+          Possible values:
+          - json-compact: One compact JSON document on a single line
+          - json-pretty:  One indented JSON document
+          - ndjson:       One compact JSON value per line
+          - text:         Human-readable text
+          - footer:       The one-line cost footer of a report, for `<BIN> cost ticket`; text elsewhere
+
+  -v, --verbose...
+          More diagnostics on stderr; repeat for more (`-vv`)
+
+  -h, --help
+          Print help (see a summary with '-h')

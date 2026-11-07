@@ -1,0 +1,14 @@
+{
+  "status": "blocked",
+  "summary": "A decision is needed before continuing.",
+  "outputs": {},
+  "signals": {},
+  "ask_user_questions": [
+    {
+      "id": "q1",
+      "question": "Which database?",
+      "options": ["Mongo", "Postgres"],
+      "recommended": "Postgres"
+    }
+  ]
+}

@@ -1,0 +1,56 @@
+version: 5
+id: study
+description: Technical study — investigate and synthesize an architectural or feasibility question.
+inputs:
+  topic: { required: true, kind: string, description: "The architectural or feasibility question to investigate — what the study must answer." }
+  scope_paths: { required: false, kind: string }
+  publish: { required: false, kind: bool, default: false, description: "Publish the synthesis to Confluence at the end (otherwise the publish stage stays skipped)." }
+settings:
+  knowledge_graph:
+    enabled: true
+    refresh: never
+    code_only: true
+stages:
+  # What the project knowledge base already says about the topic — read before
+  # exploring, so the study only investigates what is genuinely open.
+  - name: knowledge
+    type: pipeline
+    uses: knowledge-read
+    with: { focus: "{{ inputs.topic }}" }
+    outputs:
+      - { name: knowledge_context, from: knowledge_read.knowledge_context }
+
+  - name: explore
+    agent: analyzer
+    skills: [analyze-confluence-docs-aidp]
+    needs: [knowledge]
+    inputs:
+      topic: "{{ inputs.topic }}"
+      scope: "{{ inputs.scope_paths }}"
+      knowledge_context: "{{ stages.knowledge.outputs.knowledge_context }}"
+    outputs: [exploration.md]
+
+  - name: synthesize
+    agent: analyzer
+    model: opus   # delibere : synthese d'etude (options, recommandation, ADR) - sonnet appauvrit le raisonnement
+    skills: [study-synthesis, enforcing-decision-records]
+    needs: [explore]
+    outputs: [study.md]
+    gate: true
+
+  # Fold what the study established about the service back into the knowledge
+  # base — a study that stays in its run folder teaches the next run nothing.
+  - name: knowledge_sync
+    type: pipeline
+    uses: knowledge-update
+    needs: [synthesize]
+    with:
+      sources: "{{ stages.explore.outputs.exploration }}, {{ stages.synthesize.outputs.study }}"
+
+  - name: publish
+    agent: executor
+    skills: [confluence-microservices]
+    needs: [synthesize]
+    scope: { mode: stage_dir_only }
+    when: "{{ inputs.publish | default(false) }}"
+    outputs: [confluence.json]

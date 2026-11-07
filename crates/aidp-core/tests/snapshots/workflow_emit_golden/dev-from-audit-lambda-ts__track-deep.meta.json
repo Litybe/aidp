@@ -1,0 +1,67 @@
+{
+  "error": null,
+  "warnings": [
+    "skill dropped, no knowledge graph for this run: graphify-context removed from stage discover_prompt",
+    "skill dropped, no knowledge graph for this run: graphify-context removed from stage discover_code",
+    "skill dropped, no knowledge graph for this run: graphify-context removed from stage discover",
+    "skill dropped, no knowledge graph for this run: graphify-context removed from stage study",
+    "skill dropped, no knowledge graph for this run: graphify-context removed from stage plan",
+    "skill dropped, no knowledge graph for this run: graphify-context removed from stage implement",
+    "skill dropped, no knowledge graph for this run: graphify-context removed from stage review__review_correctness",
+    "skill dropped, no knowledge graph for this run: graphify-context removed from stage review__review_security",
+    "skill dropped, no knowledge graph for this run: graphify-context removed from stage review__review_perf",
+    "skill dropped, no knowledge graph for this run: graphify-context removed from stage review__review_maintainability",
+    "skill dropped, no knowledge graph for this run: graphify-context removed from stage review__review",
+    "skill dropped, no knowledge graph for this run: graphify-context removed from stage rereview"
+  ],
+  "gates": [
+    "plan"
+  ],
+  "awaiting_plan": null,
+  "awaiting_composite": {
+    "composite": "review",
+    "stage": "review__review_correctness"
+  },
+  "plan_schedules": [
+    {
+      "compiled_at": "<TIMESTAMP>",
+      "max_parallel": 4,
+      "plan_path": "<WORKSPACE>/.aidp/pipelines/_no-ticket/20260101-000000-golden/plan/plan.json",
+      "stage": "implement",
+      "tasks": [
+        {
+          "files": [
+            "src/Feature.cs"
+          ],
+          "id": "T1",
+          "kind": "code",
+          "status": "pending",
+          "title": "Implement the feature",
+          "wave": 0
+        },
+        {
+          "deps": [
+            "T1"
+          ],
+          "files": [
+            "tests/FeatureTests.cs"
+          ],
+          "id": "T2",
+          "kind": "tests",
+          "status": "pending",
+          "title": "Test the feature",
+          "wave": 1
+        }
+      ],
+      "waves": [
+        [
+          "T1"
+        ],
+        [
+          "T2"
+        ]
+      ],
+      "width": 1
+    }
+  ]
+}

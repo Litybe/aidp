@@ -1,0 +1,8 @@
+version: 5
+id: requiredstack
+inputs:
+  stack: { required: true, kind: enum, values: [csharp, lambda-ts, angular, rust, ts-node, unknown], description: "Target stack." }
+stages:
+  - name: fix
+    agent: executor
+    skills: [a]

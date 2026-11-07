@@ -1,0 +1,47 @@
+{
+  "pricing_version": "2026-09-23",
+  "tiers": {
+    "haiku": {
+      "input": 0.8,
+      "output": 4.0,
+      "cache_write_5m": 1.0,
+      "cache_write_1h": 1.6,
+      "cache_read": 0.08
+    },
+    "sonnet": {
+      "input": 3.0,
+      "output": 15.0,
+      "cache_write_5m": 3.75,
+      "cache_write_1h": 6.0,
+      "cache_read": 0.3
+    },
+    "opus": {
+      "input": 15.0,
+      "output": 75.0,
+      "cache_write_5m": 18.75,
+      "cache_write_1h": 30.0,
+      "cache_read": 1.5
+    },
+    "opus-5-5": {
+      "input": 4.0,
+      "output": 20.0,
+      "cache_write_5m": 5.0,
+      "cache_write_1h": 8.0,
+      "cache_read": 0.2
+    },
+    "fable": {
+      "input": 10.0,
+      "output": 50.0,
+      "cache_write_5m": 12.5,
+      "cache_write_1h": 20.0,
+      "cache_read": 0.25
+    },
+    "unknown": {
+      "input": 0.0,
+      "output": 0.0,
+      "cache_write_5m": 0.0,
+      "cache_write_1h": 0.0,
+      "cache_read": 0.0
+    }
+  }
+}

@@ -1,0 +1,30 @@
+id: every-builtin
+version: 1
+steps:
+  - id: act-noop
+    kind: action
+    use: noop
+  - id: act-fail
+    kind: action
+    use: fail
+  - id: act-git-worktree
+    kind: action
+    use: git.worktree
+  - id: act-git-branch
+    kind: action
+    use: git.branch
+  - id: act-gh-pr-ready
+    kind: action
+    use: gh.pr_ready
+  - id: act-gh-merge
+    kind: action
+    use: gh.merge
+  - id: act-worktree-remove
+    kind: action
+    use: worktree.remove
+  - id: wait-timer
+    kind: wait
+    use: timer
+  - id: wait-pr-reviews
+    kind: wait
+    use: pr.reviews

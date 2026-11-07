@@ -1,0 +1,11 @@
+version: 5
+id: cyc
+description: Two stages that depend on each other, so no execution order exists.
+inputs: {}
+stages:
+  - name: a
+    agent: analyzer
+    needs: [b]
+  - name: b
+    agent: analyzer
+    needs: [a]

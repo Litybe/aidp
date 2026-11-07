@@ -1,0 +1,8 @@
+version: 5
+id: auditish
+stages:
+  - { name: explore, agent: analyzer, outputs: [context.md] }
+  - { name: dim_correctness, agent: reviewer, needs: [explore], outputs: [findings.json] }
+  - { name: dim_security, agent: reviewer, needs: [explore], outputs: [findings.json] }
+  - { name: verify, agent: reviewer, needs: [dim_correctness, dim_security], outputs: [findings.json] }
+  - { name: report, agent: executor, needs: [verify], outputs: [report.md], gate: true }

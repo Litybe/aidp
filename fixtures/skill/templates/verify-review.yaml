@@ -1,0 +1,51 @@
+version: 5
+id: verify-review
+description: >-
+  Verify a later pass of a local PR review. One reviewer stage reads the review
+  threads the previous pass left on the PR (resolved ones included), judges each
+  against the diff since that pass, reviews the delta for new findings and writes
+  verify.json. The workflow, not the stage, posts the new findings and reopens
+  the threads from verify.json.
+
+  Runs autonomously in native mode: gates are pre-approved and no stage asks a
+  question.
+inputs:
+  feature:
+    required: false
+    kind: string
+    description: >-
+      Ticket key the PR implements. It names the run's vault folder.
+  pass:
+    required: true
+    kind: string
+    description: Number of this review pass (2 or 3).
+  previous_run:
+    required: true
+    kind: string
+    description: Run id of the previous pass, whose findings.json and threads are verified.
+settings:
+  knowledge_graph:
+    enabled: true
+    refresh: never
+    code_only: true
+stages:
+  - name: verify
+    agent: reviewer
+    skills: [graphify-context, code-review-aidp]
+    description: >-
+      Verify pass `{{ inputs.pass }}` of PR `{{ inputs.target }}` against the
+      findings of run `{{ inputs.previous_run }}` (ticket `{{ inputs.feature }}`).
+    inputs:
+      pr: "{{ inputs.target }}"
+      pass: "{{ inputs.pass }}"
+      previous_run: "{{ inputs.previous_run }}"
+    policy:
+      - "Write only inside your stage dir: no worktree write, no commit, no GitHub write. Posting and reopening are done by the workflow with `aidp gh review-post` and `aidp gh thread-reopen`."
+      - "List the threads with `aidp gh pr-review-threads <pr> --all` (resolved included) and keep those whose first comment carries the marker `<!-- aidp:finding id=<id> run=<run> pass=<n> -->` of the previous run. Read each thread's whole conversation."
+      - "Read the diff since that pass with `aidp gh pr-diff` and the previous run's findings.json."
+      - "Decide per thread: `ok` when the problem is really fixed in the diff; `reopen`, with a reason, when it is still present, or when the thread is resolved and a reply announces a fix that the diff does not contain."
+      - "Review the delta for new findings. Each carries id (F-...), severity, category, title and a `location` {path, line, start_line?, side}."
+      - "Write verify.json validating schema/verify.schema.json: {ok: [thread ids], reopen: [{thread, reason}], new_findings: [], clean}. clean is true only when reopen and new_findings are both empty."
+      - "Never ask a question: decide, and record the decision in the summary."
+    scope: { mode: stage_dir_only }
+    outputs: [verify.json]

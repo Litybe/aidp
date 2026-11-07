@@ -1,0 +1,6 @@
+[
+  {
+    "id": 99,
+    "body": "aidp review pass 1: 2 inline finding(s)\n\nFindings outside the diff:\n- <!-- aidp:finding id=F-3 run=run-7 pass=1 --> `src/a.rs:99` **[info]** Far away line"
+  }
+]

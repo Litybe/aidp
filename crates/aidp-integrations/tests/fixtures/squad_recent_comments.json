@@ -1,0 +1,78 @@
+{
+ "data": {
+  "r0": {
+   "pullRequest": {
+    "number": 7,
+    "title": "With comments",
+    "url": "u",
+    "isDraft": false,
+    "createdAt": "2026-10-01T10:00:00Z",
+    "updatedAt": "2026-10-02T10:00:00Z",
+    "baseRefName": "master",
+    "headRefName": "feat/x",
+    "headRefOid": "sha",
+    "mergeable": "MERGEABLE",
+    "reviewDecision": null,
+    "author": {
+     "login": "alice"
+    },
+    "recentComments": {
+     "nodes": [
+      {
+       "id": "IC_1",
+       "createdAt": "2026-10-02T09:00:00Z",
+       "body": "looks good",
+       "author": {
+        "login": "bob"
+       }
+      },
+      {
+       "id": "IC_2",
+       "createdAt": "2026-10-02T09:30:00Z",
+       "body": "<!-- aidp:pr-comments-summary -->\nsummary",
+       "author": {
+        "login": "alice"
+       }
+      }
+     ]
+    },
+    "recentThreads": {
+     "nodes": [
+      {
+       "comments": {
+        "nodes": [
+         {
+          "id": "RC_1",
+          "createdAt": "2026-10-02T09:15:00Z",
+          "body": "nit",
+          "author": {
+           "login": "carol"
+          }
+         }
+        ]
+       }
+      }
+     ]
+    }
+   }
+  },
+  "r1": {
+   "pullRequest": {
+    "number": 8,
+    "title": "No comment fields",
+    "url": "u",
+    "isDraft": false,
+    "createdAt": "2026-10-01T10:00:00Z",
+    "updatedAt": "2026-10-01T10:00:00Z",
+    "baseRefName": "master",
+    "headRefName": "feat/y",
+    "headRefOid": "sha",
+    "mergeable": "MERGEABLE",
+    "reviewDecision": null,
+    "author": {
+     "login": "alice"
+    }
+   }
+  }
+ }
+}

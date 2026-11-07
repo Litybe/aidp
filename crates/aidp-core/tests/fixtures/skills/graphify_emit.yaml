@@ -1,0 +1,7 @@
+version: 5
+id: graphify-emit
+inputs: {}
+stages:
+  - name: plain
+    agent: executor
+    skills: [graphify-context, rust-dev-aidp]

@@ -1,0 +1,437 @@
+version: 5
+id: refacto-pr-lambda-ts
+description: >
+  Refacto / amelioration du code d'un service Lambda TypeScript Pixelhood, STRICTEMENT
+  scopee au diff d'une pull request en cours, poussee sur la branche de travail (aucune
+  nouvelle branche, aucune nouvelle PR - la PR existante se met a jour). Trois axes de
+  scan en parallele (refacto pur || conformite Pixelhood/ADR || modernisation legacy), un
+  plan executable (plan.json), un FILET DE SECURITE obligatoire avant toute modification
+  (tests de caracterisation + mutation Stryker sur la zone), puis une verification double
+  (metriques avant/apres || preuve de non-changement de comportement). Contrat cardinal :
+  zero changement de comportement observable. Tout ecart detecte part en backlog, pas en
+  correctif.
+inputs:
+  # Numero de PR. Omis -> la PR de la branche courante (`gh pr view --json`).
+  pr: { required: false, kind: string }
+  # Reference de base pour le diff. Le merge-base avec HEAD delimite le perimetre.
+  base_ref: { required: false, kind: string, default: origin/master }
+  # Axe modernisation legacy -> modern. Les items REPO-LEVEL (runtime, bundler, CI) ne
+  # sont jamais appliques ici : hors diff de PR par nature -> backlog uniquement.
+  include_modernization: { required: false, kind: bool, default: true }
+  # Score de mutation minimal, sur la zone, pour autoriser un refacto (0-100).
+  mutation_threshold: { required: false, kind: int, default: 60 }
+  # quick = pas de Stryker (mutation manuelle), une seule passe de metriques.
+  # standard = Stryker sur la zone + delta complet. deep = + gates plan & filet.
+  track: { required: true, kind: enum, values: [quick, standard, deep], default: standard, description: "Profondeur du run : quick saute Stryker (mutation manuelle) pour une seule passe de metriques, standard ajoute Stryker + delta complet, deep ajoute les gates plan et filet de securite." }
+settings:
+  max_correction_iterations: 2
+  knowledge_graph:
+    enabled: true
+    refresh: never
+    code_only: true
+stages:
+  # ---------------------------------------------------------------------------
+  # 1. Perimetre. Tout le reste de la pipeline en depend : ce qui n'est pas dans
+  #    diff-scope.json n'a pas le droit d'etre touche. Stage bloquant, seul.
+  # ---------------------------------------------------------------------------
+  - name: scope_diff
+    agent: analyzer
+    skills: [graphify-context, pixelhood-lambda-ts-service]
+    inputs:
+      pr: "{{ inputs.pr }}"
+      base_ref: "{{ inputs.base_ref }}"
+    outputs: [diff-scope.json, scope.md]
+    scope: { mode: stage_dir_only }
+    with:
+      instructions: >-
+        Resous le perimetre exact du refacto, puis ARRETE le run si une garde saute.
+        (1) Gardes - `git status --porcelain` doit etre VIDE (arbre propre, sinon stop :
+        on ne refactore pas par-dessus du travail non commite) ; la branche courante ne
+        doit pas etre master/main ; `serverless.yml` + `package.json` avec
+        `@types/aws-lambda` doivent exister (sinon mauvais stack -> stop).
+        (2) PR - si `pr` est fourni : `rtk gh pr view <pr> --json
+        number,title,url,headRefName,baseRefName,state,isDraft`. Sinon la meme commande
+        sans numero (PR de la branche courante). Si aucune PR : continue en te basant sur
+        `base_ref`, et note-le dans scope.md.
+        (3) Diff - `git merge-base <base_ref> HEAD` puis `git diff --name-only <mb>...HEAD`
+        et `git diff -U0 <mb>...HEAD -- <fichier>` pour extraire les PLAGES DE LIGNES
+        modifiees. Classe chaque fichier : `prod` (src/**, hors *.spec.ts / *.test.ts),
+        `tests`, `infra` (serverless.yml, tsconfig.json, configs jest/eslint/stryker/
+        prettier, package.json), `other`.
+        (4) Zones - pour chaque fichier prod, mappe les plages de lignes vers les SYMBOLES
+        englobants (handler, use-case, methode de repository, fonction exportee) via
+        graphify-context. Une zone = {file, symbol, lines, kind}. C'est l'unite de travail
+        de toute la pipeline.
+        (5) Ecris diff-scope.json : { pr:{number,url,head_branch,base_branch}|null,
+        base_sha, head_sha, generation:"modern"|"legacy" (test de generation du skill
+        pixelhood-lambda-ts-service), files:[{path,category,hunks:[[start,end]]}],
+        zones:[{file,symbol,lines,kind}], out_of_scope_note }. Pose signals.zone_count et
+        signals.scope_ok (false si une garde saute).
+        (6) scope.md : le tableau des zones, lisible, plus ce qui est explicitement HORS
+        perimetre (le reste des fichiers touches, les fichiers non touches par la PR).
+
+  # ---------------------------------------------------------------------------
+  # 2. Baseline objective AVANT toute modification. On ne refactore jamais sur du
+  #    rouge : si build/lint/tests ne passent pas, le run s'arrete ici.
+  # ---------------------------------------------------------------------------
+  - name: baseline
+    agent: analyzer
+    skills: [lambda-ts-code-health]
+    needs: [scope_diff]
+    when: "{{ stages.scope_diff.signals.scope_ok }}"
+    inputs:
+      diff_scope: "{{ stages.scope_diff.outputs.diff_scope }}"
+      track: "{{ inputs.track }}"
+    outputs: [health-before.json, baseline.md]
+    scope: { mode: stage_dir_only }
+    with:
+      instructions: >-
+        Produis la mesure de reference, sur le HEAD actuel, en suivant le skill
+        lambda-ts-code-health : portes (tsc --noEmit, eslint, jest complet) puis metriques
+        scopees aux fichiers de diff-scope.json (duplication, dead code, cycles,
+        complexite, taille de bundle, audit deps). N'INSTALLE RIEN dans le repo :
+        `npx --yes`, et zero modification de package.json / package-lock.json.
+        health-before.json doit etre conforme au contrat du skill (memes cles, memes
+        unites) pour etre comparable au health-after.json du stage verify_health.
+        Pose signals.baseline_green = true SEULEMENT si typecheck OK, lint sans erreur
+        (les warnings ne bloquent pas) et suite jest 100% verte. Si c'est faux : n'entame
+        aucun scan, ecris dans baseline.md ce qui est casse et pourquoi le refacto est
+        suspendu - corriger le rouge est un travail de dev, pas de refacto.
+
+  # ---------------------------------------------------------------------------
+  # 3. Trois scans independants (un par axe) -> un seul parallel() dans le Workflow.
+  #    Chacun ne propose QUE des candidats dont la zone est dans diff-scope.json.
+  # ---------------------------------------------------------------------------
+  - name: scan_smells
+    agent: reviewer
+    skills: [graphify-context, ts-refactoring-catalog, code-review-aidp]
+    needs: [baseline]
+    when: "{{ stages.baseline.signals.baseline_green }}"
+    inputs:
+      axis: refacto_pur
+      diff_scope: "{{ stages.scope_diff.outputs.diff_scope }}"
+      health_before: "{{ stages.baseline.outputs.health_before }}"
+    outputs: [candidates.json]
+    with:
+      instructions: >-
+        Axe REFACTO PUR : lisibilite, duplication, complexite, imbrication, dead code,
+        typage (`any`, casts `as`), decoupage handler / use-case / repository, nommage.
+        Appuie-toi sur les mesures de health-before.json (jscpd, knip, madge, complexite)
+        - un candidat sans preuve chiffree ni smell nomme est du bruit, ne le propose pas.
+        Chaque candidat cite UN refacto NOMME du catalogue ts-refactoring-catalog, avec
+        son tier (T0/T1/T2). Contrat candidates.json :
+        { axis, candidates:[{id, refacto, tier, file, lines:[s,e], symbol, smell, evidence,
+        gain, risk:"low"|"medium"|"high", behavior_change:bool}] }.
+        `behavior_change: true` = a ne PAS refactorer ici : ca part en backlog.
+        REFUSE tout candidat dont file+lines n'intersecte aucun hunk de diff-scope.json.
+        Pose signals.candidate_count.
+
+  - name: scan_conformity
+    agent: reviewer
+    skills: [pixelhood-lambda-ts-service, enforcing-decision-records, code-review-aidp]
+    needs: [baseline]
+    when: "{{ stages.baseline.signals.baseline_green }}"
+    inputs:
+      axis: conformite_pixelhood
+      diff_scope: "{{ stages.scope_diff.outputs.diff_scope }}"
+    outputs: [candidates.json]
+    with:
+      instructions: >-
+        Axe CONFORMITE : ecarts du code modifie aux 266 regles du skill
+        pixelhood-lambda-ts-service et aux decision records. Priorite aux non-negociables :
+        politique d'erreur DEPENDANTE DU TRIGGER (ALB -> jamais throw, reponse
+        internalError generique ; SNS/SQS/S3/EventBridge -> log puis `throw error;`),
+        log4js singleton et jamais `console.*`, `catch (error)` jamais `catch (error: any)`,
+        aucun PII ni payload complet dans les logs, forme message + objet de contexte du
+        logger, serverless.yml (memorySize / timeout / reservedConcurrency / description /
+        vpc, IAM par fonction, DLQ, subscription filter Datadog), validators,
+        versionnement des messages EventBus.
+        ATTENTION : aligner une politique d'erreur EST un changement de comportement -
+        marque `behavior_change: true`, sauf si le code respecte deja la politique et que
+        seule la forme differe. Meme contrat candidates.json que scan_smells, avec en plus
+        `rule` = l'identifiant de regle (ex. R20.3) ou l'ADR cite.
+        Pose signals.candidate_count.
+
+  - name: scan_modernization
+    agent: reviewer
+    skills: [pixelhood-lambda-ts-service, aws-serverless]
+    needs: [baseline]
+    when: "{{ inputs.include_modernization and stages.baseline.signals.baseline_green }}"
+    inputs:
+      axis: modernisation
+      diff_scope: "{{ stages.scope_diff.outputs.diff_scope }}"
+    outputs: [candidates.json, backlog.md]
+    with:
+      instructions: >-
+        Axe MODERNISATION legacy -> modern, avec une frontiere stricte.
+        APPLICABLE ICI (uniquement si la zone est dans le diff) : forme du fichier touche
+        alignee sur la colonne modern - imports subpath `@aws-sdk/client-*`, DI par
+        constructeur plutot que `new` en dur, typage strict-compatible sur le code touche,
+        suppression des `eslint-disable` devenus inutiles.
+        JAMAIS APPLIQUE ICI, backlog.md uniquement (hors diff par nature, diff enorme,
+        risque de deploiement) : bump de runtime nodejs20 -> 22/24 + arm64,
+        webpack -> esbuild, serverless -> osls, `.eslintrc.json` -> flat config,
+        `strict: true` global, passage aux versions exactes, migration Jenkins -> GHA.
+        EXCEPTION : si la PR modifie DEJA serverless.yml / tsconfig.json / la config
+        ESLint, l'item correspondant redevient un candidat applicable.
+        Contrat candidates.json identique aux autres scans, plus `repo_level: bool`.
+        backlog.md = les items repo-level, chacun avec son benefice, son risque et
+        l'effort estime, pret a devenir un ticket. Pose signals.candidate_count.
+
+  # ---------------------------------------------------------------------------
+  # 4. Plan executable. C'est ICI que se decide le parallelisme du refacto : un
+  #    task par refacto nomme, avec son write set. Gate humain avant tout code.
+  # ---------------------------------------------------------------------------
+  - name: plan
+    agent: planner
+    skills: [ts-refactoring-catalog, refactoring-safety-net, graphify-context]
+    needs: [scan_smells, scan_conformity, scan_modernization]
+    inputs:
+      diff_scope: "{{ stages.scope_diff.outputs.diff_scope }}"
+      smells: "{{ stages.scan_smells.outputs.candidates }}"
+      conformity: "{{ stages.scan_conformity.outputs.candidates }}"
+      modernization: "{{ stages.scan_modernization.outputs.candidates }}"
+      mutation_threshold: "{{ inputs.mutation_threshold }}"
+    outputs: [plan.json, plan.md]
+    gate: "{{ inputs.track in ['standard','deep'] }}"
+    with:
+      mode: feature
+      instructions: >-
+        Fusionne les trois candidates.json en UN plan executable de refacto.
+        Filtres, dans cet ordre : (a) dedoublonne par file + lines + refacto ; (b) JETTE
+        tout candidat hors diff-scope.json ; (c) sors du plan tout `behavior_change: true`
+        et tout `repo_level: true` -> section Backlog de plan.md, jamais un task ;
+        (d) sors du plan les tiers T2 (architectural) -> backlog, sauf si le refacto tient
+        entierement dans une seule zone du diff.
+        Puis UN TASK PAR REFACTO NOMME, jamais un task fourre-tout : `kind: code` (ou
+        `infra` si le fichier est serverless.yml / tsconfig), `risk` = le tier (T0 -> low,
+        T1 -> medium, T2 -> high), `files` = le write set EXACT et minimal, `verification`
+        = la commande qui prouve ce task seul (ex. `npx jest src/foo/bar.spec.ts`),
+        `prompt` auto-porteur citant la mecanique du catalogue pas-a-pas.
+        `shared_files` = serverless.yml, barrels index.ts, types partages, package.json :
+        aucun task ne les liste, chacun decrit son besoin dans `follow_ups`.
+        Ordonne par tier croissant (T0 d'abord : diff mecanique, review facile) et pose
+        `needs` uniquement sur de vraies dependances de donnees.
+        N'ECRIS AUCUN TASK DE TEST : les tests de caracterisation sont le travail du stage
+        safety_net, qui passe avant. Dans plan.md, precise pour chaque task la ZONE que le
+        filet doit couvrir.
+
+  # ---------------------------------------------------------------------------
+  # 5. FILET DE SECURITE - le stage non negociable. Il passe AVANT le refacto et
+  #    decide, zone par zone, si le refacto est autorise.
+  # ---------------------------------------------------------------------------
+  - name: safety_net
+    agent: executor
+    skills:
+      [refactoring-safety-net, feature-testing-aidp, pixelhood-lambda-ts-service, lambda-ts-code-health]
+    needs: [plan]
+    scope: { mode: tests }
+    inputs:
+      plan: "{{ stages.plan.outputs.plan }}"
+      diff_scope: "{{ stages.scope_diff.outputs.diff_scope }}"
+      mutation_threshold: "{{ inputs.mutation_threshold }}"
+      track: "{{ inputs.track }}"
+    outputs: [safety-report.json]
+    gate: "{{ inputs.track == 'deep' }}"
+    with:
+      instructions: >-
+        Construis le filet pour les SEULES zones que les tasks du plan vont toucher, en
+        suivant le skill refactoring-safety-net.
+        (1) Sonde de couverture de la zone (jest --coverage scope) : lignes et branches
+        reellement couvertes, par symbole.
+        (2) Ecris les tests de caracterisation manquants : ils figent le comportement
+        OBSERVE (pas le comportement souhaite), chemins d'erreur inclus, selon la politique
+        du trigger. Conventions du repo (colocated `.spec.ts` ou `tests/`, `clearMocks`,
+        mocks AWS SDK) - copie le sibling.
+        (3) Preuve de sensibilite : mutation Stryker scopee aux fichiers de la zone
+        (`--mutate`). Sur track=quick, remplace par une mutation MANUELLE (inverser une
+        condition, retirer un `await`, decaler une borne) et verifie qu'un test passe au
+        rouge - documente chaque mutant teste.
+        (4) Verdict PAR ZONE : `net_ok` si le score de mutation de la zone est >=
+        mutation_threshold, sinon `blocked`. Une zone `blocked` ne sera PAS refactoree.
+        (5) Commite le filet SEUL : `test(<scope>): characterization net before refacto`.
+        Aucun fichier de production modifie dans ce stage.
+        Ecris safety-report.json : { zones:[{file,symbol,coverage_before,coverage_after,
+        mutation_score,verdict,tests_added:[...],surviving_mutants:[...]}],
+        blocked_task_ids:[...], allowed_task_ids:[...] }. Pose signals.blocked_task_ids et
+        signals.net_ok (false si TOUTES les zones sont bloquees -> le refacto n'a plus
+        rien a faire).
+
+  # ---------------------------------------------------------------------------
+  # 6. Refacto, compile depuis plan.json : un sous-agent par task, en parallele
+  #    des que les write sets sont disjoints, serialise sinon. Le merge commite.
+  # ---------------------------------------------------------------------------
+  - name: refactor
+    agent: executor
+    skills: [ts-refactoring-catalog, pixelhood-lambda-ts-service, lambda-ts-dev-aidp, graphify-context]
+    needs: [safety_net]
+    when: "{{ stages.safety_net.signals.net_ok }}"
+    scope: { mode: repo_wide }
+    inputs:
+      safety_report: "{{ stages.safety_net.outputs.safety_report }}"
+      blocked_task_ids: "{{ stages.safety_net.signals.blocked_task_ids }}"
+      diff_scope: "{{ stages.scope_diff.outputs.diff_scope }}"
+    plan_tasks:
+      from: "{{ stages.plan.outputs.plan }}"
+      max: 3
+      merge_hint: >-
+        Applique les changements de shared_files que les tasks t'ont delegues (entrees
+        serverless.yml, barrels, types partages), puis : `npx tsc --noEmit`, `npx eslint`
+        sur les fichiers touches, et la suite jest COMPLETE une fois.
+        Les tests de caracterisation du stage safety_net doivent passer SANS AUCUNE
+        MODIFICATION : si l'un d'eux echoue, le refacto a change le comportement -> revert
+        le task fautif (`git checkout -- <ses files>`), ne touche pas au test, et
+        consigne-le. Seule exception toleree : un renommage pur propage mecaniquement.
+        Ensuite COMMITE TASK PAR TASK, dans l'ordre du plan, avec le write set declare :
+        `git add <files du task>` puis `refactor(<scope>): <titre du task>`. Un commit par
+        refacto nomme, jamais de commit fourre-tout - c'est ce qui rend chaque refacto
+        revertable seul. Ne pousse pas (c'est le stage push). changed-files.json consolide
+        doit lister, par task, les fichiers, le sha du commit et le statut
+        (applied | reverted | skipped).
+    outputs: [changed-files.json]
+    with:
+      instructions: >-
+        Chaque task ne refactore QUE dans les plages de lignes de diff-scope.json.
+        Interdits absolus : reformater ou reindenter des lignes hors des hunks de la PR
+        (ca detruit le diff du reviewer), toucher `.prettierrc`, modifier ou affaiblir un
+        test existant, renommer un symbole exporte consomme hors du diff sans mise a jour
+        complete, introduire une abstraction avec un seul implementeur, changer un
+        comportement observable (valeur de retour, evenement publie, code HTTP, log de
+        niveau error, requete emise). Si le task figure dans blocked_task_ids : NE FAIS
+        RIEN, renvoie le statut `skipped` avec la raison (zone non couverte par le filet).
+
+  # ---------------------------------------------------------------------------
+  # 7. Double verification en parallele : les chiffres || le comportement.
+  # ---------------------------------------------------------------------------
+  - name: verify_health
+    agent: analyzer
+    skills: [lambda-ts-code-health]
+    needs: [refactor]
+    inputs:
+      health_before: "{{ stages.baseline.outputs.health_before }}"
+      diff_scope: "{{ stages.scope_diff.outputs.diff_scope }}"
+      track: "{{ inputs.track }}"
+    outputs: [health-after.json, delta.md]
+    scope: { mode: stage_dir_only }
+    with:
+      instructions: >-
+        Rejoue EXACTEMENT les memes mesures que le stage baseline (memes commandes, meme
+        perimetre) et produis health-after.json + delta.md.
+        Sur track standard | deep, rejoue aussi la mutation Stryker scopee a la zone et
+        compare au score du safety-report.
+        BLOQUANT (pose signals.regression = true) : un test en echec, une erreur de
+        typecheck, une erreur de lint nouvelle, couverture de la zone en baisse, score de
+        mutation en baisse, un nouveau cycle d'import, bundle > +5%.
+        INFORMATIF : duplication, complexite, dead code, taille de fichier - on veut les
+        voir baisser, mais un plateau ne bloque pas.
+        delta.md = un tableau avant / apres / delta / verdict par metrique, plus une phrase
+        honnete : ce refacto a-t-il vraiment ameliore quelque chose de mesurable ?
+
+  - name: verify_behavior
+    agent: reviewer
+    model: opus   # delibere : revue adversariale du non-changement de comportement, un faux negatif est couteux - opus pour la rigueur
+    skills: [ts-refactoring-catalog, refactoring-safety-net, code-review-aidp]
+    needs: [refactor]
+    inputs:
+      changed_files: "{{ stages.refactor.outputs.changed_files }}"
+      safety_report: "{{ stages.safety_net.outputs.safety_report }}"
+    outputs: [behavior-findings.json]
+    with:
+      instructions: >-
+        Revue ADVERSARIALE d'un seul point : les commits de refacto changent-ils un
+        comportement observable ? Lis uniquement le diff des commits `refactor(...)`
+        (`git diff <sha_avant_refacto>..HEAD`), hunk par hunk, et pour chacun cherche
+        activement une entree qui produirait un resultat DIFFERENT d'avant : ordre
+        d'evaluation, court-circuit modifie, `null` / `undefined` / chaine vide traites
+        autrement, exception qui remonte au lieu d'etre avalee (ou l'inverse), `await`
+        deplace, sequentiel devenu parallele sur des effets de bord, arrondi, timezone,
+        cle de tri, forme du payload publie, code HTTP, niveau de log.
+        Charge de la preuve INVERSEE : un hunk est coupable jusqu'a demonstration
+        d'equivalence. Si les mutants survivants du safety-report couvrent la zone d'un
+        hunk, considere-le comme non prouve.
+        Contrat behavior-findings.json = schema/findings.schema.json, chaque finding citant
+        le hunk et l'entree qui diverge. Pose signals.has_blocking_findings.
+
+  - name: verdict
+    agent: reviewer
+    skills: [code-review-aidp, code-audit-rubric]
+    needs: [verify_health, verify_behavior]
+    inputs:
+      delta: "{{ stages.verify_health.outputs.delta }}"
+      behavior_findings: "{{ stages.verify_behavior.outputs.behavior_findings }}"
+      regression: "{{ stages.verify_health.signals.regression }}"
+    outputs: [findings.json, summary.md]
+    with:
+      instructions: >-
+        Verdict unique et unifie. findings.json conforme a schema/findings.schema.json :
+        agrege behavior-findings.json et les regressions chiffrees de verify_health, et
+        pose `has_blocking_findings` = true des qu'il reste UN changement de comportement
+        non prouve OU UNE regression bloquante. Pose le meme booleen dans
+        signals.has_blocking_findings. summary.md : ce qui a ete refactore (par commit), ce
+        qui a ete volontairement ecarte et pourquoi, ce qui reste a faire (backlog).
+
+  # ---------------------------------------------------------------------------
+  # 8. Boucle de correction : ici, corriger veut d'abord dire ANNULER le refacto
+  #    fautif - un refacto qui casse le comportement n'a aucune valeur.
+  # ---------------------------------------------------------------------------
+  - name: correction_loop
+    type: loop
+    when: "{{ stages.verdict.outputs.findings.has_blocking_findings }}"
+    max_iterations: "{{ settings.max_correction_iterations }}"
+    body:
+      - name: replan
+        agent: planner
+        model: sonnet   # delibere : une reprise de plan est un delta, pas une conception - opus serait surpaye
+        with:
+          mode: correction
+          instructions: >-
+            Pour chaque finding bloquant, tranche : REVERT du commit de refacto fautif
+            (option par defaut - un refacto n'est jamais assez precieux pour justifier un
+            risque de regression) ou correctif minimal si l'equivalence est demontrable.
+            Jamais de modification d'un test de caracterisation.
+        inputs:
+          findings: "{{ stages.verdict.outputs.findings }}"
+        outputs: [plan.md]
+      - name: refix
+        agent: executor
+        skills: [ts-refactoring-catalog, lambda-ts-dev-aidp]
+        scope: { mode: repo_wide }
+        needs: [replan]
+        outputs: [changed-files.json]
+      - name: rereview
+        agent: reviewer
+        skills: [code-review-aidp, lambda-ts-code-health]
+        needs: [refix]
+        outputs: [findings.json, summary.md]
+
+  # ---------------------------------------------------------------------------
+  # 9. Push sur la branche de travail de la PR + commentaire de synthese.
+  #    Gate obligatoire : on modifie une PR en cours, potentiellement d'autrui.
+  # ---------------------------------------------------------------------------
+  - name: push
+    agent: executor
+    skills: [git-push, writing-clearly-and-concisely]
+    needs: [verdict]
+    scope: { mode: stage_dir_only }
+    inputs:
+      diff_scope: "{{ stages.scope_diff.outputs.diff_scope }}"
+      summary: "{{ stages.verdict.outputs.summary }}"
+      delta: "{{ stages.verify_health.outputs.delta }}"
+      safety_report: "{{ stages.safety_net.outputs.safety_report }}"
+    outputs: [refacto-report.md, push.json]
+    gate: true
+    with:
+      instructions: >-
+        (1) Verifie une derniere fois que la suite jest est verte et l'arbre propre.
+        (2) Pousse la branche de travail de la PR (`git push origin HEAD`) - JAMAIS de
+        nouvelle branche, JAMAIS de nouvelle PR, JAMAIS de force-push.
+        (3) Ecris refacto-report.md : le tableau avant/apres des metriques, un commit par
+        refacto avec son sha et le refacto nomme applique, les zones bloquees par le filet
+        avec la raison, et le backlog (behavior_change + repo-level) pret a devenir des
+        tickets.
+        (4) Poste refacto-report.md, condense, en commentaire sur la PR
+        (`rtk gh pr comment <num> --body-file ...`) - le reviewer doit comprendre en 30
+        secondes ce qui a bouge et pourquoi c'est sur. S'il n'y a pas de PR, saute cette
+        etape et dis-le.
+        push.json = { branch, commits:[{sha,message,files}], pushed:bool,
+        pr_comment_url|null }.

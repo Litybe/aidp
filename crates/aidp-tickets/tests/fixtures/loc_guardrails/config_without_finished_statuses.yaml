@@ -1,0 +1,4 @@
+jira:
+  enabled: true
+  sync_minutes: 5
+  jql: 'assignee = currentUser() AND status in ("To Do")'

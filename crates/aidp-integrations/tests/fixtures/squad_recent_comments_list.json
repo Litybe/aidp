@@ -1,0 +1,26 @@
+{
+ "data": {
+  "r0": {
+   "pullRequests": {
+    "nodes": [
+     {
+      "number": 7,
+      "updatedAt": "2026-10-02T10:00:00Z",
+      "headRefOid": "sha",
+      "isDraft": false,
+      "mergeable": "MERGEABLE",
+      "reviewDecision": null
+     },
+     {
+      "number": 8,
+      "updatedAt": "2026-10-01T10:00:00Z",
+      "headRefOid": "sha",
+      "isDraft": false,
+      "mergeable": "MERGEABLE",
+      "reviewDecision": null
+     }
+    ]
+   }
+  }
+ }
+}

@@ -1,0 +1,25 @@
+version: 5
+id: native-gated
+kind: pipeline
+description: A gated stage between two plain ones, run by the native executor with a scripted provider.
+inputs:
+  feature: { required: false, kind: string, default: native-gated }
+stages:
+  - name: draft
+    description: Write the draft.
+    agent: analyzer
+    outputs: [draft.md]
+
+  - name: ship
+    description: Publish the draft once a human approved it.
+    agent: executor
+    needs: [draft]
+    gate: true
+    scope: { mode: stage_dir_only }
+    outputs: [result.md]
+
+  - name: finish
+    description: Write the closing note.
+    agent: analyzer
+    needs: [ship]
+    outputs: [finish.md]

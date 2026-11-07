@@ -1,0 +1,8 @@
+version: 5
+id: badfrom
+stages:
+  - { name: plan, agent: planner, outputs: [plan.json] }
+  - name: code
+    agent: executor
+    needs: [plan]
+    plan_tasks: { from: "{{ stages.plan.signals.shards }}" }

@@ -1,0 +1,106 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/ai-dev-pipeline/schema/changed-files.schema.json",
+  "title": "changed_files.json",
+  "description": "Artifact produced by a `developer` stage listing production-code changes plus deferred test work for a downstream `tester` stage.",
+  "type": "object",
+  "required": ["run_id", "iter", "plan_file", "changes"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": { "type": "integer", "enum": [1], "default": 1 },
+    "run_id": { "type": "string" },
+    "iter": { "type": "integer", "minimum": 0 },
+    "plan_file": {
+      "type": "string",
+      "description": "Path, relative to workspace_root, to the plan.md or fix-plan.md this batch implements."
+    },
+    "changes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["file", "action", "summary"],
+        "additionalProperties": false,
+        "properties": {
+          "file": {
+            "type": "string",
+            "description": "Path relative to workspace_root. Must not match any test pattern for the `developer` persona."
+          },
+          "action": { "type": "string", "enum": ["created", "modified", "deleted"] },
+          "step_ids": {
+            "type": "array",
+            "items": { "type": "string" },
+            "default": []
+          },
+          "summary": { "type": "string", "minLength": 1 },
+          "diff_excerpt": { "type": ["string", "null"] }
+        }
+      }
+    },
+    "new_dependencies": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["package", "reason"],
+        "additionalProperties": false,
+        "properties": {
+          "package": { "type": "string" },
+          "version": { "type": ["string", "null"] },
+          "reason": { "type": "string" }
+        }
+      },
+      "default": []
+    },
+    "skipped_steps": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["step_id", "reason"],
+        "additionalProperties": false,
+        "properties": {
+          "step_id": { "type": "string" },
+          "reason": { "type": "string" }
+        }
+      },
+      "default": []
+    },
+    "deferred_test_work": {
+      "type": "array",
+      "description": "Test authoring requests handed off from a `developer` stage to a downstream `tester` stage.",
+      "items": {
+        "type": "object",
+        "required": ["target_code_file", "tests_requested", "source"],
+        "additionalProperties": false,
+        "properties": {
+          "step_id": { "type": ["string", "null"] },
+          "target_code_file": { "type": "string" },
+          "tests_requested": { "type": "string" },
+          "source": { "type": "string", "enum": ["plan", "coupled_edit"] }
+        }
+      },
+      "default": []
+    },
+    "pre_existing_issues": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["file", "issue"],
+        "additionalProperties": false,
+        "properties": {
+          "file": { "type": "string" },
+          "issue": { "type": "string" }
+        }
+      },
+      "default": []
+    },
+    "build_status": {
+      "type": "string",
+      "enum": ["passed", "failed", "not_run"],
+      "default": "not_run"
+    },
+    "lint_status": {
+      "type": "string",
+      "enum": ["passed", "failed", "not_run"],
+      "default": "not_run"
+    }
+  }
+}

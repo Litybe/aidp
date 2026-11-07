@@ -1,0 +1,50 @@
+version: 5
+id: tech-doc
+description: Produce technical documentation (event architecture, microservice doc) and publish to Confluence.
+inputs:
+  service_path: { required: true, kind: string, description: "Root of the service to document — \".\" for the whole repo, or a subfolder path for a monorepo." }
+  publish: { required: false, kind: bool, default: false }
+settings:
+  knowledge_graph:
+    enabled: true
+    refresh: never
+    code_only: true
+stages:
+  # Read the existing project knowledge base before documenting anything: this
+  # pipeline UPDATES that documentation, it does not start from a blank page.
+  - name: knowledge
+    type: pipeline
+    uses: knowledge-read
+    with: { focus: "{{ inputs.service_path }}" }
+    outputs:
+      - { name: knowledge_context, from: knowledge_read.knowledge_context }
+
+  - name: discover
+    agent: analyzer
+    skills: [event-architecture, graphify-context, analyze-confluence-docs-aidp]
+    needs: [knowledge]
+    inputs:
+      path: "{{ inputs.service_path }}"
+      knowledge_context: "{{ stages.knowledge.outputs.knowledge_context }}"
+    # This documents the SERVICE, not a ticket: its artefacts land in the
+    # per-project knowledge base (<vault>/Knowledge/<repo>/), outside
+    # every run folder, and are re-read (and updated in place) by later runs.
+    # `service` = the transverse layer only; the per-feature notes under
+    # `Features/` are maintained by `knowledge-update` / `knowledge-init`.
+    knowledge: service
+    outputs: [architecture.md, events.json]
+
+  - name: review
+    agent: reviewer
+    skills: [code-review-aidp]
+    needs: [discover]
+    outputs: [findings.json]
+
+  - name: publish
+    agent: executor
+    skills: [confluence-microservices, writing-clearly-and-concisely]
+    needs: [discover, review]
+    scope: { mode: stage_dir_only }
+    when: "{{ inputs.publish }}"
+    gate: true
+    outputs: [confluence.json]

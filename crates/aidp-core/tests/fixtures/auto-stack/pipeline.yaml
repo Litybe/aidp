@@ -1,0 +1,13 @@
+version: 5
+id: autostack
+inputs:
+  stack: { kind: enum, values: [auto, generic, rust, csharp, lambda-ts], default: auto }
+stages:
+  - name: fix
+    agent: executor
+    skills: [a]
+    skills_by:
+      input: stack
+      map:
+        rust: [r]
+      default: [g]

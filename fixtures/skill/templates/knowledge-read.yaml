@@ -1,0 +1,56 @@
+version: 5
+id: knowledge-read
+kind: fragment
+description: >
+  Reusable first step of any discovery: read the project knowledge base
+  (<vault>/Knowledge/<repo>/ — the durable documentation of the service, built
+  by previous runs) and distil the part that matters for the current work into
+  knowledge_context.md. Compose it with `type: pipeline` / `uses:
+  knowledge-read` ahead of the code/Jira/Confluence reads, so the run starts
+  from what is already known instead of rediscovering it from the source.
+  Pairs with `knowledge-update`, which folds the run's findings back in.
+
+  The base has two layers, and this stage reads both: the transverse notes (what
+  the service is) and the FEATURE note of the capability this run is about
+  (<vault>/Knowledge/<repo>/Features/<slug>.md — its rules, flow, code map and
+  edge cases). The feature note is the higher-value read: it is the closest
+  thing the base holds to a spec for the work about to start.
+inputs:
+  # What the current run is about — the ticket list, a topic, a service path.
+  # Used only to decide what is RELEVANT; the whole base is available.
+  focus: { required: false, kind: string }
+stages:
+  # An `analyzer` stage, so this digest is written at the ticket root and every
+  # later run on the same ticket reuses it. The prompt's "Project knowledge —
+  # READ THIS FIRST" section (injected by aidp) already lists the transverse
+  # notes AND every feature note with its aliases, and names the feature note
+  # matching this run when there is one; this stage turns that into the run's
+  # working context.
+  - name: knowledge_read
+    agent: analyzer
+    skills: [graphify-context]
+    model: haiku
+    inputs:
+      focus: "{{ inputs.focus }}"
+      task: >
+        Read the project knowledge base listed above and write
+        knowledge_context.md. Start with the FEATURE note that covers `focus` —
+        your prompt names it if one matches; otherwise run
+        `aidp knowledge resolve --name "<the feature this work is about>"` to
+        find it, and check the closest candidates before concluding the feature
+        is undocumented. Then read the transverse notes for what the feature
+        note does not cover. Write: what this service is, the business rules and
+        flow of the feature at hand, the components and events involved, the
+        invariants and gotchas that constrain the work, and the file paths worth
+        opening. Quote the base rather than paraphrasing it loosely, and cite the
+        note each fact comes from — distinguish clearly what came from the
+        feature note from what came from a transverse note, since the first is
+        specific and the second is general.
+        End with an "Unknown / to verify" list: what the base does NOT answer
+        for this work — that list is what the other discovery stages must go
+        and find in the code. Say explicitly whether the feature is documented,
+        partially documented or absent from the base: the knowledge-update stage
+        at the end of the run uses that to decide what to write.
+        If the base is empty, say so in one line and leave the whole question set
+        to those stages.
+    outputs: [knowledge_context.md]

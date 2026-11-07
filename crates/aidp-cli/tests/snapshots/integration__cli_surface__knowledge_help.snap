@@ -1,0 +1,44 @@
+---
+source: crates/aidp-cli/tests/cli_surface.rs
+expression: normalized
+---
+v7: the per-project knowledge base — its two layers, and the create-or-update decision for a feature note
+
+Usage: <BIN> knowledge [OPTIONS] <COMMAND>
+
+Commands:
+  list       List the base: transverse notes, then one line per feature note
+  resolve    Decide whether a feature has a note (`update`) or needs one (`create`, with the path to write); `ambiguous` means several notes are close: read them
+  index      Regenerate the knowledge index notes (`_<repo>.md`, `Features/_Features.md`, `_Knowledge.md`) for every documented project. Run it after hand-editing
+  path       Print the resolved paths of both layers
+  stats      Base-wide health: feature/root-note counts, size, oversized notes, colliding handles, and the adoption count for `files:`
+  supersede  Mark a feature note superseded by upserting `status`, `valid_until`, `superseded_by` and optional `supersede_reason` in its frontmatter; never deletes it
+  stale      Date every feature note's `files:` against git history, cache the result in `<knowledge_dir>/.aidp-stale.json` and print the report; never fails
+  gc         Read-only report on forks, dangling `superseded_by` pointers and notes whose `files:` are all gone. Always exits 0
+  help       Print this message or the help of the given subcommand(s)
+
+Options:
+      --workspace-root <PATH>
+          Workspace to act on instead of the current directory
+
+      --vault <PATH>
+          Obsidian vault to use instead of `AIDP_VAULT`, `~/.aidp/config.json` or auto-detection
+
+      --no-vault
+          Ignore any vault and keep artefacts in the repo (`.aidp/pipelines/`)
+
+      --format <FORMAT>
+          Output format. Each command keeps its own default when omitted
+
+          Possible values:
+          - json-compact: One compact JSON document on a single line
+          - json-pretty:  One indented JSON document
+          - ndjson:       One compact JSON value per line
+          - text:         Human-readable text
+          - footer:       The one-line cost footer of a report, for `<BIN> cost ticket`; text elsewhere
+
+  -v, --verbose...
+          More diagnostics on stderr; repeat for more (`-vv`)
+
+  -h, --help
+          Print help (see a summary with '-h')

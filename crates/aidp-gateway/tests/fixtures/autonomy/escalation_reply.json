@@ -1,0 +1,10 @@
+{
+  "status": "completed",
+  "summary": "One decision needs a human.",
+  "outputs": {},
+  "signals": {
+    "escalations": [
+      { "id": "d1", "decision": "drop the legacy endpoint", "reason": "breaking change" }
+    ]
+  }
+}

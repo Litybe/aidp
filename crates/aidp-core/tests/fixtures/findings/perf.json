@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "run_id": "run-c6-fixture",
+  "iter": 0,
+  "generated_at": "2026-09-09T10:00:00Z",
+  "severity_counts": { "blocking": 1, "major": 0, "minor": 0, "info": 0 },
+  "has_blocking_findings": true,
+  "findings": [
+    {
+      "id": "F-1",
+      "severity": "blocking",
+      "category": "performance",
+      "file": "src/hot.rs",
+      "line": 100,
+      "title": "N+1 query in the hot loop",
+      "description": "Under production load this loop issues one query per row.",
+      "suggestion": "Batch the lookup outside the loop.",
+      "related_ids": []
+    }
+  ],
+  "checks": [
+    { "id": "C-tests-run", "name": "Ran the relevant tests", "status": "skip", "harness_gap": "no load-test harness available in this sandbox", "evidence": null, "finding_ids": [] }
+  ]
+}

@@ -1,0 +1,55 @@
+# aidp ticket dispatcher configuration (vision §8). Edited by hand, read on
+# every tick; a missing or partial file behaves exactly like the defaults
+# shown here.
+
+dispatcher:
+  slots: 5                      # tickets in-progress at once, across every service
+  tick_seconds: 60
+  permission_mode: bypassPermissions
+  model: claude-sonnet-5
+  auto_approve_gates: [pr]      # "*" approves every gate; anything else blocks the ticket (blocked: gate:<stage>)
+  max_attempts: 2
+  gate_timeout_hours: 12
+  paused: false
+  launch: session               # session | flow: how a queued ticket is launched
+  max_worktrees_per_project: 3  # tickets of one project that may hold a worktree at once
+  worktree_copy:                # untracked files copied into each new worktree
+    - ".claude/settings.local.json"
+    - ".aidp/*.json"
+
+budget:
+  max_utilization_5h: 0.80
+  max_utilization_7d: 0.90
+  reserve_per_run_5h: 0.10       # estimated cost of one dev run on the 5h window
+  reserve_per_run_7d: 0.02
+  unknown_policy: conservative   # no snapshot yet: run one session at a time
+  learn: true                    # refine the reserve from observed deltas
+  rate_limit_patterns:           # substrings that mark a session killed by the usage limit
+    - "rate limit"
+    - "usage limit"
+    - "hit your limit"
+    - "429"
+    - "rate_limit"
+
+local:
+  key_prefix: LOC
+  archive_after_days: 30         # done/cancelled moved to <service>/archive/
+
+github:                          # GitHub issues as the ticket source (aidp ticket sync --source github)
+  repos: []                      # e.g. [Litybe/PixelHood] or [{ repo: Litybe/PixelHood, service: PixelHood, key_prefix: GH }]
+  sync_minutes: 10               # daemon sync rhythm; 0 = only the manual sync
+  limit: 200                     # open issues read per repository and sync
+  native_dependencies: true      # also read GitHub's blocked_by dependencies (one call per issue)
+  ready_required: true           # a complete issue waits for aidp:ready (blocked: not-ready)
+  label_prefix: "aidp:"
+  status_labels:                 # ticket status (or blocked:<reason>) -> the single state label
+    todo: "aidp:ready"
+    queued: "aidp:queued"
+    in-progress: "aidp:in-progress"
+    in-review: "aidp:awaiting-merge"
+    done: "aidp:done"
+    blocked: "aidp:blocked"
+    "blocked:needs-refine": "aidp:triage"
+    "blocked:needs-routing": "aidp:triage"
+    "blocked:skip": "aidp:skip"
+  phase_labels: ["aidp:review", "aidp:fixing", "aidp:testing"]

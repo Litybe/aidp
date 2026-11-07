@@ -1,0 +1,8 @@
+version: 5
+id: unparseable-when
+description: One stage whose when compares two undefined refs numerically, which eval_condition cannot parse.
+inputs: {}
+stages:
+  - name: broken_when
+    agent: executor
+    when: "{{ inputs.nope > inputs.alsonope }}"

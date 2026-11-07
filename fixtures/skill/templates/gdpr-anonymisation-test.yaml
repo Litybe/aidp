@@ -1,0 +1,521 @@
+version: 5
+id: gdpr-anonymisation-test
+name: GDPR anonymisation — pipeline de test
+description: >
+  Teste la feature d'anonymisation GDPR sur deux couches complémentaires, sans
+  ajouter une ligne de code de test dans un repo de service.
+  COUCHE LOCALE (skill cheat-gdpr-local-e2e) — le harness cheat-gdpr-e2e joue
+  les scénarios du flux d'anonymisation contre LocalStack avec les VRAIS
+  handlers de cheat-gdpr-orchestrator, le vrai publisher eventbus Rust, le vrai
+  client Flip et les 7 services Cheat simulés : c'est la couche « contrat
+  d'événements » (fan-out, acks, latch publish-once, DLQ, kill-switch).
+  Les 7 services y étant simulés, cette couche prouve le contrat mais PAS
+  l'effacement : avec `local_real_service`, un vrai service .NET remplace son
+  simulateur et scrube de vraies données semées par le skill
+  create-test-user-local (create-test-user ne sait créer que sur dev/stage2 — les
+  gateways account/payment n'existent pas en local).
+  COUCHE DEV (skill create-test-user) — un vrai joueur de test est provisionné
+  sur dev/stage2, éventuellement crédité puis mis en retrait, fermé, puis
+  anonymisé (RGPD) et vérifié `is_anonymized: true` : c'est la couche « saga
+  réelle », celle qui prouve que l'anonymisation traverse effectivement les
+  composants.
+  Les deux couches sont INDÉPENDANTES : le harness fabrique lui-même ses
+  user_id synthétiques (scenario-support.ts) et n'expose aucun point
+  d'injection, donc l'id du joueur dev n'est pas rejouable en local. Elles
+  tournent en parallèle et ne sont recollées qu'au rapport final, qui croise les
+  deux verdicts (local vert + dev rouge = environnement ou données, pas contrat
+  d'événement).
+inputs:
+  ticket_id:
+    required: false
+    kind: string
+    default: "GDPR"
+    description: Identifiant repris dans results.json / le rapport (ex. PIXEL-5559).
+  layers:
+    required: false
+    kind: enum
+    values: [local, dev, both]
+    default: both
+    description: Couches à jouer — local (harness LocalStack), dev (vrai joueur), both.
+  # --- couche locale -------------------------------------------------------
+  harness_dir:
+    required: false
+    kind: string
+    default: "/mnt/c/CODE/Tools/cheat-local-environment/localstack/cheat-gdpr-e2e"
+    description: Chemin WSL du harness cheat-gdpr-e2e (le docker CLI vit dans WSL).
+  orchestrator_repo:
+    required: false
+    kind: string
+    description: >
+      Chemin WSL du repo cheat-gdpr-orchestrator s'il n'est pas au défaut du
+      harness (../../../../Lambda/cheat-gdpr-orchestrator). Le harness emprunte
+      son node_modules pour les deux modules natifs.
+  local_scenarios:
+    required: false
+    kind: string
+    description: >
+      Sous-ensemble de scénarios à jouer, séparés par une espace (ex.
+      "happy-path partial-then-replay"). Vide = tous les scénarios automatisés.
+  dotnet_repos_root:
+    required: false
+    kind: string
+    default: "C:/CODE/.Net"
+    description: >
+      Racine Windows des repos de services .NET Cheat (cheat-alerts-service,
+      cheat-profile-service, ...). Utilisee par le preflight pour trouver
+      l'appsettings.Local.json du service cible, et par local_real_scrub pour
+      le demarrer. Chemin WSL equivalent : /mnt/c/CODE/.Net.
+  local_real_service:
+    required: false
+    kind: enum
+    values: [none, cheat-profile-service, cheat-alerts-service]
+    default: none
+    description: >
+      Remplacer un simulateur par le VRAI service .NET, qui scrube de vraies
+      données dans le Mongo local (skill create-test-user-local). `none` = les 7
+      services restent simulés : on ne teste alors que le contrat d'événements,
+      pas l'effacement. cheat-aml-service est absent de la liste : il n'a pas
+      d'appsettings.Local.json, donc il n'est pas lançable en local en l'état.
+  include_flip_unreachable:
+    required: false
+    kind: bool
+    default: false
+    description: >
+      Jouer aussi le scénario manuel flip-unreachable (kill-switch fail-closed).
+      Nécessite flip-down puis restauration du runner, donc perturbe le harness.
+  # --- couche dev ----------------------------------------------------------
+  dev_env:
+    required: false
+    kind: enum
+    values: [dev, stage2]
+    default: dev
+    description: Environnement non-prod ciblé par create-test-user. Jamais la prod.
+  regulator:
+    required: false
+    kind: string
+    default: "FR"
+    description: Zone régulateur du joueur (doit correspondre au joueur créé).
+  player_count:
+    required: false
+    kind: int
+    default: 1
+    description: Nombre de joueurs de test à provisionner (un par scénario dev).
+  with_money:
+    required: false
+    kind: bool
+    default: true
+    description: >
+      Créditer le joueur puis poser un retrait avant fermeture — couvre les
+      composants payment/withdrawals de la saga d'anonymisation.
+  check_datadog:
+    required: false
+    kind: bool
+    default: true
+    description: Vérifier la propagation de la saga dans les logs Datadog.
+  # --- fin de run ----------------------------------------------------------
+  teardown_harness:
+    required: false
+    kind: bool
+    default: true
+    description: >
+      Arrêter le harness (gdpr-e2e.sh down) après le rapport. LocalStack reste
+      debout. Un run avorté ne teardown pas : les logs restent inspectables.
+stages:
+  # 1. Preflight READ-ONLY : rien n'est démarré, rien n'est créé. On vérifie
+  #    seulement que les couches demandées sont jouables, et on dit comment
+  #    réparer sinon. Un preflight rouge sur la couche demandée => blocked,
+  #    plutôt qu'un échec de scénario qui ressemble à une régression.
+  - name: preflight
+    agent: executor
+    skills: [cheat-gdpr-local-e2e, create-test-user-local]
+    inputs:
+      layers: "{{ inputs.layers }}"
+      harness_dir: "{{ inputs.harness_dir }}"
+      dev_env: "{{ inputs.dev_env }}"
+      local_real_service: "{{ inputs.local_real_service }}"
+      dotnet_repos_root: "{{ inputs.dotnet_repos_root }}"
+    outputs: [preflight.json]
+    scope: { mode: stage_dir_only }
+    with:
+      instructions: >-
+        Vérifications NON destructives uniquement, et la règle est stricte :
+        N'EXÉCUTE AUCUN script de create-test-user ici, même avec DRY_RUN=1, même
+        « juste pour tester la joignabilité ». Un probe de ce genre a déjà
+        provisionné deux joueurs réels sur dev. La joignabilité d'une gateway se
+        prouve avec un GET/HEAD `curl` sur son host, rien d'autre : un script de
+        provisioning n'est pas un outil de diagnostic. Si layers vaut local ou
+        both : (a) WSL répond (`wsl bash -lc "echo ok"`) et le docker CLI y est
+        disponible ; (b) harness_dir existe et contient gdpr-e2e.sh ; (c)
+        LocalStack répond sur http://localhost:4566/_localstack/health (sinon
+        note-le : `up` le démarre) ; (d) le node_modules du repo
+        cheat-gdpr-orchestrator est présent et complet — le harness l'emprunte
+        pour les deux modules natifs, et `npm ci` est à faire UNE fois dans ce
+        repo, jamais par le harness ; (e) le réseau corporate est joignable, car
+        Flip est réel en gRPC/TLS : sonde l'hôte Flip RÉEL, soit $FLIP_API_URL
+        s'il est posé, soit son défaut harness
+        https://core-dev-lb-eu-west-1.pixelhood.net — ne substitue JAMAIS un site
+        externe générique, et si le curl Windows échoue en schannel/revocation,
+        refais-le depuis WSL avant de conclure. Si local_real_service n'est pas `none` :
+        vérifie en plus que le conteneur Mongo local tourne (`docker ps`) et que
+        le service ciblé a bien un appsettings.Local.json, cherché SOUS `dotnet_repos_root` (p.ex. <dotnet_repos_root>/<service>/src/*/appsettings.Local.json) — n'explore pas le disque au hasard, cet input EST le chemin. Le check localstack_health est INFORMATIF : LocalStack arrêté
+        ne doit PAS faire tomber local_ready, puisque `up` le démarre. Si layers vaut dev ou
+        both : node >= 18 et un `curl` GET/HEAD sur les gateways non-prod RÉELLES,
+        dont les hôtes sont documentés dans le skill create-test-user — pour dev :
+        http://account-dev-agw-northeurope.pixelhood.net et
+        http://payment-dev-agw-northeurope.pixelhood.net (pour stage2, les mêmes en
+        substituant stage2 à dev). Ne devine JAMAIS un hostname : lis-le dans le
+        skill. Un 401/403/404 prouve la joignabilité — seul un échec DNS/connexion
+        est un échec.
+        N'exécute AUCUN `gdpr-e2e.sh up`, ne crée aucun joueur, ne modifie aucun
+        repo. Écris preflight.json : { checks: [ { id, layer, ok, detail, fix } ],
+        local_ready, dev_ready }. Pose signals.local_ready et signals.dev_ready.
+        Renvoie status: blocked si une couche demandée par `layers` n'est pas
+        jouable, en listant les `fix`.
+
+  # 2. La charte de test : le référentiel d'attendus que le rapport final
+  #    comparera. C'est ici qu'on décide quel scénario couvre quel critère, et ce
+  #    qui est un écart CONNU (findings du harness) plutôt qu'une régression.
+  #    Indépendante de local_up => les deux tournent en parallèle (le build
+  #    docker du harness recouvre l'écriture de la charte).
+  - name: charter
+    agent: planner
+    skills: [cheat-gdpr-local-e2e, create-test-user]
+    needs: [preflight]
+    inputs:
+      ticket_id: "{{ inputs.ticket_id }}"
+      layers: "{{ inputs.layers }}"
+      local_scenarios: "{{ inputs.local_scenarios }}"
+      player_count: "{{ inputs.player_count }}"
+      with_money: "{{ inputs.with_money }}"
+    outputs: [test-charter.md, expectations.json]
+    scope: { mode: stage_dir_only }
+    with:
+      instructions: >-
+        Lis les deux skills et le README du harness. Produis la matrice de
+        couverture de la feature d'anonymisation GDPR : un critère par ligne
+        (fan-out vers les 7 services, ack par service, publication unique de la
+        complétion, replay partiel, ack ERROR, payload invalide -> DLQ, ack sans
+        correlation_id, kill-switch fail-closed ; côté dev : refus si le compte
+        n'est pas CLOSED, bascule is_anonymized, remplacement de l'identité par
+        les placeholders) ; pour chacun, la couche qui le couvre et le scénario
+        ou l'étape exacte. Si `local_scenarios` est vide, arrête la liste des
+        scénarios à jouer et pose-la dans signals.local_scenarios (tableau de
+        noms de scénarios du harness) ; sinon reprends la liste fournie.
+        expectations.json DOIT porter la baseline attendue — { local: {
+        scenarios: [...], expected_checks, known_warnings: [...] }, dev: {
+        steps: [...], expected_statuses: {...} }, known_findings: [...] } — en
+        incluant explicitement comme NON bloquants : le WARN `requested_at` émis
+        en float par le publisher natif sur happy-path, et le fait que
+        `target_service` n'est honoré par aucun service réel (les simulateurs
+        l'honorent par défaut). Aucun code de test n'est écrit ici : le harness
+        et les scripts existent déjà, on ne décide que quoi jouer et quoi
+        attendre.
+
+  # 3. Démarre le harness local (LocalStack + image + bundling des handlers +
+  #    topologie + runner + simulateurs). Pas de gate : rien de partagé n'est
+  #    touché, tout est local à la machine.
+  - name: local_up
+    agent: executor
+    skills: [cheat-gdpr-local-e2e]
+    needs: [preflight]
+    when: "{{ inputs.layers in ['local','both'] }}"
+    inputs:
+      harness_dir: "{{ inputs.harness_dir }}"
+      orchestrator_repo: "{{ inputs.orchestrator_repo }}"
+      local_real_service: "{{ inputs.local_real_service }}"
+    outputs: [harness-up.log, harness-state.json]
+    scope: { mode: stage_dir_only }
+    with:
+      instructions: >-
+        Lance `bash gdpr-e2e.sh up` DEPUIS WSL et depuis harness_dir — p.ex.
+        `wsl bash -lc "cd <harness_dir> && bash gdpr-e2e.sh up"` (le docker CLI
+        vit dans WSL ; n'appelle jamais docker directement depuis Windows). Si
+        local_real_service n'est pas `none`, préfixe la commande par
+        `SIM_DISABLED=<ce service>` : la queue du service reste libre pour que le
+        vrai service .NET la consomme au lieu du simulateur. Passe
+        ORCHESTRATOR_REPO si l'input est fourni. Capture stdout+stderr dans
+        harness-up.log. Écris harness-state.json : { up: bool, containers: [...],
+        localstack_healthy: bool, notes: [...] }. INTERDIT : ajouter du code de
+        test, un stub ou un mock dans cheat-gdpr-orchestrator ou dans un repo
+        cheat-*-service — l'orchestrateur est monté en lecture seule et se
+        configure par variables d'environnement ; tout le reste appartient au
+        harness. Si `up` échoue au bundling, renvoie status: blocked avec la
+        cause exacte (typiquement `npm ci` manquant dans le repo orchestrateur),
+        sans rien installer toi-même.
+
+  # 4. Joue les scénarios. SÉQUENTIEL et VOLONTAIREMENT SANS fan_out : les
+  #    scénarios partagent une seule LocalStack, un seul runner et surtout un
+  #    `.state/simulator-control.json` global relu à chaque poll — les sharder
+  #    ferait s'écraser mutuellement les modes des simulateurs.
+  - name: local_run
+    agent: executor
+    skills: [cheat-gdpr-local-e2e]
+    needs: [local_up, charter]
+    when: "{{ inputs.layers in ['local','both'] }}"
+    inputs:
+      harness_dir: "{{ inputs.harness_dir }}"
+      expectations: "{{ stages.charter.outputs.expectations }}"
+      local_scenarios: "{{ inputs.local_scenarios }}"
+    outputs: [local-run.log, local-results.json]
+    scope: { mode: stage_dir_only }
+    with:
+      instructions: >-
+        Joue les scénarios retenus par la charte via WSL : `wsl bash -lc "cd
+        <harness_dir> && bash gdpr-e2e.sh test [noms...]"` (sans nom = tous les
+        scénarios automatisés). Capture TOUT stdout+stderr dans local-run.log,
+        ainsi que le code de sortie. Puis parse le bloc `Summary` (lignes
+        `PASS|FAIL <scénario> <n>/<m> checks`) et écris local-results.json : {
+        exit_code, scenarios: [ { name, status: pass|fail, checks_total,
+        checks_passed, failed_checks: [...], warnings: [...] } ], totals: {
+        scenarios, checks, failures } }. Compare à expectations.json : la
+        baseline est de 6 scénarios / 34 checks verts, avec UN warning attendu
+        sur happy-path (`requested_at` sérialisé en float par le publisher
+        natif) — ce warning n'est PAS un échec. Pour chaque check en échec,
+        relève la ligne exacte du log et, si besoin, `gdpr-e2e.sh logs` (runner
+        + simulateurs) pour l'evidence. Ne relance pas un scénario en boucle pour
+        le faire passer, et ne touche à aucun repo de service.
+
+  # 4bis. Le harness prouve le CONTRAT d'événements, pas l'effacement : ses 7
+  #    services sont simulés et n'écrivent nulle part. Or un vrai service dont le
+  #    Mongo local ne contient AUCUN document acquitte SUCCESS sans rien scruber
+  #    (AnonymiseUserUseCase.cs:38 — `profile is null` -> Success). Sans fixture
+  #    locale, un test « vert » ne prouve donc rien. C'est le rôle du skill
+  #    create-test-user-local : create-test-user, lui, ne sait créer que sur
+  #    dev/stage2 (gateways account/payment), il n'a pas de mode local.
+  - name: local_fixture
+    agent: executor
+    skills: [create-test-user-local]
+    needs: [local_up]
+    when: "{{ inputs.layers in ['local','both'] and inputs.local_real_service != 'none' }}"
+    inputs:
+      service: "{{ inputs.local_real_service }}"
+    outputs: [local-fixture.json, local-before.json]
+    scope: { mode: stage_dir_only }
+    with:
+      instructions: >-
+        Choisis un USER_ID à 9 chiffres dans la plage du harness (900000000+)
+        pour qu'il ne puisse jamais collisionner avec un joueur dev réel, et
+        garde-le : tout le reste de la couche locale s'y réfère. Puis, depuis
+        WSL : `SERVICES=<service> USER_ID=<id> bash local-user.sh seed`, suivi de
+        `... OUT=<stage_dir>/local-before.json bash local-user.sh show` pour le
+        snapshot AVANT. Écris local-fixture.json : { user_id, service, seeded:
+        bool, targets: [...], pii_fields } et pose signals.local_user_id =
+        l'id choisi. Ne touche à aucun repo de service et ne crée aucun joueur
+        sur dev : ici tout est local, il n'y a ni compte, ni wallet, ni KYC.
+
+  # 4ter. La preuve de l'effacement : le vrai service .NET consomme sa queue et
+  #    scrube le Mongo local. Un seul stage démarre le service, déclenche, vérifie
+  #    puis l'arrête — un process lancé en arrière-plan ne survit pas d'un
+  #    sous-agent à l'autre. `assert` porte le verdict (exit 2 = non anonymisé).
+  - name: local_real_scrub
+    agent: executor
+    skills: [create-test-user-local, cheat-gdpr-local-e2e]
+    needs: [local_fixture, local_run]
+    when: "{{ inputs.layers in ['local','both'] and inputs.local_real_service != 'none' }}"
+    inputs:
+      service: "{{ inputs.local_real_service }}"
+      fixture: "{{ stages.local_fixture.outputs.local-fixture }}"
+      harness_dir: "{{ inputs.harness_dir }}"
+      dotnet_repos_root: "{{ inputs.dotnet_repos_root }}"
+    outputs: [local-scrub.json, local-after.json, service.log]
+    scope: { mode: stage_dir_only }
+    with:
+      instructions: >-
+        Séquence, avec l'user_id de local-fixture.json. (1) Démarre le vrai
+        service en arrière-plan depuis `<dotnet_repos_root>/<service>`, `ASPNETCORE_ENVIRONMENT=Local` plus les réglages
+        Mongo que son appsettings.Local.json NE porte PAS —
+        MongoOptions__Uri=mongodb://localhost:27017,
+        MongoOptions__DatabaseName=<la même base que le seed>,
+        MongoOptions__IsMongoAtlasCluster=false — et redirige sa sortie vers
+        service.log. Attends que son subscriber EventBus ait créé/attaché sa
+        queue (`aws --endpoint-url=http://localhost:4566 sqs list-queues`). (2)
+        Publie l'événement `user_anonymisation_pending_v2` pour CET user_id sur
+        le topic gdpr de LocalStack (`aws sns publish`, attribut de type
+        conforme, depuis WSL) : le runner du harness invoque alors le vrai
+        handler de l'orchestrateur, qui diffuse la commande. (3) Attends l'ack du
+        service dans service.log, puis lance `SERVICES=<service> USER_ID=<id>
+        bash local-user.sh assert` et `... OUT=<stage_dir>/local-after.json show`.
+        (4) Arrête le service, TOUJOURS, même si l'assertion échoue. Écris
+        local-scrub.json : { user_id, service, ack_seen, assert: { exit_code,
+        summary, failures, leaks }, service_started, service_stopped }. Le
+        verdict est celui d'`assert` : exit 0 = champs en périmètre à [REDACTED]
+        et aucun marqueur survivant ; exit 2 = non anonymisé, et c'est un échec de
+        test, pas un souci d'outillage. N'utilise JAMAIS `selftest-scrub` ici :
+        il simule le scrub et rendrait l'assertion tautologique.
+
+  # 5. Kill-switch fail-closed : Flip est réel, donc on le rend injoignable
+  #    plutôt que de simuler une valeur de flag. Après local_run, car il recrée
+  #    le runner. La restauration est obligatoire, même si le scénario échoue.
+  - name: local_flip_switch
+    agent: executor
+    skills: [cheat-gdpr-local-e2e]
+    needs: [local_run]
+    when: "{{ inputs.layers in ['local','both'] and inputs.include_flip_unreachable }}"
+    inputs:
+      harness_dir: "{{ inputs.harness_dir }}"
+    outputs: [flip-results.json]
+    scope: { mode: stage_dir_only }
+    with:
+      instructions: >-
+        Séquence, toujours depuis WSL et depuis harness_dir : `gdpr-e2e.sh
+        flip-down`, puis `gdpr-e2e.sh test flip-unreachable`, puis `gdpr-e2e.sh
+        up` pour restaurer le runner sur le Flip réel. Exécute la restauration
+        MÊME si le scénario échoue (équivalent d'un finally) et dis si elle a
+        réussi. Écris flip-results.json : { status: pass|fail, checks_total,
+        checks_passed, failed_checks: [...], restored: bool }.
+
+  # 6. COUCHE DEV — premier contact avec un environnement partagé : gate humain.
+  #    Cette approbation couvre toute la suite côté dev (fermeture puis
+  #    anonymisation), irréversible sur les joueurs créés ici.
+  - name: dev_fixture
+    agent: executor
+    skills: [create-test-user]
+    needs: [preflight, charter]
+    when: "{{ inputs.layers in ['dev','both'] }}"
+    gate: true
+    inputs:
+      dev_env: "{{ inputs.dev_env }}"
+      regulator: "{{ inputs.regulator }}"
+      player_count: "{{ inputs.player_count }}"
+      with_money: "{{ inputs.with_money }}"
+      expectations: "{{ stages.charter.outputs.expectations }}"
+    outputs: [dev-fixture.json]
+    scope: { mode: stage_dir_only }
+    with:
+      instructions: >-
+        Lis d'abord reference/guardrails.md du skill (premier appel destructif de
+        la session). Environnement : ENV={{ inputs.dev_env }} (jamais la prod),
+        REGULATOR={{ inputs.regulator }}, données factices uniquement. Ordre
+        imposé : provision (COUNT={{ inputs.player_count }}, BALANCE > 0 si
+        with_money) -> withdraw si with_money -> close. Fais un DRY_RUN=1 avant
+        le premier `close`. Parse UNIQUEMENT le JSON de stdout (le stderr est du
+        progrès). Écris dev-fixture.json : { env, regulator, players: [ {
+        user_id, credentials, kyc_ok, balance, withdrawal: {...}|null,
+        account_status, status } ] }. Sois honnête sur les statuts : `pending`
+        n'est PAS fermé, `requested` n'a pas été vérifié, `not_eligible` /
+        `refused` sur le retrait n'est pas un débit. Ne poursuis pas vers
+        l'anonymisation si un joueur n'est pas `CLOSED` : dis-le et pose-le dans
+        l'enveloppe. Les identifiants restent dans cet artefact de stage — ne les
+        recopie ni dans le rapport, ni dans un ticket, ni dans un commit.
+
+  # 7. La feature sous test, côté réel : anonymisation d'un compte CLOSED, puis
+  #    vérification de la bascule et du remplacement de l'identité.
+  - name: dev_anonymize
+    agent: executor
+    skills: [create-test-user]
+    needs: [dev_fixture]
+    when: "{{ inputs.layers in ['dev','both'] }}"
+    inputs:
+      dev_env: "{{ inputs.dev_env }}"
+      regulator: "{{ inputs.regulator }}"
+      fixture: "{{ stages.dev_fixture.outputs.dev-fixture }}"
+    outputs: [dev-anonymisation.json]
+    scope: { mode: stage_dir_only }
+    with:
+      instructions: >-
+        Pour chaque joueur `CLOSED` de dev-fixture.json : DRY_RUN=1 d'abord, puis
+        l'anonymisation, avec le même ENV/REGULATOR que la fixture (un mismatch
+        de zone sort en `404 user not found`). Assertions à poser explicitement,
+        c'est le cœur du test : is_anonymized passe de false à true ;
+        identityAfter porte les placeholders attendus (firstname `First`,
+        username `User<id>`, email `user_<id>@yop.com`, lastname généré) ;
+        identityBefore ne fuit dans aucun champ conservé. Statuts qui comptent
+        comme succès : `anonymized` et `already_anonymized` uniquement.
+        `pending` = non anonymisé (une seule nouvelle vérification autorisée via
+        VERIFY_ROUNDS, sans boucler) ; `skipped_not_closed` = défaut de fixture,
+        pas un bug de la feature ; `error` = à remonter tel quel avec le corps de
+        réponse. Écris dev-anonymisation.json : { env, players: [ { user_id,
+        account_status, is_anonymized_before, is_anonymized_after,
+        identity_after, placeholders_ok, status, error } ], totals }. Rappel :
+        irréversible, il n'existe aucun endpoint de dé-anonymisation — un joueur
+        anonymisé est consommé.
+
+  # 8. La saga d'anonymisation est asynchrone et multi-composants : le flag du
+  #    compte bascule en secondes, les composants (identity-documents,
+  #    payment-withdrawals, cheat-*) se résolvent à leur rythme. On lit donc les
+  #    logs Datadog plutôt que de déduire. Read-only => analyzer.
+  - name: verify_saga
+    agent: analyzer
+    needs: [dev_anonymize]
+    when: "{{ inputs.layers in ['dev','both'] and inputs.check_datadog }}"
+    inputs:
+      anonymisation: "{{ stages.dev_anonymize.outputs.dev-anonymisation }}"
+      dev_env: "{{ inputs.dev_env }}"
+    outputs: [saga-evidence.md]
+    scope: { mode: stage_dir_only }
+    with:
+      instructions: >-
+        Via le MCP Datadog (charge d'abord le skill `datadog/logs` comme le
+        prescrivent les instructions du serveur), cherche pour chaque user_id de
+        dev-anonymisation.json, sur la fenêtre du run et l'environnement ciblé,
+        les événements de la saga : `user_anonymisation_pending_v2`,
+        `cheat_user_anonymisation_pending`, `cheat_user_anonymisation_completed`,
+        `user_data_anonymised_v2`, `domain_user_data_anonymised_v2`, plus les
+        erreurs de désérialisation côté consommateurs. Écris saga-evidence.md :
+        un tableau service par service (événement reçu, ack émis, statut,
+        horodatage, lien Datadog), la liste des composants qui n'ont pas répondu,
+        et les erreurs trouvées. Distingue « pas de log » de « log d'échec » :
+        l'absence de trace n'est pas une preuve d'échec, dis-le. Si l'accès
+        Datadog n'est pas disponible, renvoie une note explicite plutôt qu'une
+        conclusion inventée.
+
+  # 9. Verdict unique sur les deux couches. Reviewer => `has_blocking_findings`
+  #    porte le gate final.
+  - name: report
+    agent: reviewer
+    model: opus   # delibere : verdict gate sur l'anonymisation RGPD - un faux vert expose des donnees personnelles
+    skills: [feature-testing-aidp, writing-clearly-and-concisely]
+    needs: [local_run, local_real_scrub, local_flip_switch, dev_anonymize, verify_saga]
+    inputs:
+      ticket_id: "{{ inputs.ticket_id }}"
+      expectations: "{{ stages.charter.outputs.expectations }}"
+      charter: "{{ stages.charter.outputs.test-charter }}"
+    outputs: [gdpr-test-report.md, results.json]
+    gate: true
+    scope: { mode: stage_dir_only }
+    with:
+      instructions: >-
+        Consolide local-results.json, local-scrub.json, flip-results.json,
+        dev-fixture.json, dev-anonymisation.json et saga-evidence.md (ceux qui
+        existent : une couche non jouée est `skipped`, pas `fail`). Dis
+        explicitement, si local_real_service valait `none`, que la couche locale
+        a prouvé le CONTRAT d'événements et PAS l'effacement — sept simulateurs
+        acquittent sans rien scruber. Écris results.json conforme
+        à schema/test-report.schema.json, en normalisant les identifiants :
+        `SC-local-<scénario>` pour le harness, `SC-dev-<étape>` pour la couche
+        dev (le pattern exige le préfixe `SC-`). has_blocking_findings = true dès
+        qu'un scénario est fail ou error. Écris gdpr-test-report.md : verdict par
+        couche, puis par critère de la charte — attendu / observé / evidence
+        (ligne de log, extrait JSON, lien Datadog). Section « écarts connus, non
+        bloquants » pour la baseline de expectations.json (WARN `requested_at`
+        float, `target_service` honoré par personne). Section « lecture croisée »
+        obligatoire : local vert + dev rouge => environnement, données ou
+        configuration, pas le contrat d'événement ; local rouge + dev vert =>
+        régression du contrat masquée en dev par des services qui ignorent
+        `target_service` ; les deux rouges => la feature elle-même. Ne recopie
+        aucun identifiant de connexion. Ne requalifie pas un `pending` en succès.
+
+  # 10. Nettoyage. Le harness s'arrête, LocalStack reste debout. Les joueurs dev
+  #     sont déjà fermés ET anonymisés, donc consommés : on ne les « nettoie »
+  #     pas, on les inventorie pour que personne ne les réutilise.
+  - name: teardown
+    agent: executor
+    model: haiku   # delibere : demontage mecanique, aucun raisonnement
+    skills: [cheat-gdpr-local-e2e, create-test-user-local]
+    needs: [report]
+    when: "{{ inputs.teardown_harness }}"
+    inputs:
+      harness_dir: "{{ inputs.harness_dir }}"
+    outputs: [teardown.json]
+    scope: { mode: stage_dir_only }
+    with:
+      instructions: >-
+        Si la couche locale a tourné : `wsl bash -lc "cd <harness_dir> && bash
+        gdpr-e2e.sh down"` (LocalStack n'est pas arrêté). Si une fixture locale a
+        été semée (local-fixture.json), purge-la : `SERVICES=<service>
+        USER_ID=<id> bash local-user.sh purge`. Puis inventorie les joueurs de
+        dev-anonymisation.json comme consommés (fermés + anonymisés,
+        irréversible). Écris teardown.json : { harness_down: bool,
+        local_fixture_purged: bool, spent_players: [ { user_id, account_status,
+        is_anonymized } ], notes }. Ne tente aucune réouverture ni
+        dé-anonymisation côté dev : ces endpoints n'existent pas.

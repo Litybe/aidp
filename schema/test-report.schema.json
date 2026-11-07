@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/ai-dev-pipeline/schema/test-report.schema.json",
+  "title": "test-report.json / results.json",
+  "description": "Aggregate verdict produced by the run-tests-dev `evaluate` stage (a reviewer). `has_blocking_findings` MUST be true when any scenario failed/errored, so the reviewer envelope signal gates the run.",
+  "type": "object",
+  "required": ["schema_version", "run_id", "generated_at", "ticket_id", "totals", "has_blocking_findings", "scenarios"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": { "type": "integer", "enum": [1], "default": 1 },
+    "run_id": { "type": "string" },
+    "generated_at": { "type": "string", "format": "date-time" },
+    "ticket_id": { "type": "string" },
+    "totals": {
+      "type": "object",
+      "required": ["total", "passed", "failed", "error"],
+      "additionalProperties": false,
+      "properties": {
+        "total": { "type": "integer", "minimum": 0 },
+        "passed": { "type": "integer", "minimum": 0 },
+        "failed": { "type": "integer", "minimum": 0 },
+        "error": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "has_blocking_findings": { "type": "boolean" },
+    "scenarios": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["scenario_id", "status"],
+        "additionalProperties": false,
+        "properties": {
+          "scenario_id": { "type": "string", "pattern": "^SC-[0-9A-Za-z_-]+$" },
+          "status": { "type": "string", "enum": ["pass", "fail", "error"] },
+          "acceptance_criterion": { "type": ["string", "null"] },
+          "failed_steps": {
+            "type": "array",
+            "items": { "type": "string" },
+            "default": [],
+            "description": "Short descriptions of the steps that failed (empty when pass)."
+          },
+          "result_file": { "type": ["string", "null"], "description": "Relative path to the per-scenario test-run-result.json." }
+        }
+      }
+    }
+  }
+}

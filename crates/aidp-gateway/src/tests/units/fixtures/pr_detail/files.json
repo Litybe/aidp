@@ -1,0 +1,4 @@
+[
+{"filename":"src/a.rs","status":"modified","additions":2,"deletions":1,"sha":"blob-a-1","patch":"@@ -1,2 +1,3 @@\n keep\n-old\n+new\n+added"},
+{"filename":"src/b.rs","status":"added","additions":1,"deletions":0,"sha":"blob-b-1","patch":"@@ -0,0 +1 @@\n+fresh"}
+]

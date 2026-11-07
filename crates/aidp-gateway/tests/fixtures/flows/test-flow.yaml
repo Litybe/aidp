@@ -1,0 +1,35 @@
+id: test-flow
+version: 1
+settings:
+  with_pipeline: true
+  with_wait: false
+  with_human: true
+steps:
+  - id: prepare
+    kind: action
+    use: count
+    phase: Preparation
+  - id: develop
+    kind: pipeline
+    use: dev-aidp
+    phase: Developpement
+    when: settings.with_pipeline == true
+    with:
+      label: "Développement ébauche"
+  - id: cooldown
+    kind: wait
+    use: timer
+    phase: Attente
+    when: settings.with_wait == true
+    with:
+      seconds: 60
+  - id: approve
+    kind: human
+    phase: Revue
+    when: settings.with_human == true
+    prompt: Approve the result?
+    choices: [approve, reject]
+  - id: finish
+    kind: action
+    use: count
+    phase: Nettoyage

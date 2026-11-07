@@ -1,0 +1,46 @@
+---
+source: crates/aidp-cli/tests/cli_surface.rs
+expression: normalized
+---
+Run lifecycle: init, start, state, summary, reconcile, resume anchors
+
+Usage: <BIN> run [OPTIONS] <COMMAND>
+
+Commands:
+  init           Create a run: allocate its id and directory, write its state and print the id
+  start          `run init` + `workflow emit` in one call. Same flags as `init`, plus repeatable `--input k=v` (a repeated key accumulates into a JSON array)
+  exec           Run a template natively: the daemon (or `--foreground`, in-process) drives every stage through agent sessions, with no Workflow tool involved
+  state          Print a run's state (text by default; `--format json-compact` for JSON)
+  summary        Print a human-readable summary of a run
+  reconcile      Fold a Workflow result file (`--from`) back into run-state. Exits 0 even with scope_violations; exits 4 (policy refusal) on a vault leak
+  plan-exec      Write the typed execution plan of a run to `execution-plan.json` and print its path
+  record-resume  Persist resume state: Workflow runId, approved gates, `--pending-gate`, `--crossed-boundary`, or `--from-result`; explicit flags win over the file
+  stage-tokens   Read a sub-agent's token usage from the Claude projects directory
+  verify         Replay verify_outputs over a run's declared outputs: annotation only, exits 0. `--stage` restricts to one stage
+  help           Print this message or the help of the given subcommand(s)
+
+Options:
+      --workspace-root <PATH>
+          Workspace to act on instead of the current directory
+
+      --vault <PATH>
+          Obsidian vault to use instead of `AIDP_VAULT`, `~/.aidp/config.json` or auto-detection
+
+      --no-vault
+          Ignore any vault and keep artefacts in the repo (`.aidp/pipelines/`)
+
+      --format <FORMAT>
+          Output format. Each command keeps its own default when omitted
+
+          Possible values:
+          - json-compact: One compact JSON document on a single line
+          - json-pretty:  One indented JSON document
+          - ndjson:       One compact JSON value per line
+          - text:         Human-readable text
+          - footer:       The one-line cost footer of a report, for `<BIN> cost ticket`; text elsewhere
+
+  -v, --verbose...
+          More diagnostics on stderr; repeat for more (`-vv`)
+
+  -h, --help
+          Print help (see a summary with '-h')

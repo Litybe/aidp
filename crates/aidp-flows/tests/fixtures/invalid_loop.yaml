@@ -1,0 +1,12 @@
+id: invalid-loop
+version: 1
+steps:
+  - id: forever
+    kind: loop
+    body:
+      - id: tick
+        kind: action
+        use: noop
+  - id: build
+    kind: pipeline
+    use: unknown-template

@@ -1,0 +1,20 @@
+version: 5
+id: graphify-skilled
+inputs:
+  stack: { kind: enum, values: [a, b] }
+stages:
+  - name: plain
+    agent: executor
+    skills: [graphify-context, rust-dev-aidp]
+  - name: routed
+    agent: executor
+    needs: [plain]
+    skills_by: { input: stack, map: { a: [graphify-context, by-map] }, default: [graphify-context] }
+  - name: fix_loop
+    type: loop
+    needs: [routed]
+    when: "{{ true }}"
+    body:
+      - name: inner
+        agent: executor
+        skills: [graphify-context]

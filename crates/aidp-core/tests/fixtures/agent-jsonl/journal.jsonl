@@ -1,0 +1,4 @@
+{"type":"started","agentId":"fx01","timestamp":"2026-01-01T00:00:00.000Z"}
+{"type":"result","agentId":"fx01","timestamp":"2026-01-01T00:00:07.000Z"}
+{"type":"started","agentId":"fx02","timestamp":"2026-01-01T00:10:00.000Z"}
+{"type":"result","agentId":"fx02","timestamp":"2026-01-01T00:10:02.000Z"}

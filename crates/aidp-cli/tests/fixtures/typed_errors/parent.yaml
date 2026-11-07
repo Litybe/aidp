@@ -1,0 +1,7 @@
+version: 5
+id: parent
+name: Parent
+stages:
+  - name: child_stage
+    type: pipeline
+    uses: kid

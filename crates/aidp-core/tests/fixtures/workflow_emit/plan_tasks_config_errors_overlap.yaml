@@ -1,0 +1,6 @@
+version: 5
+id: overlap
+stages:
+  - { name: plan, agent: planner, outputs: [plan.json] }
+  - { name: code, agent: executor, needs: [plan], plan_tasks: { from: "{{ stages.plan.outputs.plan }}", kinds: [code, tests] } }
+  - { name: more, agent: executor, needs: [code], plan_tasks: { from: "{{ stages.plan.outputs.plan }}", kinds: [tests] } }

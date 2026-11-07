@@ -1,0 +1,166 @@
+version: 5
+id: gha-fix
+description: >-
+  Make a red GitHub Actions run green again. Reads the failing jobs and their
+  logs, classifies each failure by root cause (compile / test / lint / coverage
+  / dependency / flaky / infra / config / secret), plans one fix per cause,
+  applies them, then pushes and
+  waits for the workflow to come back green.
+
+  Dispatched automatically by the CI autopilot (`aidp ci`) when checks go red on
+  the PR of the current branch, and runnable by hand:
+  `/run-pipeline-v7 gha-fix <pr-number>`.
+
+  Runs autonomously in native mode: gates are pre-approved, and decisions that
+  need a human (`escalate`) are reported in `signals.escalations`, not blocking.
+policy:
+  - "FLAKY means re-running is the fix, not editing code."
+  - "INFRA and SECRET failures cannot be fixed in this repo: report them, never mark them fixed."
+inputs:
+  pr:
+    required: false
+    kind: string
+    description: >-
+      PR number or URL. Normally passed as the run target (--target); the value
+      lands in inputs.target. If absent, the collect stage auto-detects the PR
+      of the current branch.
+  feature:
+    required: false
+    kind: string
+    description: >-
+      Jira ticket key the PR implements (e.g. PIXEL-5694). Set automatically by
+      the CI autopilot from the PR's branch name; it names the run's vault
+      folder (<vault>/Pipelines/<repo>/<feature>/) so a CI fix run sits beside
+      the ticket's other runs instead of in a PR-numbered bucket. Absent when
+      the branch carries no ticket key - the run then groups under the PR
+      number, which is correct for a hand-made PR.
+  run_id:
+    required: false
+    kind: string
+    description: >-
+      A specific workflow run to fix. Default: every failing run on the PR's
+      head sha, newest first.
+  track:
+    required: true
+    kind: enum
+    values: [quick, standard, deep]
+    default: standard
+    description: >-
+      quick  = fix and push, no added tests.
+      standard = fix with its tests (default).
+      deep   = standard, plus a repo-wide check for the same defect elsewhere.
+  stack:
+    required: false
+    kind: enum
+    values: [auto, generic, rust, csharp, lambda-ts]
+    default: auto
+    description: >-
+      Language stack of the repo, which picks the language skills of the
+      code/tests stages via skills_by. auto (default) lets `aidp run init`
+      detect it from marker files (Cargo.toml, *.sln / *.csproj,
+      serverless.* + package.json); generic keeps the multi-stack C# +
+      Lambda TS skill set.
+  publish:
+    required: false
+    kind: enum
+    values: [agent, host]
+    default: agent
+    description: >-
+      Who publishes the branch: agent (default) commits and pushes; host (a
+      ticket flow) publishes after the run, so the run only commits and never
+      runs git push.
+settings:
+  max_correction_iterations: 2
+  knowledge_graph:
+    enabled: true
+    refresh: never
+    code_only: true
+stages:
+  # 1) COLLECT — the only stage allowed to talk to GitHub Actions. Turns "the
+  #    build is red" into a structured, deduplicated list of root causes with
+  #    the exact log evidence for each. Read-only.
+  - name: collect
+    agent: analyzer
+    skills: [gha-failure-collect-aidp, graphify-context]
+    inputs:
+      pr: "{{ inputs.target }}"
+      run_id: "{{ inputs.run_id }}"
+    outputs: [ci-failures.json, context.md]
+    when: "true"
+
+  # 2) PLAN — one decision per root cause. This is where FLAKY and INFRA are
+  #    separated out from what code can actually fix. Gated: no code is
+  #    touched before a human has seen the diagnosis.
+  - name: plan
+    agent: planner
+    policy:
+      - "The executor never 'fixes' a broken runner by editing a test."
+      - "Report every `escalate` decision in `signals.escalations` (array of {id, decision, reason}) and name each one in the summary. An escalation never sets status `blocked` and never pauses the run."
+    skills: [gha-failure-plan-aidp, graphify-context, enforcing-decision-records]
+    needs: [collect]
+    with: { mode: feature }
+    inputs:
+      failures: "{{ stages.collect.outputs.ci-failures }}"
+      track: "{{ inputs.track }}"
+      task: >
+        Besides decisions.json, write plan.json: one task per group of `fix` /
+        `fix_test` decisions that touch the same files, so tasks stay
+        file-disjoint and run in parallel. A task carries the source change AND
+        the tests that go with it (kind `code`; a `fix_test` decision alone is
+        kind `tests`). A coverage-gate failure gets its own `tests` task.
+        Track `{{ inputs.track }}`: on `quick`, plan no added test work, only
+        the test fixes a `fix_test` decision requires. `rerun`, `escalate` and
+        `accept` decisions get no task. When no decision needs a code change,
+        emit exactly one `chore` task whose only file is `changed-files.json`
+        and whose prompt is to write an empty changes list there.
+    outputs: [decisions.json, plan.json, plan.md]
+    gate: true
+
+  # 3a) FIX — plan-driven: `aidp workflow emit` compiles one sub-agent per task
+  #     of plan.json (source change + its tests), serialises any two tasks
+  #     writing the same file, then a merge sub-agent builds and runs the suite
+  #     once. TWO-PASS: the first emit stops here (`awaiting_plan`).
+  - name: fix
+    agent: executor
+    model: opus
+    policy:
+      - "A lint/compile/dependency failure is fixed in the source, never by loosening the rule that caught it."
+      - "A failing test that was right stays failing until the code is fixed; a failing test that was wrong is corrected here."
+      - "Coverage-gate failures are paid off here, with real tests."
+    skills: [graphify-context]
+    skills_by: { input: stack, map: { rust: [rust-dev-aidp, rust-testing-aidp], csharp: [csharp-dev-aidp, feature-testing-aidp, reqnroll-testing-aidp], lambda-ts: [lambda-ts-dev-aidp, feature-testing-aidp] }, default: [csharp-dev-aidp, lambda-ts-dev-aidp, feature-testing-aidp, reqnroll-testing-aidp] }
+    needs: [plan]
+    inputs:
+      decisions: "{{ stages.plan.outputs.decisions }}"
+    scope: { mode: repo_wide }
+    plan_tasks:
+      from: "{{ stages.plan.outputs.plan }}"
+      max: 4
+      merge_hint: >
+        Apply the shared-file changes the tasks deferred to you, then build and
+        run the full test suite once. Fix cross-task breakage and write the
+        consolidated changed-files.json. For anything still red, reply
+        `needs_review`, name each failing test in `summary` and set
+        `signals.tests_failed`: the push stage reports it.
+    outputs: [changed-files.json]
+
+  # 4) PUSH & WATCH — commit, push to the PR branch, then WAIT for the workflow
+  #    to re-run and report the new conclusion. Gated: nothing reaches GitHub
+  #    before the user approves, whatever the autopilot decided upstream.
+  #    This is also the stage that re-runs a FLAKY job instead of editing code.
+  - name: push_and_watch
+    agent: executor
+    policy:
+      - "When the input `publish` is `host`: commit the fixes on the PR branch and never run git push. Re-run the jobs decided `rerun`, then stop: do not wait for a workflow and post no PR comment, because the host publishes the branch after the run and the flow watches the CI itself."
+      - "With `publish: host`, write ci-result.json with `pushed: false`, the local commit sha and the re-run jobs, and reply `completed` with `signals.pushed: false`."
+    skills: [gha-failure-reply-aidp, writing-clearly-and-concisely]
+    skills_by: { input: publish, map: { host: [] }, default: [git-push] }
+    needs: [fix]
+    inputs:
+      pr: "{{ inputs.target }}"
+      decisions: "{{ stages.plan.outputs.decisions }}"
+      changed: "{{ stages.fix.outputs.changed-files }}"
+      publish: "{{ inputs.publish }}"
+    scope: { mode: stage_dir_only }   # git push + gh are Bash, not file writes
+    outputs: [ci-result.json]
+    gate: true

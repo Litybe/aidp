@@ -1,0 +1,31 @@
+[package]
+name = "aidp-tickets"
+autotests = false
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "aidp ticket domain model and store: local tickets and GitHub issue mirrors living under <vault>/TODO/"
+
+[lints]
+workspace = true
+
+[dependencies]
+tracing = { workspace = true }
+aidp-core = { path = "../aidp-core" }
+serde.workspace = true
+serde_json.workspace = true
+serde_yaml.workspace = true
+anyhow.workspace = true
+chrono.workspace = true
+regex.workspace = true
+thiserror.workspace = true
+aidp-workspace-hack = { version = "0.1", path = "../aidp-workspace-hack" }
+
+[dev-dependencies]
+aidp-testkit.workspace = true
+tempfile.workspace = true
+insta.workspace = true
+
+[[test]]
+name = "integration"
+path = "tests/integration.rs"

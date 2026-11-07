@@ -1,0 +1,10 @@
+{
+  "error": null,
+  "warnings": [],
+  "gates": [
+    "evaluate"
+  ],
+  "awaiting_plan": null,
+  "awaiting_composite": null,
+  "plan_schedules": []
+}

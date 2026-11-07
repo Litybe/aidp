@@ -1,0 +1,18 @@
+version: 5
+id: mergefind
+stages:
+  - name: review_correctness
+    agent: reviewer
+    inputs: { axis: correctness }
+    outputs: [findings.json]
+  - name: review_security
+    agent: reviewer
+    inputs: { axis: security }
+    outputs: [findings.json]
+  - name: review
+    agent: reviewer
+    needs: [review_correctness, review_security]
+    inputs: { axis: synthesis }
+    merge_findings: { from: [review_correctness, review_security], out: findings.json }
+    on_harness_gap: pause
+    outputs: [findings.json, summary.md]

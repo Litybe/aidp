@@ -1,0 +1,279 @@
+version: 5
+id: knowledge-init
+description: >
+  Bootstrap the project knowledge base of a service from scratch: sweep the
+  codebase along six independent axes (structure, events, data, domain,
+  operations, business features), write the canonical note set into
+  <vault>/Knowledge/<repo>/ — transverse notes at the root plus one note per
+  business feature under Features/ — then verify every claim against the code
+  and correct what does not hold.
+  Run this ONCE per service, before any other pipeline — from then on
+  `knowledge-read` / `knowledge-update` (wired into dev-*, study, tech-doc,
+  func-doc) keep the base current run after run. Re-running it on an
+  already-documented service is safe: it reads the existing notes first and
+  updates them in place rather than starting over.
+inputs:
+  # Root of the service to document. `.` for the whole repo, or a subfolder for
+  # a monorepo. Everything the scans read is relative to it.
+  service_path: { required: true, kind: string, default: ".", description: "Root of the service to document — \".\" for the whole repo, or a subfolder path for a monorepo. Every scan reads relative to it." }
+  # Grouping folder for the run's own artefacts (the scans). Not the knowledge
+  # base itself, which is always <vault>/Knowledge/<repo>/. Defaulted because
+  # this pipeline has no ticket — without it every init would land in the shared
+  # `_no-ticket` bucket.
+  feature: { required: false, kind: string, default: knowledge-init, description: "Feeds run::feature_key — the first input branch it checks — so it names both the run's git branch and its Obsidian vault folder. Defaulted because this pipeline has no ticket." }
+settings:
+  knowledge_graph:
+    enabled: true
+    # A cold service is exactly the case where the graph is worth building, so
+    # build it if absent (`lazy`) instead of the `never` the other templates use.
+    refresh: lazy
+    code_only: true
+stages:
+  # --- Step 0: never assume the base is empty. A re-run must extend the notes
+  # a previous init (or a dev run's knowledge_update) already wrote.
+  - name: knowledge
+    type: pipeline
+    uses: knowledge-read
+    with: { focus: "{{ inputs.service_path }}" }
+    outputs:
+      - { name: knowledge_context, from: knowledge_read.knowledge_context }
+
+  # --- Six independent read-only sweeps, one per axis. No `needs` between them
+  # → the v7 engine runs them as one parallel block. Each is an `analyzer`, so
+  # its scan persists at the feature root and a re-run refreshes it instead of
+  # redoing it. Each writes ONE file and stays in its lane: overlapping scans
+  # produce overlapping notes, which is what makes a knowledge base rot.
+  - name: scan_structure
+    agent: analyzer
+    skills: [graphify-context]
+    needs: [knowledge]
+    inputs:
+      path: "{{ inputs.service_path }}"
+      knowledge_context: "{{ stages.knowledge.outputs.knowledge_context }}"
+      task: >
+        Map the shape of the service and write structure.md: what it is for in
+        one paragraph, the stack and runtime (framework, language version,
+        hosting — Lambda/serverless.yml, container/Dockerfile, k8s), the entry
+        points (HTTP routes, queue/topic consumers, schedules, CLI), the module
+        layout with the real folder paths, how it is built, tested and deployed
+        (Makefile targets, CI workflows), and its external dependencies with the
+        purpose of each. Give paths an agent can grep. No history, no roadmap.
+    outputs: [structure.md]
+
+  - name: scan_events
+    agent: analyzer
+    skills: [graphify-context, event-architecture]
+    needs: [knowledge]
+    inputs:
+      path: "{{ inputs.service_path }}"
+      task: >
+        Map the event surface and write events.md plus events.json. INCOMING:
+        every handler — event/message name, transport (SNS/SQS/EventBridge/
+        Kafka/HTTP), the payload fields actually read, the handler file, and what
+        it does. OUTGOING: every publish — name, transport, payload, the
+        publisher file, and the business fact it announces. Note the version of
+        each contract, the retry/DLQ behaviour, and any idempotency key. If the
+        service publishes nothing, say so explicitly — silence reads as "not
+        investigated".
+    outputs: [events.md, events.json]
+
+  - name: scan_data
+    agent: analyzer
+    skills: [graphify-context]
+    needs: [knowledge]
+    inputs:
+      path: "{{ inputs.service_path }}"
+      task: >
+        Map persistence and write data.md: every store the service owns or reads
+        (Mongo collections, DynamoDB tables and their key schema and GSIs, SQL
+        tables, S3 prefixes, caches), the shape of what is stored, the access
+        patterns in the code, TTL/retention, migrations, and which fields are
+        personal data (GDPR-relevant). Distinguish stores the service OWNS from
+        stores it merely reads — the difference decides who may change them.
+    outputs: [data.md]
+
+  - name: scan_domain
+    agent: analyzer
+    skills: [graphify-context]
+    needs: [knowledge]
+    inputs:
+      path: "{{ inputs.service_path }}"
+      task: >
+        Map the business logic and write domain.md: the domain vocabulary with
+        the meaning of each term as the CODE uses it (not as you would guess),
+        the use cases / commands and what each decides, the business rules and
+        thresholds with the constants that hold them, the state machines and
+        their legal transitions, and the invariants a change must not break.
+        This is the note that stops an agent from writing plausible-but-wrong
+        logic, so prefer precision over coverage: cite the file behind each rule.
+        Stay TRANSVERSE — a rule that belongs to one business feature only is
+        `scan_features`' job, not yours.
+    outputs: [domain.md]
+
+  - name: scan_ops
+    agent: analyzer
+    skills: [graphify-context, enforcing-decision-records]
+    needs: [knowledge]
+    inputs:
+      path: "{{ inputs.service_path }}"
+      task: >
+        Map running the thing and write operations.md: configuration and
+        environment variables (what each does, which are secrets), the
+        environments and how they differ, observability (log format, metrics,
+        dashboards, alerts, correlation-id propagation), failure modes and what
+        they look like in production, timeouts/retries/circuit breakers, IAM or
+        auth requirements, and the local development entry point (how a
+        developer runs and debugs this service on their machine).
+    outputs: [operations.md]
+
+  # --- The sixth axis, and the one that gives agents per-feature granularity:
+  # carve the service into the BUSINESS features it implements. This stage only
+  # inventories them — `write_features` writes one note each, fanned out on the
+  # `signals.features` array this stage emits.
+  - name: scan_features
+    agent: analyzer
+    model: opus   # delibere : identification des features metier a partir du code - sonnet manque de jugement ici
+    skills: [graphify-context]
+    needs: [knowledge]
+    inputs:
+      path: "{{ inputs.service_path }}"
+      knowledge_context: "{{ stages.knowledge.outputs.knowledge_context }}"
+      task: >
+        Inventory the BUSINESS features this service implements and write
+        features.md plus features.json. A feature is a capability a product
+        person would name and a user or another service would notice — "temporary
+        self-exclusion", "deposit limits", "payment cheat scoring" — not a
+        technical layer ("repositories", "the SNS publisher") and not a single
+        function. Derive them from the entry points, the use cases / commands,
+        the events published, the feature flags and the domain vocabulary, then
+        MERGE what is really one capability seen from two angles.
+        For each feature give: a slug (kebab-case), the business name, the other
+        names it goes by in code, tickets or docs (aliases), the domain/bounded
+        context it belongs to, its entry points, the events it consumes and
+        publishes, the stores it touches, and the files that carry it.
+        Aim for 5 to 20 features: fewer means you stayed at the service level,
+        more means you sliced technical units instead of capabilities. Say in
+        features.md which parts of the code you could NOT attribute to any
+        feature — that gap is more useful than a made-up feature.
+        Then emit `signals.features` as an array of slugs, one per feature you
+        found, ordered most to least important.
+    outputs: [features.md, features.json]
+
+  # --- Step 2: turn the five transverse scans into the curated transverse layer.
+  # `knowledge: service` routes the writes to <vault>/Knowledge/<repo>/ itself and
+  # makes aidp inject the knowledge-base contract (read first, update in place,
+  # durable facts only). `scope: stage_dir_only` therefore grants exactly that
+  # folder — this stage must never touch the repo, and being `service`-scoped it
+  # cannot write into Features/ either. Gated: the first write of a base that
+  # every later run and every AI agent will trust is worth one human look.
+  - name: write_knowledge
+    agent: executor
+    model: opus   # delibere : premiere ecriture de la base de connaissance que tout run futur va faire confiance
+    skills: [writing-clearly-and-concisely]
+    knowledge: service
+    scope: { mode: stage_dir_only }
+    needs: [scan_structure, scan_events, scan_data, scan_domain, scan_ops]
+    gate: true
+    inputs:
+      structure: "{{ stages.scan_structure.outputs.structure }}"
+      events: "{{ stages.scan_events.outputs.events }}"
+      data: "{{ stages.scan_data.outputs.data }}"
+      domain: "{{ stages.scan_domain.outputs.domain }}"
+      operations: "{{ stages.scan_ops.outputs.operations }}"
+      task: >
+        Merge the five transverse scans into the canonical note set of this
+        service. Write `_index`-free, self-contained notes: overview.md (what the
+        service is, its responsibilities, its place among the other services, and
+        a reading order for the rest), architecture.md, events.md + events.json,
+        data.md, domain.md, operations.md. Cut the redundancy the scans inevitably
+        produced — one fact lives in exactly one note, the others link to it.
+        Drop anything you could not tie to the code. Where the scans disagree,
+        say which one the code supports; where they leave a real hole, add a
+        short "Open questions" section at the end of the note rather than
+        guessing. Leave feature-specific rules out: they go into the per-feature
+        notes, and overview.md should point the reader at `Features/` for them.
+        Write for an AI agent starting cold on this service.
+    outputs: [overview.md, architecture.md, events.md, events.json, data.md, domain.md, operations.md]
+
+  # --- Step 3: the feature layer. `knowledge: feature` puts stage_dir at
+  # <vault>/Knowledge/<repo>/Features/, and `fan_out` turns the inventory into one
+  # sub-agent per feature — each writing its own note, so the shards are
+  # file-disjoint by construction and can run in parallel. `max: 6` folds any
+  # extra features into the last shard rather than spawning an agent per slug.
+  # aidp injects the note contract (frontmatter, sections) into every shard.
+  - name: write_features
+    agent: executor
+    model: opus   # delibere : notes features qui font autorite pour les runs futurs - la qualite prime
+    skills: [graphify-context, writing-clearly-and-concisely]
+    knowledge: feature
+    scope: { mode: stage_dir_only }
+    needs: [write_knowledge, scan_features]
+    fan_out:
+      from: "{{ stages.scan_features.signals.features }}"
+      max: 6
+      merge_hint: >
+        Do not rewrite the notes the shards produced. Check the layer as a whole:
+        no two notes describe the same capability (if they do, merge them into the
+        one with the better slug and delete the other), every note has the
+        required frontmatter with a `slug` matching its filename, and `aliases`
+        are filled in — that field is what stops a future run creating a
+        duplicate. Report the final list of notes in your summary.
+    inputs:
+      features: "{{ stages.scan_features.outputs.features }}"
+      inventory: "{{ stages.scan_features.outputs.features }}"
+      task: >
+        Write the knowledge note of each business feature assigned to you, one
+        file per feature, following the note contract in your prompt. Take the
+        feature's name, aliases, entry points, events and files from the
+        inventory, then READ THE CODE it points at: an agent will trust this note
+        instead of re-reading that code, so every rule, threshold, event name and
+        file path you write must be one you verified. Prefer a short note that is
+        entirely true over a long one that is partly guessed, and put what you
+        could not establish under "Open questions". Link to the transverse notes
+        (`../architecture.md`, `../events.md`, `../data.md`) instead of restating
+        them. If a slug you were given turns out not to be a real business
+        feature, say so in your summary and write nothing for it.
+
+  # --- Step 4: a doc base agents trust must be checked against reality. This
+  # verifies CLAIMS against the code, not prose quality.
+  - name: verify
+    agent: reviewer
+    model: opus   # delibere : verifie les CLAIMS de la base de connaissance contre le code - gate de confiance
+    skills: [graphify-context, code-review-aidp]
+    needs: [write_knowledge, write_features]
+    inputs:
+      base: "{{ stages.write_knowledge.outputs.overview }}"
+      task: >
+        Audit the notes just written — the transverse layer AND the per-feature
+        notes under Features/ — against the actual code and emit findings.json.
+        Hunt for: claims no code supports, names/paths/fields that do not exist
+        or were renamed, an event or store the scans missed entirely, a business
+        rule stated with the wrong threshold or the wrong direction, two feature
+        notes covering the same capability, a feature note whose frontmatter
+        `slug` does not match its filename, a real business feature with no note
+        at all, and anything ticket-specific or run-specific that leaked into a
+        durable note. Mark as blocking anything that would make an agent write
+        wrong code; everything else is a nice-to-have. Verify by reading the
+        code — a claim you merely find plausible is not verified.
+    outputs: [findings.json]
+
+  # --- Step 5: apply the audit. `knowledge: true` (= both layers), because a
+  # finding can land on either one and this stage edits the notes in place.
+  - name: correct
+    agent: executor
+    skills: [writing-clearly-and-concisely]
+    knowledge: true
+    scope: { mode: stage_dir_only }
+    needs: [verify]
+    inputs:
+      findings: "{{ stages.verify.outputs.findings }}"
+      task: >
+        Fix every blocking finding in the notes, in place, in whichever layer it
+        lands. Correct the claim to what the code actually does (re-read the code
+        — do not just soften the wording), add what was missed, merge duplicate
+        feature notes, and delete what leaked in from the run. Where a finding is
+        wrong, leave the note alone and say why in your summary. Then state in the
+        summary what the base now covers — transverse notes and the list of
+        documented features — and what it still does not: that gap list is the
+        starting point for the next run.
+    outputs: []

@@ -1,0 +1,8 @@
+{
+  "error": "stack: unknown - no project marker found (sln/csproj, serverless or template.yaml with package.json, angular.json, Cargo.toml, package.json); pass an explicit stack",
+  "warnings": [],
+  "gates": [],
+  "awaiting_plan": null,
+  "awaiting_composite": null,
+  "plan_schedules": null
+}

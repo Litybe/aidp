@@ -1,0 +1,46 @@
+version: 5
+id: native-plan-tasks-loop
+kind: pipeline
+description: A correction loop whose body plans and runs a second set of tasks.
+inputs:
+  feature: { required: false, kind: string, default: native-plan-tasks }
+settings:
+  max_correction_iterations: 1
+stages:
+  - name: plan
+    description: Write the task plan.
+    agent: planner
+    outputs: [plan.json, plan.md]
+
+  - name: implementation
+    description: Apply the plan tasks to the working tree.
+    agent: executor
+    needs: [plan]
+    scope: { mode: repo_wide }
+    plan_tasks:
+      from: "{{ stages.plan.outputs.plan }}"
+      max: 3
+    outputs: [changed-files.json]
+
+  - name: review
+    description: Review the work.
+    agent: reviewer
+    needs: [implementation]
+    outputs: [findings.json, summary.md]
+
+  - name: correction_loop
+    type: loop
+    when: "{{ stages.review.outputs.findings.has_blocking_findings }}"
+    max_iterations: 1
+    body:
+      - { name: replan, description: Plan the fixes., agent: planner, outputs: [plan.json, plan.md] }
+      - name: reimplementation
+        description: Apply the fix tasks.
+        agent: executor
+        needs: [replan]
+        scope: { mode: repo_wide }
+        plan_tasks:
+          from: "{{ stages.replan.outputs.plan }}"
+          max: 3
+        outputs: [changed-files.json]
+      - { name: rereview, description: Review the fixes., agent: reviewer, needs: [reimplementation], outputs: [findings.json, summary.md] }
