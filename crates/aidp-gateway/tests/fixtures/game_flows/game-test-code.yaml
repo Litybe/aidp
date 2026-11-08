@@ -1,0 +1,56 @@
+# Game code test lane: the Unity test of an issue whose development ended (phase `to-test`), then the merge.
+# Started by the dispatcher (never by hand, except through POST /api/tickets/:key/start) as the `test_flow` of the route,
+# when the test lane of the project is free: `dispatcher.test_slots` (1) test flows at a time per project.
+# unity-test <-> unity-fix loop (`report_from: test`), PR ready, human merge. Labels `aidp:*` are set by gh.issue_label, every
+# test is commented on the issue (gh.issue_comment). A loop that runs out of rounds sets `blocked` and ends the run `escalated`
+# (`fail` with kind business). Loop `max` is a literal (the schema wants a u32); keep it equal to settings.max_test_rounds.
+# Workspace: `workspace: project`. No worktree: every step runs in the MAIN checkout of the project (where the Unity Editor
+# is open). `git.checkout` is the first step: it needs a clean checkout (else `blocked: dirty-checkout`, label aidp:blocked,
+# comment listing the files, run escalated), then switches to the issue branch (the one the dev flow pushed). The run holds the
+# project's `unity-editor` resource (one test flow at a time) from that step until `git.restore` (before the merge approval)
+# gives the checkout back to the base branch; the daemon also restores when the run ends escalated, failed or cancelled.
+id: game-test-code
+version: 1
+inputs:
+  ticket: { required: true }
+settings:
+  max_test_rounds: 2
+workspace: project
+steps:
+  - { id: checkout, kind: action, use: git.checkout, phase: Préparation }
+  - { id: checkout_label, kind: action, use: gh.issue_label, with: { state: blocked }, phase: Préparation, when: "steps.checkout.outputs.blocked == true" }
+  - id: checkout_comment
+    kind: action
+    use: gh.issue_comment
+    phase: Préparation
+    with: { body: "{{ steps.checkout.outputs.message }}" }
+    when: "steps.checkout.outputs.blocked == true"
+    on_error: warn
+  - { id: checkout_stop, kind: action, use: fail, phase: Préparation, with: { kind: business, message: "blocked: dirty-checkout" }, when: "steps.checkout.outputs.blocked == true" }
+  - id: test_loop
+    kind: loop
+    phase: Test Unity
+    max: 2
+    until: "steps.test.outputs.passed == true || !(steps.test_loop.iteration < settings.max_test_rounds)"
+    body:
+      - { id: test_label, kind: action, use: gh.issue_label, with: { state: testing } }
+      - { id: test, kind: pipeline, use: unity-test, pushes: true }
+      - id: test_comment
+        kind: action
+        use: gh.issue_comment
+        with: { body: "Test unity-test : passed={{ steps.test.outputs.passed }}", cost_footer: true }
+        on_error: warn
+      - id: fix_test
+        kind: pipeline
+        use: unity-fix
+        pushes: true
+        when: "steps.test.outputs.passed == false"
+        with: { report_from: test }
+  - { id: test_exhausted, kind: action, use: gh.issue_label, with: { state: blocked }, phase: Test Unity, when: "steps.test.outputs.passed != true" }
+  - { id: test_escalate, kind: action, use: fail, phase: Test Unity, with: { kind: business, message: "Test épuisé : issue bloquée" }, when: "steps.test.outputs.passed != true" }
+  - { id: ready, kind: action, use: gh.pr_ready, phase: Merge }
+  - { id: await, kind: action, use: gh.issue_label, with: { state: awaiting-merge }, phase: Merge }
+  - { id: restore, kind: action, use: git.restore, phase: Merge }
+  - { id: merge_approval, kind: human, phase: Merge, prompt: "Merger la PR ?", choices: [approve] }
+  - { id: merge, kind: action, use: gh.merge, phase: Merge }
+  - { id: done, kind: action, use: gh.issue_label, with: { state: done }, phase: Merge }

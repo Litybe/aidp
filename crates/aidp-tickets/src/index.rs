@@ -903,7 +903,12 @@ mod tests {
             wait_until: None,
             last_tick_at: last_tick_at.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
             last_reason: "timer".to_string(),
-            slots: crate::dispatcher_state::SlotsState { used: 2, max: 5 },
+            slots: crate::dispatcher_state::SlotsState {
+                used: 2,
+                max: 5,
+                test_used: 0,
+                test_max: 1,
+            },
             running: vec![crate::dispatcher_state::RunningEntry {
                 key: "PIXEL-5677".to_string(),
                 session_id: "s-1".to_string(),

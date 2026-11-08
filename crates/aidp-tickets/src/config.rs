@@ -40,6 +40,10 @@ pub const WORKTREE_COPY_AIDP_JSON: &str = ".aidp/*.json";
 pub struct DispatcherConfig {
     #[serde(default = "DispatcherConfig::default_slots")]
     pub slots: u32,
+    /// Test lane: test flows of one project at once (they share its main checkout and Unity
+    /// editor, so the default is 1). Dev flows are bounded by `slots`.
+    #[serde(default = "DispatcherConfig::default_test_slots")]
+    pub test_slots: u32,
     #[serde(default = "DispatcherConfig::default_tick_seconds")]
     pub tick_seconds: u32,
     #[serde(default = "DispatcherConfig::default_permission_mode")]
@@ -109,7 +113,10 @@ impl DispatcherConfig {
         ]
     }
     fn default_slots() -> u32 {
-        5
+        3
+    }
+    fn default_test_slots() -> u32 {
+        1
     }
     fn default_tick_seconds() -> u32 {
         60
@@ -135,6 +142,7 @@ impl Default for DispatcherConfig {
     fn default() -> Self {
         DispatcherConfig {
             slots: Self::default_slots(),
+            test_slots: Self::default_test_slots(),
             tick_seconds: Self::default_tick_seconds(),
             permission_mode: Self::default_permission_mode(),
             model: Self::default_model(),
@@ -485,7 +493,13 @@ impl GithubConfig {
     /// Every configured state label: `status_labels` values then `phase_labels`, deduplicated.
     pub fn known_state_labels(&self) -> Vec<String> {
         let mut labels: Vec<String> = Vec::new();
-        for label in self.status_labels.values().chain(self.phase_labels.iter()) {
+        let built_in = [StateLabel::ToTest.label(&self.label_prefix)];
+        for label in self
+            .status_labels
+            .values()
+            .chain(self.phase_labels.iter())
+            .chain(built_in.iter())
+        {
             if !labels.iter().any(|known| known.eq_ignore_ascii_case(label)) {
                 labels.push(label.clone());
             }
@@ -561,7 +575,8 @@ pub fn default_yaml() -> &'static str {
 # shown here.
 
 dispatcher:
-  slots: 5                      # tickets in-progress at once, across every service
+  slots: 3                      # dev lane: flows (worktrees) running at once, across every service
+  test_slots: 1                 # test lane: test flows at once per project (main checkout, Unity editor)
   tick_seconds: 60
   permission_mode: bypassPermissions
   model: claude-sonnet-5
@@ -629,6 +644,7 @@ github:                          # GitHub issues as the ticket source (aidp tick
   phase_labels:                  # set by a flow while the ticket stays in-progress
     - "aidp:review"
     - "aidp:fixing"
+    - "aidp:to-test"
     - "aidp:testing"
 
 # Model policy, applied when a pipeline is compiled (CLI override, then this, then the template).
@@ -652,6 +668,9 @@ pub struct RepoRoute {
     pub flow: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub route: Option<String>,
+    /// Flow the dispatcher starts in the test lane once the dev flow reached `to-test`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub test_flow: Option<String>,
 }
 
 /// `routing.yaml`'s top-level `defaults:` — currently just the fallback
@@ -702,6 +721,20 @@ impl Routing {
     /// The delivery flow configured for `service` (or route), if any.
     pub fn flow_for(&self, service: &str) -> Option<&str> {
         self.repos.get(service)?.flow.as_deref()
+    }
+
+    /// The test flow of a ticket routed to `flow` (family `route`): the entry that names both
+    /// first, else any entry that names `flow`.
+    pub fn test_flow_for(&self, flow: &str, route: Option<&str>) -> Option<&str> {
+        let by_flow = || {
+            self.repos
+                .values()
+                .filter(|entry| entry.flow.as_deref() == Some(flow))
+        };
+        by_flow()
+            .find(|entry| entry.route.as_deref() == route && entry.test_flow.is_some())
+            .or_else(|| by_flow().find(|entry| entry.test_flow.is_some()))
+            .and_then(|entry| entry.test_flow.as_deref())
     }
 }
 

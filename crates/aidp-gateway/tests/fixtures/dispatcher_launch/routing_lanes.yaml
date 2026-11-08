@@ -1,0 +1,2 @@
+repos:
+  svc-code: { route: code, flow: game-code, test_flow: game-test-code }

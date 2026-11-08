@@ -1,0 +1,9 @@
+id: game-test-code
+version: 1
+workspace: project
+steps:
+  - id: approve
+    kind: human
+    phase: Test
+    prompt: Test lane
+    choices: [approve]

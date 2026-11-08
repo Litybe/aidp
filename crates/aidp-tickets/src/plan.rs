@@ -90,6 +90,9 @@ pub struct Launch {
     /// Delivery flow the dispatcher starts instead of a session, from the ticket's route.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub flow: Option<String>,
+    /// True for a launch of the test lane (the `test_flow`, in the project's main checkout).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub test: bool,
 }
 
 /// Why a candidate was NOT launched this tick.
@@ -110,6 +113,8 @@ pub enum SkipReason {
     WorktreeCap(Vec<String>),
     BranchCheckedOutElsewhere,
     WaitingOn(Vec<String>),
+    /// The test lane of the project is full (`dispatcher.test_slots`).
+    NoTestSlot,
 }
 
 /// Wire slug of [`SkipReason::WorktreeCap`].
@@ -141,6 +146,7 @@ impl SkipReason {
         match self {
             SkipReason::ProjectBusy => "project-busy".to_string(),
             SkipReason::NoSlot => "no-slot".to_string(),
+            SkipReason::NoTestSlot => "no-test-slot".to_string(),
             SkipReason::NeedsRouting => "needs-routing".to_string(),
             SkipReason::NoTemplate => "no-template".to_string(),
             SkipReason::TemplateWithoutDemandMode => "template-without-demand-mode".to_string(),
@@ -174,6 +180,22 @@ pub struct DispatchPlan {
     pub skipped: Vec<(String, SkipReason)>,
     pub slots_used: usize,
     pub slots_max: usize,
+    /// Test flows running (all projects) and the per-project ceiling.
+    #[serde(default)]
+    pub test_slots_used: usize,
+    #[serde(default)]
+    pub test_slots_max: usize,
+}
+
+/// What the flow engine runs right now, per lane, for [`plan_with_lanes`].
+#[derive(Debug, Clone, Default)]
+pub struct LaneLoad<'a> {
+    /// Routing table: gives the `test_flow` of a ticket in the test lane.
+    pub routing: Option<&'a crate::config::Routing>,
+    /// Dev flows running (worktrees): they use `dispatcher.slots` like dispatcher sessions.
+    pub dev_flows: usize,
+    /// Test flows holding or waiting for the main checkout, per project.
+    pub test_flows: HashMap<String, usize>,
 }
 
 /// The token-budget guard's verdict for this tick — a STUB for lot 10a,
@@ -386,6 +408,7 @@ pub fn build_launch(t: &Ticket, templates: &TemplateCatalog) -> Result<Launch, S
             manual: t.autopilot.manual_priority == Some(true),
             detail: None,
             flow: Some(flow.to_string()),
+            test: false,
         });
     }
 
@@ -419,6 +442,43 @@ pub fn build_launch(t: &Ticket, templates: &TemplateCatalog) -> Result<Launch, S
         manual: t.autopilot.manual_priority == Some(true),
         detail: None,
         flow: None,
+        test: false,
+    })
+}
+
+/// The launch of a `to-test` ticket: its route's `test_flow`, in the test lane.
+pub fn build_test_launch(
+    t: &Ticket,
+    routing: Option<&crate::config::Routing>,
+) -> Result<Launch, SkipReason> {
+    if t.service.is_empty() || t.service == "unrouted" {
+        return Err(SkipReason::NeedsRouting);
+    }
+    let flow = t
+        .flow
+        .as_deref()
+        .zip(routing)
+        .and_then(|(flow, routing)| routing.test_flow_for(flow, t.route.as_deref()))
+        .ok_or(SkipReason::NoTemplate)?;
+    let demand = match t.github.as_ref().filter(|_| t.source == Source::Github) {
+        Some(github) => Demand::Issue {
+            number: github.number,
+        },
+        None => Demand::Prompt {
+            prompt: String::new(),
+            feature: t.key.clone(),
+        },
+    };
+    Ok(Launch {
+        key: t.key.clone(),
+        service: t.service.clone(),
+        template: t.template.clone().unwrap_or_default(),
+        track: t.track.unwrap_or(Track::Standard).as_str().to_string(),
+        demand,
+        manual: t.autopilot.manual_priority == Some(true),
+        detail: None,
+        flow: Some(flow.to_string()),
+        test: true,
     })
 }
 
@@ -508,12 +568,43 @@ pub fn plan_with_blockers(
     cfg: &crate::config::DispatcherConfig,
     worktree_holders: &HashMap<String, Vec<String>>,
 ) -> DispatchPlan {
+    plan_with_lanes(
+        candidates,
+        running,
+        budget,
+        templates,
+        cfg,
+        worktree_holders,
+        &LaneLoad::default(),
+    )
+}
+
+/// Origin of the sessions a flow starts: governed by the flow lanes, not by project occupancy.
+const FLOW_ORIGIN: &str = "flow";
+
+/// [`plan_with_blockers`] with the two lanes. Dev lane: `Todo`/`Queued` tickets, bounded by
+/// `cfg.slots` (dispatcher sessions plus `lanes.dev_flows`). Test lane: tickets in phase `to-test`
+/// (any of `Todo`/`Queued`/`InProgress`), launched with their `test_flow`, at most
+/// `cfg.test_slots` per project, oldest first, a manual promotion ahead. A test launch never
+/// uses a dev slot; the budget ceiling covers both.
+pub fn plan_with_lanes(
+    candidates: &[Ticket],
+    running: &[RunningSlot],
+    budget: &Verdict,
+    templates: &TemplateCatalog,
+    cfg: &crate::config::DispatcherConfig,
+    worktree_holders: &HashMap<String, Vec<String>>,
+    lanes: &LaneLoad<'_>,
+) -> DispatchPlan {
     let graph = blocker_graph(candidates);
     let slots_used = running
         .iter()
         .filter(|r| r.origin_kind == "dispatcher")
-        .count();
+        .count()
+        + lanes.dev_flows;
     let slots_max = cfg.slots as usize;
+    let test_slots_max = cfg.test_slots as usize;
+    let test_slots_used: usize = lanes.test_flows.values().sum();
 
     if cfg.paused {
         let skipped = candidates
@@ -525,23 +616,74 @@ pub fn plan_with_blockers(
             skipped,
             slots_used,
             slots_max,
+            test_slots_used,
+            test_slots_max,
         };
     }
 
+    let mut budget_left = budget.max_launches();
+    // Projects held by a session that is not a flow's: a flow lane must not start there either.
+    let session_busy: HashSet<String> = running
+        .iter()
+        .filter(|r| r.origin_kind != FLOW_ORIGIN)
+        .map(|r| r.project.clone())
+        .collect();
+    let mut launches: Vec<Launch> = Vec::new();
+    let mut skipped: Vec<(String, SkipReason)> = Vec::new();
+
+    let mut test_candidates: Vec<&Ticket> = candidates
+        .iter()
+        .filter(|t| t.autopilot.phase() == crate::model::Phase::ToTest)
+        .filter(|t| matches!(t.status, Status::Todo | Status::Queued | Status::InProgress))
+        .collect();
+    test_candidates.sort_by_key(|t| {
+        (
+            u8::from(t.autopilot.manual_priority != Some(true)),
+            t.autopilot.phase_at.unwrap_or(t.updated),
+            t.key.clone(),
+        )
+    });
+    let mut test_launched: HashMap<String, usize> = HashMap::new();
+    for t in test_candidates {
+        let launch = match build_test_launch(t, lanes.routing) {
+            Ok(launch) => launch,
+            Err(skip_reason) => {
+                skipped.push((t.key.clone(), skip_reason));
+                continue;
+            }
+        };
+        if session_busy.contains(&launch.service) {
+            skipped.push((t.key.clone(), SkipReason::ProjectBusy));
+            continue;
+        }
+        let in_lane = lanes.test_flows.get(&launch.service).copied().unwrap_or(0)
+            + test_launched.get(&launch.service).copied().unwrap_or(0);
+        if in_lane >= test_slots_max {
+            skipped.push((t.key.clone(), SkipReason::NoTestSlot));
+            continue;
+        }
+        if budget_left == 0 {
+            let reason = budget.reason.clone().unwrap_or_default();
+            skipped.push((t.key.clone(), SkipReason::Budget(reason)));
+            continue;
+        }
+        budget_left = budget_left.saturating_sub(1);
+        *test_launched.entry(launch.service.clone()).or_insert(0) += 1;
+        launches.push(launch);
+    }
+
     let mut free = slots_max.saturating_sub(slots_used);
-    free = free.min(budget.max_launches());
+    free = free.min(budget_left);
 
     let mut sorted: Vec<Ticket> = candidates.to_vec();
     crate::order::sort(&mut sorted);
 
     let mut occupied: HashSet<String> = running.iter().map(|r| r.project.clone()).collect();
-    let mut launches: Vec<Launch> = Vec::new();
-    let mut skipped: Vec<(String, SkipReason)> = Vec::new();
 
-    for t in sorted
-        .iter()
-        .filter(|t| matches!(t.status, Status::Todo | Status::Queued))
-    {
+    for t in sorted.iter().filter(|t| {
+        matches!(t.status, Status::Todo | Status::Queued)
+            && t.autopilot.phase() != crate::model::Phase::ToTest
+    }) {
         let mut launch = match build_launch(t, templates) {
             Ok(launch) => launch,
             Err(skip_reason) => {
@@ -560,7 +702,13 @@ pub fn plan_with_blockers(
             }
         }
 
-        if occupied.contains(&launch.service) {
+        let flow_launch = launch.flow.is_some();
+        let busy = if flow_launch {
+            session_busy.contains(&launch.service)
+        } else {
+            occupied.contains(&launch.service)
+        };
+        if busy {
             skipped.push((t.key.clone(), SkipReason::ProjectBusy));
             continue;
         }
@@ -577,7 +725,7 @@ pub fn plan_with_blockers(
         }
 
         if free == 0 {
-            if budget.max_launches() == 0 {
+            if budget_left == 0 {
                 let reason = budget.reason.clone().unwrap_or_default();
                 skipped.push((t.key.clone(), SkipReason::Budget(reason)));
             } else {
@@ -586,7 +734,9 @@ pub fn plan_with_blockers(
             continue;
         }
 
-        occupied.insert(launch.service.clone());
+        if !flow_launch {
+            occupied.insert(launch.service.clone());
+        }
         free -= 1;
         launches.push(launch);
     }
@@ -596,6 +746,8 @@ pub fn plan_with_blockers(
         skipped,
         slots_used,
         slots_max,
+        test_slots_used,
+        test_slots_max,
     }
 }
 

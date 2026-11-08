@@ -424,6 +424,7 @@ mod tests {
                 track: None,
                 flow: None,
                 route: None,
+                test_flow: None,
             },
         );
         let routing = Routing {

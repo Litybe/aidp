@@ -5,6 +5,7 @@ use serde::Serialize;
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct DispatcherSection {
     pub slots: u32,
+    pub test_slots: u32,
     pub night: NightConfig,
     pub stop_at_7d_percent: Option<f64>,
 }
@@ -13,6 +14,7 @@ impl From<&DispatcherConfig> for DispatcherSection {
     fn from(config: &DispatcherConfig) -> Self {
         DispatcherSection {
             slots: config.slots,
+            test_slots: config.test_slots,
             night: config.night.clone(),
             stop_at_7d_percent: config.stop_at_7d_percent,
         }

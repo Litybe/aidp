@@ -1165,13 +1165,13 @@ Gains `sessions.queued` — the total queue depth across every project — along
 |---|---|
 | `GET /api/tickets?status=&service=&source=` | Bare array of public ticket frontmatter (no body), in dequeue order. |
 | `GET /api/tickets/:key` | `{ ticket, body }`; `ticket` carries `flowSummary` as in the list. |
-| `GET /api/tickets?status=&service=&source=` | Bare array of public ticket frontmatter (no body), in dequeue order. Each element also carries `githubNumber` and `url` (null for a local ticket); `labels` (GitHub labels), `milestone` (`{title, number?, due_on?}`), `route` (`code`, `art`, `map`, `doc`) and `flow` are frontmatter fields. |
+| `GET /api/tickets?status=&service=&source=` | Bare array of public ticket frontmatter (no body), in dequeue order. Each element also carries `githubNumber` and `url` (null for a local ticket); `labels` (GitHub labels), `milestone` (`{title, number?, due_on?}`), `route` (`code`, `art`, `map`, `doc`) and `flow` are frontmatter fields. `phase` (`dev`, `to-test`, `testing`) and `branch` come from `autopilot`. The tickets in phase `to-test` appear in the order the test lane takes them (manual promotion first, then the oldest), each in a position a `to-test` ticket already had. |
 | `GET /api/tickets/:key` | `{ ticket, body }`; `ticket` has the same fields as a list element. |
 | `POST /api/tickets/sync?source=github` | Mirrors the open issues of `github.repos` now: the work of `aidp ticket sync`. Optional `repo=owner/name`, `limit=N`, `dry_run=1`. `200` the report `{source, repos, created, updated, cancelled, unrouted, triaged, unchanged, labels_pushed, errors, labels_seen, dry_run, duration_ms}`; `400` an unknown `source` or no configured repository; `503` no vault. The daemon also runs it every `github.sync_minutes` and writes the state labels back after each dispatcher tick. |
 | `POST /api/tickets` | Create a local ticket — the body of `aidp ticket new`. |
 | `POST /api/tickets/:key/start` | `{ force? }` — manual start: sets `manual_priority`, queues the ticket, ticks. |
 | `POST /api/tickets/:key/cancel` / `/route` | The CLI verbs of the same names, over HTTP. |
-| `POST /api/tickets/:key/status` | `{ status, reason?, force? }` — a manual transition, journaled with actor `human`. `200 {key, from, to, path}`. `409` when the transition is not allowed from the current status (the message lists the allowed targets), or when it leaves `in-progress` without `force`. |
+| `POST /api/tickets/:key/status` | `{ status, phase?, reason?, force? }` — a manual transition, journaled with actor `human`. `phase` (`dev`, `to-test`, `testing`) also sets the ticket phase and, for a GitHub mirror, the label (`aidp:to-test`, `aidp:testing`): "send to test". A `status` equal to the current one with a `phase` only sets the phase. `400` an unknown `phase`. `200 {key, from, to, path, phase?}`. `409` when the transition is not allowed from the current status (the message lists the allowed targets), or when it leaves `in-progress` without `force`. |
 | `POST /api/tickets/:key/adopt` | `{ pr }` (URL or number) — attaches an existing PR to a `todo` or `queued` ticket and moves it to `in-review` without a session. `200` with the updated ticket, `404` unknown ticket, `409` ticket in another status. |
 | `POST /api/tickets/:key/flow` | `{ flow?, settings? }` — starts the default flow `perso-delivery` (or the named flow) for the ticket, through the same start as `POST /api/flows`. It does not read the dispatcher pause state. `201` with the run, `404` unknown ticket, `409` the ticket already has a flow run that is not finished (the body carries it under `existing`), `503` flows unavailable. |
 | `GET /api/tickets/:key/flow` | `200` the run of the ticket, as `GET /api/flows/:key`. `404` no run. |
@@ -1258,7 +1258,7 @@ until the dispatcher's first budget-aware tick:
 
 ```json
 { "mode": "normal", "paused": false, "waitUntil": null, "lastTickAt": "2026-09-14T09:08:09Z", "lastReason": "timer",
-  "slots": { "used": 2, "max": 5 },
+  "slots": { "used": 2, "max": 3, "testUsed": 1, "testMax": 1 },
   "running": [ { "key": "LOC-1", "sessionId": "s-1", "project": "pixelhood", "startedAt": "2026-09-14T09:00:00Z" } ],
   "lastPlan": { "launched": ["LOC-1"], "skipped": [ { "key": "LOC-2", "reason": "project-busy" } ] },
   "budget": { "verdict": "allow", "maxLaunches": 3, "why": "", "utilization5h": 0.5, "utilization7d": 0.31,
@@ -2664,7 +2664,8 @@ The write is atomic (a `.settings-tmp` file in the same directory, then a rename
     "pixellab": { "min_reserve": 0, "per_ticket": 10 }
   },
   "dispatcher": {
-    "slots": 5,
+    "slots": 3,
+    "test_slots": 1,
     "stop_at_7d_percent": null,
     "night": { "enabled": false, "start": "22:00", "end": "07:00", "heavy_after_reset": true, "heavy_window_minutes": 30 }
   }

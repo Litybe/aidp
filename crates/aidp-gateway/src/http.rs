@@ -2325,6 +2325,42 @@ fn transition_ticket_http(
     }))
 }
 
+/// Puts the ticket in `phase` and, for a GitHub mirror, writes the matching state label
+/// (`to-test`, `testing`); a label failure is left to the next label write-back.
+fn apply_phase_http(store: &TicketStore, key: &str, phase: model::Phase) -> anyhow::Result<()> {
+    let (mut ticket, body, extra) = store.get(key)?;
+    ticket.autopilot.set_phase(phase, SystemClock.now_utc());
+    store.save(&mut ticket, &body, &extra)?;
+    if ticket.github.is_some() && phase != model::Phase::Dev {
+        let port = aidp_integrations::github_issues::GhIssuePort::new();
+        if let Err(error) =
+            aidp_tickets::github_sync::label_ticket(store, &port, key, phase.as_str())
+        {
+            tracing::warn!(key, %error, "phase label left for the next write-back");
+        }
+    }
+    Ok(())
+}
+
+/// Puts the `to-test` tickets of `tickets` in the order the test lane takes them (manual
+/// promotion first, then the oldest entry), each in a slot a `to-test` ticket already held.
+fn order_to_test_lane(tickets: &mut [model::Ticket]) {
+    let slots: Vec<usize> = (0..tickets.len())
+        .filter(|&i| tickets[i].autopilot.phase() == model::Phase::ToTest)
+        .collect();
+    let mut lane: Vec<model::Ticket> = slots.iter().map(|&i| tickets[i].clone()).collect();
+    lane.sort_by_key(|t| {
+        (
+            u8::from(t.autopilot.manual_priority != Some(true)),
+            t.autopilot.phase_at.unwrap_or(t.updated),
+            t.key.clone(),
+        )
+    });
+    for (slot, ticket) in slots.into_iter().zip(lane) {
+        tickets[slot] = ticket;
+    }
+}
+
 /// What a manual start found out: launched or still queued (`Ok`), or refused for a
 /// reason nameable synchronously (`Refused`).
 enum StartOutcome {
@@ -2336,6 +2372,11 @@ enum StartOutcome {
 /// `queued` is only re-armed, as the self-edge is illegal even with `force`.
 fn manual_start_needs_transition(from: Status) -> bool {
     from != Status::Queued
+}
+
+/// A `to-test` ticket still in progress is promoted in its lane, never re-queued.
+fn is_to_test_in_progress(ticket: &model::Ticket) -> bool {
+    ticket.status == Status::InProgress && ticket.autopilot.phase() == model::Phase::ToTest
 }
 
 /// Routing fields a manual start may override; an absent field keeps the ticket's own
@@ -2404,7 +2445,7 @@ fn manual_start_ticket(
 ) -> anyhow::Result<StartOutcome> {
     let (current, _, _) = store.get(key)?;
     let from = current.status;
-    let transition = manual_start_needs_transition(from);
+    let transition = manual_start_needs_transition(from) && !is_to_test_in_progress(&current);
     if transition {
         model::guard(from, Status::Queued, Actor::Human, force)?;
     }
@@ -2916,6 +2957,7 @@ fn route(
                 archived: false,
             };
             let mut tickets = store.list(&filter);
+            order_to_test_lane(&mut tickets);
             tickets.truncate(qn(QUERY_LIMIT, 200));
             let views: Vec<Value> = tickets
                 .iter()
@@ -3326,7 +3368,34 @@ fn route(
             };
             let reason = body["reason"].as_str().map(str::to_string);
             let force = body["force"].as_bool().unwrap_or(false);
-            match transition_ticket_http(&store, &app.bus, key, to, reason, force) {
+            let phase = match body["phase"].as_str() {
+                Some(text) => match model::Phase::parse(text) {
+                    Some(phase) => Some(phase),
+                    None => {
+                        return Ok(err(
+                            HTTP_BAD_REQUEST,
+                            "phase must be dev, to-test or testing",
+                        ))
+                    }
+                },
+                None => None,
+            };
+            let same_status = phase.is_some()
+                && store
+                    .get(key)
+                    .is_ok_and(|(current, _, _)| current.status == to);
+            let moved = if same_status {
+                Ok(json!({ "key": key, "from": to.as_str(), "to": to.as_str() }))
+            } else {
+                transition_ticket_http(&store, &app.bus, key, to, reason, force)
+            };
+            match moved.and_then(|mut v| {
+                if let Some(phase) = phase {
+                    apply_phase_http(&store, key, phase)?;
+                    v["phase"] = json!(phase.as_str());
+                }
+                Ok(v)
+            }) {
                 Ok(v) => Reply::Json(HTTP_OK, v),
                 Err(e) => err(HTTP_CONFLICT, e),
             }

@@ -284,7 +284,8 @@ Sort key: `(manual, milestone, priority, source, issue number, created, key)`, a
 
 ```yaml
 dispatcher:
-  slots: 5
+  slots: 3          # dev lane: flows in worktrees running at once
+  test_slots: 1     # test lane: test flows at once per project (main checkout, Unity editor)
   tick_seconds: 60
   permission_mode: acceptEdits
   auto_approve_gates: [pr]       # "*" for all; other gates block the ticket (gate:<stage>)
@@ -525,6 +526,25 @@ project already has a running session is still skipped (reported as `queue-race`
 paths only ever submit to `SessionManager::start`, never admit directly.
 
 ## The dispatcher
+
+### Two lanes (dev and test)
+
+Since the decision of 2026-11-08 a flow-driven game ticket has a **phase**, `autopilot.phase`: `dev` (default),
+`to-test`, `testing`. `GET /api/tickets` shows it as `phase`, with `branch`.
+
+- Dev lane: `Todo`/`Queued` tickets, their route's `flow:` in a worktree, at most `dispatcher.slots` (default 3) at once
+  (dispatcher sessions plus running dev flows). The dev flow ends at `to-test`: label `aidp:to-test`, phase `to-test`,
+  status still `in-progress`, worktree removed.
+- Test lane: tickets in phase `to-test` (status `in-progress`, or `todo`/`queued` when a human put the label
+  `aidp:to-test` on the issue), launched with the route's `test_flow:` (`routing.yaml`) in the main checkout, at most
+  `dispatcher.test_slots` (default 1) per project, oldest first, a manual start (`POST /api/tickets/:key/start`) ahead.
+  Refusal reason `no-test-slot`. The phase becomes `testing` when the test flow starts. A test flow never uses a dev slot.
+- Pause, budget and night mode apply to both lanes. `dispatcher.json` `slots` carries `used`/`max` (dev) and
+  `testUsed`/`testMax` (test).
+- A manual or forced start, and any flow launch, is no longer short-circuited by the adoption of an open PR: a ticket in
+  the dev lane stays there until it is `to-test`.
+- `aidp:to-test` is a phase label (`github.phase_labels`): the sync keeps it on an `in-progress` ticket, and reads it on
+  an issue as "send to the test lane".
 
 `aidp gateway serve` runs a dispatcher loop that ticks every `dispatcher.tick_seconds` and on
 session events (start, end, gate question, gate answer). The timer tick also probes the PRs of

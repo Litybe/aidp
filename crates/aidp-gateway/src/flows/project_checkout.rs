@@ -52,6 +52,14 @@ pub(super) fn waits_for_project(state: &FlowState) -> bool {
 }
 
 impl Executor {
+    /// True while a project run holds, or waits for, the project's main checkout: it counts in the
+    /// test lane. A run past its `git.restore` (waiting for the merge) no longer does.
+    pub fn project_checkout_held(&self, state: &FlowState) -> bool {
+        is_project_flow(state)
+            && !state.status.is_terminal()
+            && !state.effects_applied.contains(RELEASED_MARKER)
+    }
+
     /// The directory a project flow works in: the project's main checkout.
     pub(super) fn project_checkout_path(&self, state: &FlowState) -> Option<PathBuf> {
         self.ports

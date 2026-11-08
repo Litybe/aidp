@@ -28,7 +28,7 @@
 use crate::blockers::{self, BodyReference};
 use crate::config::{GithubConfig, GithubRepo};
 use crate::ledger::{self, Event};
-use crate::model::{guard, Actor, Autopilot, IssueType, Priority, Source, Status, Ticket};
+use crate::model::{guard, Actor, Autopilot, IssueType, Phase, Priority, Source, Status, Ticket};
 use crate::models::blocker_link::BlockerLink;
 use crate::models::constants::github::{
     ACCEPTANCE_CRITERION_PATTERN, BUG_LABEL, CLOSED_REASON, CLOSED_UNDONE_REASON, CLOSES_PREFIX,
@@ -37,6 +37,7 @@ use crate::models::constants::github::{
     PRIORITY_LABEL_PREFIX, SKIP_REASON, SYNC_STATE_FILE, VALID_REGEX,
 };
 use crate::models::enums::issue_state::IssueState;
+use crate::models::enums::state_label::StateLabel;
 use crate::models::github_issue::{GithubIssue, IssueDependency};
 use crate::models::github_meta::GithubMeta;
 use crate::models::github_port::GithubPort;
@@ -452,7 +453,10 @@ fn target_for(intent: &LabelIntent, cfg: &GithubConfig) -> (Status, Option<Strin
         LabelIntent::Unlabelled | LabelIntent::Triage if cfg.ready_required => {
             (Status::Blocked, Some(NOT_READY_REASON.to_string()))
         }
-        LabelIntent::Unlabelled | LabelIntent::Triage | LabelIntent::Ready => (Status::Todo, None),
+        LabelIntent::Unlabelled
+        | LabelIntent::Triage
+        | LabelIntent::Ready
+        | LabelIntent::ToTest => (Status::Todo, None),
         LabelIntent::Skip => (Status::Blocked, Some(SKIP_REASON.to_string())),
         LabelIntent::Held(label) => (Status::Blocked, Some(state_labels::held_reason(label))),
     }
@@ -705,6 +709,18 @@ fn apply_issue(
             report.triaged += 1;
         }
     }
+    if label_changed {
+        let held_by_label = is_editable(&old)
+            || (old.status == Status::InProgress && old.autopilot.session_id.is_none());
+        if held_by_label {
+            if intent == LabelIntent::ToTest {
+                ticket.autopilot.set_phase(Phase::ToTest, now);
+            } else if ticket.autopilot.phase() == Phase::ToTest {
+                ticket.autopilot.phase = None;
+                ticket.autopilot.phase_at = None;
+            }
+        }
+    }
 
     let mut compared = ticket.clone();
     if let (Some(fresh), Some(previous)) = (compared.github.as_mut(), old.github.as_ref()) {
@@ -900,6 +916,23 @@ fn github_of(store: &TicketStore, key: &str) -> anyhow::Result<(Ticket, GithubMe
     Ok((ticket, meta))
 }
 
+/// The label `to-test` puts the ticket in the `to-test` phase, `testing` in `testing`; any other
+/// label leaves the phase alone. True when the ticket changed.
+fn set_phase_of_label(ticket: &mut Ticket, label: &str, cfg: &GithubConfig) -> bool {
+    let phase = if label.eq_ignore_ascii_case(&StateLabel::ToTest.label(&cfg.label_prefix)) {
+        Phase::ToTest
+    } else if label.eq_ignore_ascii_case(&StateLabel::Testing.label(&cfg.label_prefix)) {
+        Phase::Testing
+    } else {
+        return false;
+    };
+    if ticket.autopilot.phase() == phase && ticket.autopilot.phase.is_some() {
+        return false;
+    }
+    ticket.autopilot.set_phase(phase, Utc::now());
+    true
+}
+
 /// Sets the single state label `state` (a suffix such as `review`, or a full label) on the
 /// issue of mirror `key`: the other state labels go, the mirror records the result.
 pub fn label_ticket(
@@ -922,6 +955,10 @@ pub fn label_ticket(
     };
     let change = state_labels::edit(&current, &WantedLabel::Exactly(label.clone()), cfg);
     let Some(change) = change else {
+        let (mut fresh, body, extra) = store.get(key)?;
+        if set_phase_of_label(&mut fresh, &label, cfg) {
+            store.save(&mut fresh, &body, &extra)?;
+        }
         return Ok(LabelOutcome {
             key: key.to_string(),
             label,
@@ -932,6 +969,7 @@ pub fn label_ticket(
     port.edit_labels(&meta.repo, meta.number, &change.add, &change.remove)?;
     let (mut fresh, body, extra) = store.get(key)?;
     fresh.labels = state_labels::apply(&current, &change);
+    set_phase_of_label(&mut fresh, &label, cfg);
     store.save(&mut fresh, &body, &extra)?;
     Ok(LabelOutcome {
         key: key.to_string(),

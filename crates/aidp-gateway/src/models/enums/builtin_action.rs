@@ -1,7 +1,8 @@
 use crate::models::constants::flow_actions::{
     ACTION_FAIL, ACTION_GH_ISSUE_COMMENT, ACTION_GH_ISSUE_LABEL, ACTION_GH_MERGE,
     ACTION_GH_PR_CREATE, ACTION_GH_PR_READY, ACTION_GIT_BRANCH, ACTION_GIT_CHECKOUT,
-    ACTION_GIT_PUSH, ACTION_GIT_RESTORE, ACTION_GIT_WORKTREE, ACTION_NOOP, ACTION_WORKTREE_REMOVE,
+    ACTION_GIT_PUSH, ACTION_GIT_RESTORE, ACTION_GIT_WORKTREE, ACTION_NOOP, ACTION_TICKET_TO_TEST,
+    ACTION_WORKTREE_REMOVE,
 };
 
 /// Actions every registry holds.
@@ -20,11 +21,13 @@ pub enum BuiltinAction {
     GhIssueLabel,
     GhIssueComment,
     WorktreeRemove,
+    /// Dev flow done: the ticket enters the `to-test` phase (label and phase).
+    TicketToTest,
 }
 
 impl BuiltinAction {
     /// Every action the registry registers by name.
-    pub const ALL: [BuiltinAction; 13] = [
+    pub const ALL: [BuiltinAction; 14] = [
         BuiltinAction::Noop,
         BuiltinAction::Fail,
         BuiltinAction::GitWorktree,
@@ -38,6 +41,7 @@ impl BuiltinAction {
         BuiltinAction::GhIssueLabel,
         BuiltinAction::GhIssueComment,
         BuiltinAction::WorktreeRemove,
+        BuiltinAction::TicketToTest,
     ];
 
     /// The registry name of the action.
@@ -56,6 +60,7 @@ impl BuiltinAction {
             BuiltinAction::GhIssueLabel => ACTION_GH_ISSUE_LABEL,
             BuiltinAction::GhIssueComment => ACTION_GH_ISSUE_COMMENT,
             BuiltinAction::WorktreeRemove => ACTION_WORKTREE_REMOVE,
+            BuiltinAction::TicketToTest => ACTION_TICKET_TO_TEST,
         }
     }
 }

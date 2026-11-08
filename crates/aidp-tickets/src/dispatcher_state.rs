@@ -55,6 +55,11 @@ pub struct DispatcherState {
 pub struct SlotsState {
     pub used: usize,
     pub max: usize,
+    /// Test lane: test flows running (all projects) and the per-project ceiling.
+    #[serde(default)]
+    pub test_used: usize,
+    #[serde(default)]
+    pub test_max: usize,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]

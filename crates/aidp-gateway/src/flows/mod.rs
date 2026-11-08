@@ -355,6 +355,31 @@ impl FlowEngine {
         entries
     }
 
+    /// What the live runs occupy: dev flows (worktrees) and, per project, the test flows that
+    /// hold or wait for its main checkout.
+    pub fn lane_load(&self) -> (usize, HashMap<String, usize>) {
+        let mut dev = 0;
+        let mut test: HashMap<String, usize> = HashMap::new();
+        for entry in self.executor.store.index().into_values() {
+            if entry.status.is_terminal() {
+                continue;
+            }
+            let Ok((_, state)) = self.executor.load(&entry.key) else {
+                continue;
+            };
+            if state.def.workspace == Some(aidp_flows::models::enums::WorkspaceMode::Project) {
+                if self.executor.project_checkout_held(&state) {
+                    *test
+                        .entry(entry.service.clone().unwrap_or_default())
+                        .or_insert(0) += 1;
+                }
+            } else {
+                dev += 1;
+            }
+        }
+        (dev, test)
+    }
+
     pub fn journal(&self, key: &str) -> anyhow::Result<Vec<JournalLine>> {
         let (repo, _) = self.executor.load(key)?;
         Ok(self.executor.store.read_journal(&repo, key))

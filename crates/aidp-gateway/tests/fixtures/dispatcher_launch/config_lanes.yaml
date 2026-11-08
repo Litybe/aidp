@@ -1,0 +1,6 @@
+dispatcher:
+  launch: flow
+  slots: 3
+  test_slots: 1
+budget:
+  unknown_policy: allow

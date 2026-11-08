@@ -415,6 +415,35 @@ pub struct Pr {
     pub commented: bool,
 }
 
+/// Lane of a ticket: `dev` (worktree flows, in parallel), `to-test` (dev done, waits for the Unity
+/// test lane) or `testing` (the test flow runs in the main checkout of the project).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Phase {
+    #[default]
+    Dev,
+    ToTest,
+    Testing,
+}
+
+impl Phase {
+    /// The wire form: `dev`, `to-test`, `testing`.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Phase::Dev => "dev",
+            Phase::ToTest => "to-test",
+            Phase::Testing => "testing",
+        }
+    }
+
+    /// The phase named `text`, ignoring case.
+    pub fn parse(text: &str) -> Option<Phase> {
+        [Phase::Dev, Phase::ToTest, Phase::Testing]
+            .into_iter()
+            .find(|phase| phase.as_str().eq_ignore_ascii_case(text.trim()))
+    }
+}
+
 /// The dispatcher/autopilot bookkeeping carried on every ticket, whether or
 /// not any autopilot lot has run yet.
 ///
@@ -471,6 +500,27 @@ pub struct Autopilot {
     /// Delivery flow that drives this ticket instead of a pipeline session.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub flow: Option<String>,
+    /// Lane of the ticket (`dev` when absent).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub phase: Option<Phase>,
+    /// When the ticket entered its current phase: orders the test lane (oldest first).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub phase_at: Option<DateTime<Utc>>,
+}
+
+impl Autopilot {
+    /// The phase, `dev` when none is recorded.
+    pub fn phase(&self) -> Phase {
+        self.phase.unwrap_or_default()
+    }
+
+    /// Records `phase` and the time it began.
+    pub fn set_phase(&mut self, phase: Phase, now: DateTime<Utc>) {
+        if self.phase() != phase || self.phase_at.is_none() {
+            self.phase_at = Some(now);
+        }
+        self.phase = Some(phase);
+    }
 }
 
 /// The frontmatter of a ticket note (vision §5.1). The note's own `aidp:

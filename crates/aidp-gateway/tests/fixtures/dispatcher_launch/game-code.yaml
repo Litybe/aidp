@@ -1,0 +1,8 @@
+id: game-code
+version: 1
+steps:
+  - id: approve
+    kind: human
+    phase: Review
+    prompt: Dev lane
+    choices: [approve]

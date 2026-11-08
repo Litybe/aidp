@@ -13,6 +13,9 @@ pub const ACTION_GH_MERGE: &str = "gh.merge";
 pub const ACTION_GH_ISSUE_LABEL: &str = "gh.issue_label";
 pub const ACTION_GH_ISSUE_COMMENT: &str = "gh.issue_comment";
 pub const ACTION_WORKTREE_REMOVE: &str = "worktree.remove";
+pub const ACTION_TICKET_TO_TEST: &str = "ticket.to_test";
+/// State label (and phase) the `ticket.to_test` action sets.
+pub const STATE_TO_TEST: &str = "to-test";
 
 pub const VERB_FLOW: &str = "flow";
 pub const VERB_FLOW_GIT_BRANCH: &str = "git-branch";

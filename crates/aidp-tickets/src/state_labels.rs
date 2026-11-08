@@ -11,11 +11,12 @@
 //! an edit removes every other member, so at most one stays.
 
 use crate::config::GithubConfig;
-use crate::model::{Status, Ticket};
+use crate::model::{Phase, Status, Ticket};
 use crate::models::constants::github::{
     LABEL_REASON_PREFIX, NEEDS_REFINE_REASON, NEEDS_ROUTING_REASON, NOT_READY_REASON, SKIP_REASON,
     STATUS_REASON_SEPARATOR,
 };
+use crate::models::enums::state_label::StateLabel;
 
 /// The state label a ticket wants on its issue.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -49,6 +50,8 @@ pub enum LabelIntent {
     Ready,
     /// The triage label: the gates (route, criteria) decide.
     Triage,
+    /// `to-test`: development done, the issue waits for the test lane.
+    ToTest,
     /// Never dispatched.
     Skip,
     /// Any other state label: the issue is held in that state outside aidp.
@@ -97,6 +100,14 @@ fn blocked_key(reason: &str) -> String {
 pub fn wanted(ticket: &Ticket, cfg: &GithubConfig) -> WantedLabel {
     let reason = ticket.autopilot.blocked_reason.as_deref();
     let exactly = |label: Option<String>| label.map_or(WantedLabel::Keep, WantedLabel::Exactly);
+    if ticket.autopilot.phase() == Phase::ToTest
+        && matches!(
+            ticket.status,
+            Status::Todo | Status::Queued | Status::InProgress
+        )
+    {
+        return WantedLabel::Exactly(StateLabel::ToTest.label(&cfg.label_prefix));
+    }
     match ticket.status {
         Status::Cancelled => WantedLabel::Keep,
         Status::Blocked => match reason {
@@ -182,6 +193,9 @@ pub fn intent(label: Option<&str>, cfg: &GithubConfig) -> LabelIntent {
         return LabelIntent::Unlabelled;
     };
     let is = |key: &str| status_label(cfg, key).is_some_and(|l| l.eq_ignore_ascii_case(label));
+    if label.eq_ignore_ascii_case(&StateLabel::ToTest.label(&cfg.label_prefix)) {
+        return LabelIntent::ToTest;
+    }
     if is(Status::Todo.as_str()) || is(Status::Queued.as_str()) {
         return LabelIntent::Ready;
     }

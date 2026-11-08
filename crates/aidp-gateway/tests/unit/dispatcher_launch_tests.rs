@@ -185,6 +185,7 @@ fn launch_of(key: &str) -> plan::Launch {
         manual: false,
         detail: None,
         flow: None,
+        test: false,
     }
 }
 
@@ -376,4 +377,173 @@ fn flow_ticket_reasons_serialize_to_their_wire_strings() {
         );
     }
     assert_eq!(FlowTicketReason::Started.as_str(), "flow-started");
+}
+
+const CONFIG_LANES: &str = include_str!("../fixtures/dispatcher_launch/config_lanes.yaml");
+const ROUTING_LANES: &str = include_str!("../fixtures/dispatcher_launch/routing_lanes.yaml");
+
+/// A rig whose project is named `SERVICE`, with the lane config and routing, flows attached.
+fn lane_rig(tag: &str) -> Rig {
+    let rig = rig(tag, CONFIG_LANES);
+    std::fs::write(
+        rig._vault.path().join(TODO_FOLDER).join("routing.yaml"),
+        ROUTING_LANES,
+    )
+    .unwrap();
+    let project = rig._state.child(SERVICE);
+    std::fs::create_dir_all(&project).unwrap();
+    rig.dispatcher.projects.add(project.to_str().unwrap());
+    rig.dispatcher.attach_flows(rig.engine.clone());
+    rig
+}
+
+fn seed_in_lane(rig: &Rig, key: &str, phase: model::Phase, status: Status) {
+    use aidp_tickets::model::Autopilot;
+    seed_ticket(&rig.store, key);
+    let (mut ticket, body, extra) = rig.store.get(key).unwrap();
+    ticket.status = status;
+    ticket.flow = Some("game-code".to_string());
+    ticket.autopilot = Autopilot::default();
+    ticket.autopilot.set_phase(phase, Utc::now());
+    rig.store.save(&mut ticket, &body, &extra).unwrap();
+}
+
+fn launched_keys(report: &Value) -> Vec<String> {
+    report["launched"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|key| key.as_str().unwrap().to_string())
+        .collect()
+}
+
+fn skipped_reason(report: &Value, key: &str) -> Option<String> {
+    report["skipped"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["key"] == key)
+        .map(|entry| entry["reason"].as_str().unwrap().to_string())
+}
+
+#[test]
+fn a_to_test_issue_starts_its_test_flow_and_becomes_testing() {
+    let rig = lane_rig("lane-test-flow");
+    seed_in_lane(&rig, "T-1", model::Phase::ToTest, Status::InProgress);
+
+    let report = rig.dispatcher.tick_local("test");
+
+    assert_eq!(launched_keys(&report), ["T-1"]);
+    assert_eq!(rig.engine.get("T-1").unwrap().def.id, "game-test-code");
+    let ticket = reload(&rig.store, "T-1");
+    assert_eq!(ticket.autopilot.phase(), model::Phase::Testing);
+    assert_eq!(ticket.status, Status::InProgress);
+}
+
+#[test]
+fn two_to_test_issues_pass_one_after_the_other() {
+    let rig = lane_rig("lane-serial");
+    seed_in_lane(&rig, "T-1", model::Phase::ToTest, Status::InProgress);
+    seed_in_lane(&rig, "T-2", model::Phase::ToTest, Status::InProgress);
+
+    let first = rig.dispatcher.tick_local("test");
+    assert_eq!(launched_keys(&first).len(), 1);
+    let (running, waiting) = if launched_keys(&first) == ["T-1"] {
+        ("T-1", "T-2")
+    } else {
+        ("T-2", "T-1")
+    };
+    assert_eq!(
+        skipped_reason(&first, waiting).as_deref(),
+        Some("no-test-slot")
+    );
+
+    let blocked = rig.dispatcher.tick_local("test");
+    assert!(launched_keys(&blocked).is_empty());
+    assert_eq!(
+        skipped_reason(&blocked, waiting).as_deref(),
+        Some("no-test-slot")
+    );
+
+    rig.engine.abort(running, "test").unwrap();
+    let next = rig.dispatcher.tick_local("test");
+    assert_eq!(launched_keys(&next), [waiting]);
+    assert_eq!(
+        reload(&rig.store, waiting).autopilot.phase(),
+        model::Phase::Testing
+    );
+}
+
+#[test]
+fn three_dev_flows_run_in_parallel_while_a_test_runs() {
+    let rig = lane_rig("lane-parallel");
+    seed_in_lane(&rig, "T-1", model::Phase::ToTest, Status::InProgress);
+    for key in ["D-1", "D-2", "D-3", "D-4"] {
+        seed_in_lane(&rig, key, model::Phase::Dev, Status::Todo);
+    }
+
+    let report = rig.dispatcher.tick_local("test");
+
+    let launched = launched_keys(&report);
+    assert!(
+        launched.contains(&"T-1".to_string()),
+        "{launched:?} {report}"
+    );
+    assert_eq!(
+        launched.iter().filter(|key| key.starts_with("D-")).count(),
+        3,
+        "{report}"
+    );
+    let waiting: Vec<&str> = ["D-1", "D-2", "D-3", "D-4"]
+        .into_iter()
+        .filter(|key| !launched.contains(&key.to_string()))
+        .collect();
+    assert_eq!(waiting.len(), 1);
+    assert_eq!(
+        skipped_reason(&report, waiting[0]).as_deref(),
+        Some("no-slot")
+    );
+    let (dev, test) = rig.engine.lane_load();
+    assert_eq!(dev, 3);
+    assert_eq!(test.get(SERVICE), Some(&1));
+    for key in launched.iter().filter(|key| key.starts_with("D-")) {
+        assert_eq!(reload(&rig.store, key).autopilot.phase(), model::Phase::Dev);
+    }
+    assert_eq!(report["slotsUsed"], 0);
+}
+
+#[test]
+fn a_test_flow_does_not_take_a_dev_slot() {
+    let rig = lane_rig("lane-no-dev-slot");
+    seed_in_lane(&rig, "T-1", model::Phase::ToTest, Status::InProgress);
+    rig.dispatcher.tick_local("test");
+    seed_in_lane(&rig, "D-1", model::Phase::Dev, Status::Todo);
+
+    let report = rig.dispatcher.tick_local("test");
+
+    assert_eq!(launched_keys(&report), ["D-1"]);
+    assert_eq!(report["slotsMax"], 3);
+    assert_eq!(report["slotsUsed"], 0);
+}
+
+#[test]
+fn a_forced_start_is_not_short_circuited_by_an_open_pr() {
+    // `adoptable` is false for a forced reason, a manual launch or a flow launch.
+    let rig = lane_rig("lane-force");
+    seed_in_lane(&rig, "D-1", model::Phase::Dev, Status::Todo);
+    let mut launch = launch_of("D-1");
+    launch.manual = true;
+    launch.flow = Some("game-code".to_string());
+    let updated: HashMap<String, DateTime<Utc>> =
+        [("D-1".to_string(), reload(&rig.store, "D-1").updated)].into();
+
+    let outcome = rig.dispatcher.execute_launch_reason(
+        &rig.store,
+        &launch,
+        &updated,
+        FORCED_OVER_PAUSE_REASON,
+    );
+
+    assert!(matches!(outcome, LaunchAttemptOutcome::Launched(_)));
+    assert!(rig.engine.get("D-1").is_ok());
 }

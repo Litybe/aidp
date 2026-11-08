@@ -94,6 +94,11 @@ pub fn ticket_view(ticket: &aidp_tickets::model::Ticket) -> Value {
             "url".to_string(),
             meta.map_or(Value::Null, |m| json!(m.url)),
         );
+        object.insert(
+            "phase".to_string(),
+            json!(ticket.autopilot.phase().as_str()),
+        );
+        object.insert("branch".to_string(), json!(ticket.autopilot.branch));
         object.insert("route".to_string(), json!(ticket.route));
         object.insert("milestone".to_string(), json!(ticket.milestone));
         object.insert("labels".to_string(), json!(ticket.labels));

@@ -84,7 +84,8 @@ A delivery flow defines the block as two actions:
 
 | Step | Action | Effect |
 |---|---|---|
-| `git_push` | `git.push` | Publishes the branch as one commit GitHub signs. |
+| `git_push` | `ticket.to_test` | `ticket label KEY to-test` | `key`, `label`, `changed` (label `aidp:to-test` and ticket phase `to-test`) |
+| `git.push` | Publishes the branch as one commit GitHub signs. |
 | `pr_create` | `gh.pr_create` | Opens the draft PR on the first publish; later publishes find it open and change nothing. |
 
 `git.push` reads `origin`, refuses the repository default branch, and runs `git fetch origin --prune`. On a branch GitHub has, it commits on top of `origin/<branch>`. On a new branch, it creates the branch at `git merge-base HEAD origin/<default>`. It sends every file `HEAD` changes against that commit, whole and base64 encoded, through the GraphQL `createCommitOnBranch` mutation. That mutation runs through `gh api graphql`, with `expectedHeadOid` as an optimistic lock and the last local commit message. GitHub signs the commit. The worktree then runs `git fetch` and `git reset --soft origin/<branch>`, so it sits on the published commit with its uncommitted work kept.
@@ -288,6 +289,28 @@ The flow the daemon starts when a request names none is `perso-delivery`: the di
 without `--flow`. The skill's `templates/flows/perso-delivery.yaml` holds it: worktree, branch,
 `dev-unity` (pushes), `review-unity`, `fix-review-unity`, PR ready, human merge
 (`merge_approval`, then `gh.merge` pinned on the head sha), worktree cleanup.
+
+### Two lanes: development in a worktree, Unity test in series
+
+A game ticket goes through two flows (decision of 2026-11-08, contract C13).
+
+- **Dev lane**: the flow of the route (`flow:` in `routing.yaml`: `game-code`, `game-art`, `game-map`). Default workspace
+  (a worktree per ticket), several runs in parallel up to `dispatcher.slots` (default 3). Its last steps are
+  `ticket.to_test` then `worktree.remove`, and the run ends `done` with the ticket still `in-progress`: the issue
+  carries the label `aidp:to-test` and the ticket the phase `to-test`. No Unity editor is open on a worktree, so the
+  dev stages run no compile gate and no test (`verification.compile = "deferred"`).
+- **Test lane**: the `test_flow:` of the same route (`game-test-code`, `game-test-art`, `game-test-map`),
+  `workspace: project`: the main checkout of the project, where the editor is open, with the `unity-editor`
+  resource. `dispatcher.test_slots` (default 1) test flows at a time per project. The dispatcher starts the oldest
+  `to-test` issue first (a manual start promotes one ahead), as soon as the lane of its project is free. A test flow
+  counts in the test lane while it holds, or waits for, the checkout; once it ran `git.restore` (the merge approval
+  is pending) it no longer does. It never takes a dev slot. Pause, budget and night mode apply to both lanes.
+
+Ticket phase (`autopilot.phase`, exposed as `phase` and `branch` by `GET /api/tickets`): `dev` (default), `to-test`,
+`testing` (set when the test flow starts). The label `aidp:to-test` and the phase go together: the flow action
+`ticket.to_test` (= `aidp ticket label KEY to-test`) sets both; a human who puts the label on an issue (sync) or
+`POST /api/tickets/:key/status` with `{ "status", "phase": "to-test" }` does the same. `aidp:testing` sets the phase
+`testing`.
 
 ### How a delivery starts
 

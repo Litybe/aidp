@@ -1132,10 +1132,20 @@ impl Dispatcher {
             None => 0,
         };
 
-        let candidates = store.list(&ListFilter {
+        let mut candidates = store.list(&ListFilter {
             status: vec![Status::Todo, Status::Queued],
             ..ListFilter::default()
         });
+        // The test lane also takes the issues whose dev flow ended: in progress, phase `to-test`.
+        candidates.extend(
+            store
+                .list(&ListFilter {
+                    status: vec![Status::InProgress],
+                    ..ListFilter::default()
+                })
+                .into_iter()
+                .filter(|t| t.autopilot.phase() == model::Phase::ToTest),
+        );
         let plan_updated_at: HashMap<String, DateTime<Utc>> = candidates
             .iter()
             .map(|t| (t.key.clone(), t.updated))
@@ -1174,13 +1184,22 @@ impl Dispatcher {
             &mut holders,
             store.config().dispatcher.max_worktrees_per_project,
         );
-        let dispatch_plan = plan::plan_with_blockers(
+        let (dev_flows, test_flows) = lock(&self.flows)
+            .as_ref()
+            .map(|engine| engine.lane_load())
+            .unwrap_or_default();
+        let dispatch_plan = plan::plan_with_lanes(
             &candidates,
             &running_slots,
             &verdict,
             &catalog,
             &store.config().dispatcher,
             &holders,
+            &plan::LaneLoad {
+                routing: Some(store.routing()),
+                dev_flows,
+                test_flows,
+            },
         );
         for launch in &dispatch_plan.launches {
             if let Some(detail) = &launch.detail {
@@ -1337,6 +1356,8 @@ impl Dispatcher {
                 slots: SlotsState {
                     used: 0,
                     max: cfg.slots as usize,
+                    test_used: 0,
+                    test_max: cfg.test_slots as usize,
                 },
                 running: Vec::new(),
                 last_plan: LastPlan::default(),
@@ -1458,6 +1479,8 @@ impl Dispatcher {
             slots: SlotsState {
                 used: dispatch_plan.slots_used,
                 max: dispatch_plan.slots_max,
+                test_used: dispatch_plan.test_slots_used,
+                test_max: dispatch_plan.test_slots_max,
             },
             running: state_running,
             last_plan: LastPlan {
@@ -1545,7 +1568,12 @@ impl Dispatcher {
             }
         };
         let catalog = self.catalog();
-        let launch = match plan::build_launch(&ticket, &catalog) {
+        let built = if ticket.autopilot.phase() == model::Phase::ToTest {
+            plan::build_test_launch(&ticket, Some(store.routing()))
+        } else {
+            plan::build_launch(&ticket, &catalog)
+        };
+        let launch = match built {
             Ok(launch) => launch,
             Err(skip_reason) => {
                 return ForcedLaunch::without_session(skipped(skip_reason.as_str()));
@@ -1650,6 +1678,8 @@ impl Dispatcher {
             slots: SlotsState {
                 used: state_running.len(),
                 max: prev.slots.max,
+                test_used: prev.slots.test_used,
+                test_max: prev.slots.test_max,
             },
             running: state_running,
             last_plan: LastPlan {
@@ -1736,6 +1766,8 @@ impl Dispatcher {
             slots: SlotsState {
                 used: state_running.len(),
                 max: slots_max,
+                test_used: 0,
+                test_max: cfg.test_slots as usize,
             },
             running: state_running,
             last_plan: LastPlan {
@@ -1942,10 +1974,18 @@ impl Dispatcher {
             );
         };
 
-        if let Some(outcome) =
-            self.adopt_existing_pr(store, &mut ticket, &body, &extra, &project.path)
-        {
-            return outcome;
+        // A flow owns its PR, and a manual or forced start means "run it": neither is
+        // short-circuited by an open PR (the issue stays in its lane until `to-test`).
+        let adoptable = l.flow.is_none()
+            && !l.manual
+            && reason == DISPATCH_REASON
+            && store.config().dispatcher.launch != DispatcherLaunch::Flow;
+        if adoptable {
+            if let Some(outcome) =
+                self.adopt_existing_pr(store, &mut ticket, &body, &extra, &project.path)
+            {
+                return outcome;
+            }
         }
 
         if l.flow.is_some() || store.config().dispatcher.launch == DispatcherLaunch::Flow {
@@ -2106,6 +2146,14 @@ impl Dispatcher {
         }
         ticket.status = Status::InProgress;
         ticket.autopilot.flow = Some(flow_id.to_string());
+        ticket.autopilot.set_phase(
+            if l.test {
+                model::Phase::Testing
+            } else {
+                model::Phase::Dev
+            },
+            SystemClock.now_utc(),
+        );
         ticket.autopilot.branch = Some(branch_for_ticket(ticket.r#type, &l.key));
         ticket.autopilot.started_at = Some(SystemClock.now_utc());
         ticket.autopilot.blocked_reason = None;

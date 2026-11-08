@@ -223,6 +223,16 @@ pub fn register(registry: &mut Registry) {
             PLACEHOLDER_STATE_ARG,
         ]),
     );
+    register_action(
+        registry,
+        BuiltinAction::TicketToTest,
+        SubprocessAction::new([
+            VERB_TICKET,
+            VERB_TICKET_LABEL,
+            PLACEHOLDER_KEY_ARG,
+            STATE_TO_TEST,
+        ]),
+    );
     registry.register_action(
         BuiltinAction::GhIssueComment.as_str(),
         Arc::new(IssueCommentAction),

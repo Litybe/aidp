@@ -140,6 +140,10 @@ pub const BUDGET_FIELDS: &[SettingField] = &[
         kind: FieldKind::Count(1, MAX_SLOTS),
     },
     SettingField {
+        path: &["dispatcher", "test_slots"],
+        kind: FieldKind::Count(1, MAX_SLOTS),
+    },
+    SettingField {
         path: &["dispatcher", "stop_at_7d_percent"],
         kind: FieldKind::OptionalPercent,
     },

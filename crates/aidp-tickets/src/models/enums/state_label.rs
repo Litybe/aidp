@@ -9,6 +9,7 @@ pub enum StateLabel {
     InProgress,
     Review,
     Fixing,
+    ToTest,
     Testing,
     AwaitingMerge,
     Done,
@@ -18,13 +19,14 @@ pub enum StateLabel {
 
 impl StateLabel {
     /// Every state, in board order.
-    pub const ALL: [StateLabel; 11] = [
+    pub const ALL: [StateLabel; 12] = [
         StateLabel::Triage,
         StateLabel::Ready,
         StateLabel::Queued,
         StateLabel::InProgress,
         StateLabel::Review,
         StateLabel::Fixing,
+        StateLabel::ToTest,
         StateLabel::Testing,
         StateLabel::AwaitingMerge,
         StateLabel::Done,
@@ -33,8 +35,12 @@ impl StateLabel {
     ];
 
     /// The states a flow sets while the ticket stays `in-progress`.
-    pub const PHASES: [StateLabel; 3] =
-        [StateLabel::Review, StateLabel::Fixing, StateLabel::Testing];
+    pub const PHASES: [StateLabel; 4] = [
+        StateLabel::Review,
+        StateLabel::Fixing,
+        StateLabel::ToTest,
+        StateLabel::Testing,
+    ];
 
     /// The part after the label prefix, e.g. `awaiting-merge`.
     pub const fn suffix(self) -> &'static str {
@@ -45,6 +51,7 @@ impl StateLabel {
             StateLabel::InProgress => "in-progress",
             StateLabel::Review => "review",
             StateLabel::Fixing => "fixing",
+            StateLabel::ToTest => "to-test",
             StateLabel::Testing => "testing",
             StateLabel::AwaitingMerge => "awaiting-merge",
             StateLabel::Done => "done",
@@ -75,6 +82,7 @@ impl StateLabel {
             StateLabel::InProgress => "fbca04",
             StateLabel::Review => "5319e7",
             StateLabel::Fixing => "c2e0c6",
+            StateLabel::ToTest => "ffd8b1",
             StateLabel::Testing => "f9d0c4",
             StateLabel::AwaitingMerge => "0052cc",
             StateLabel::Done => "0e8a16",
@@ -92,6 +100,7 @@ impl StateLabel {
             StateLabel::InProgress => "aidp : réalisation en cours",
             StateLabel::Review => "aidp : revue en cours",
             StateLabel::Fixing => "aidp : correction après revue ou test",
+            StateLabel::ToTest => "aidp : développement fini, attend la voie de test Unity",
             StateLabel::Testing => "aidp : test dans Unity en cours",
             StateLabel::AwaitingMerge => "aidp : PR prête, attend le merge",
             StateLabel::Done => "aidp : PR mergée, issue fermée",

@@ -31,8 +31,9 @@ rules:
   - { match: { keywords: [script, controller, système, systeme, shader, ui] }, route: pixelhood-code }
 
 repos:
-  pixelhood-code: { route: code, flow: game-code, track: standard }
-  pixelhood-bug:  { route: code, flow: game-code, track: bug }      # failing repro test first
-  pixelhood-art:  { route: art,  flow: game-art }
-  pixelhood-map:  { route: map,  flow: game-map }
+  # `flow` = development lane (worktree, ends at `to-test`), `test_flow` = test lane (main checkout, one at a time).
+  pixelhood-code: { route: code, flow: game-code, test_flow: game-test-code, track: standard }
+  pixelhood-bug:  { route: code, flow: game-code, test_flow: game-test-code, track: bug }      # failing repro test first
+  pixelhood-art:  { route: art,  flow: game-art,  test_flow: game-test-art }
+  pixelhood-map:  { route: map,  flow: game-map,  test_flow: game-test-map }
   pixelhood-doc:  { route: doc,  flow: game-doc }

@@ -256,7 +256,12 @@ fn dispatcher_state_shape_is_stable() {
         wait_until: None,
         last_tick_at: "2026-09-14T09:08:09Z".to_string(),
         last_reason: "timer".to_string(),
-        slots: SlotsState { used: 2, max: 5 },
+        slots: SlotsState {
+            used: 2,
+            max: 5,
+            test_used: 0,
+            test_max: 1,
+        },
         running: vec![RunningEntry {
             key: "PIXEL-5677".to_string(),
             session_id: "s-1".to_string(),
@@ -824,7 +829,12 @@ fn dispatcher_waiting_with_template(
     let state = DispatcherState {
         mode: "waiting".to_string(),
         wait_until: millis_to_rfc3339(now_ms() + 5 * 60_000),
-        slots: SlotsState { used: 0, max: 5 },
+        slots: SlotsState {
+            used: 0,
+            max: 5,
+            test_used: 0,
+            test_max: 1,
+        },
         ..DispatcherState::default()
     };
 
@@ -1547,6 +1557,7 @@ fn sample_launch() -> plan::Launch {
         manual: false,
         detail: None,
         flow: None,
+        test: false,
     }
 }
 

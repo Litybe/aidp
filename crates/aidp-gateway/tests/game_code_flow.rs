@@ -1,4 +1,4 @@
-//! End-to-end `game-code` flow: the real flow engine, the real native run executor and the real
+//! End-to-end `game-code` (dev lane) and `game-test-code` (test lane) flows: the real flow engine, the real native run executor and the real
 //! Unity editor lock, with a scripted provider writing each pipeline's `result.json`, and the
 //! `aidp` verbs the actions spawn answered by [`FakeAidp`] against the GitHub mock server.
 
@@ -31,12 +31,31 @@ use aidp_integrations::mock::{serve_on, MockHandle};
 use aidp_testkit::{EnvGuard, TempWorkspace};
 use serde_json::{json, Value};
 
-const FLOW: &str = include_str!("fixtures/game_flows/game-code.yaml");
+const DEV_FLOW: &str = include_str!("fixtures/game_flows/game-code.yaml");
+const TEST_FLOW: &str = include_str!("fixtures/game_flows/game-test-code.yaml");
 const SKILL_ROOT: &str = "tests/fixtures/game_flows";
 const REPO: &str = "o/r";
 const SETTLE: Duration = Duration::from_secs(30);
 const POLL: Duration = Duration::from_millis(20);
 const PR_NUMBER: u64 = 7;
+/// The pull request the dev lane opened: the test lane has no `pr.json` of its own and reads it live.
+struct DevPr;
+
+impl aidp_gateway::models::PrStatusSource for DevPr {
+    fn status(&self, _key: &str) -> Option<Value> {
+        Some(
+            json!({ "number": PR_NUMBER, "url": format!("https://github.com/{REPO}/pull/{PR_NUMBER}"),
+                     "repo": REPO, "head": { "sha": HEAD_SHA } }),
+        )
+    }
+}
+
+fn registry_with_pr() -> Registry {
+    let mut registry = Registry::with_builtins();
+    registry.set_pr_status_source(Arc::new(DevPr));
+    registry
+}
+
 const HEAD_SHA: &str = "0123abcd0123abcd0123abcd0123abcd0123abcd";
 const COST_LINE: &str = "Coût : 1,2 M tokens";
 const UNITY_REASON: &str = "resource:unity-editor";
@@ -46,10 +65,12 @@ const UNITY_REASON: &str = "resource:unity-editor";
 /// verb does), PR verbs are recorded. A `--cost-footer` appends a fixed line.
 struct FakeAidp {
     mock: String,
+    project: PathBuf,
+    vault: PathBuf,
     /// The main checkout has local changes: `git-checkout` reports `blocked`.
     dirty: AtomicBool,
     issues: BTreeMap<String, u64>,
-    /// Every verb in call order: `checkout:<key>`, `restore:<key>`, `label:<aidp:x>`, `comment:<key>`, `pr-ready:<n>`, `pr-merge:<n>:<sha>`.
+    /// Every verb in call order: `worktree:<key>`, `branch:<key>`, `worktree-remove:<key>`, `checkout:<key>`, `restore:<key>`, `label:<aidp:x>`, `comment:<key>`, `pr-ready:<n>`, `pr-merge:<n>:<sha>`.
     verbs: Mutex<Vec<String>>,
     /// The `aidp:*` labels the issue showed after each label call.
     snapshots: Mutex<Vec<Vec<String>>>,
@@ -165,6 +186,38 @@ impl FakeAidp {
             .strip_suffix(&["--format", "json-compact"])
             .unwrap_or(&args);
         match args {
+            ["gateway", "worktrees", "ensure", key] => {
+                self.verbs.lock().unwrap().push(format!("worktree:{key}"));
+                let repo = aidp_core::vault::repo_segment(&self.project);
+                match aidp_gateway::worktrees::ensure(
+                    &aidp_core::process_runner::OsProcessRunner,
+                    &self.project,
+                    &self.vault,
+                    &repo,
+                    key,
+                    &[],
+                ) {
+                    Ok(ensured) => (
+                        0,
+                        json!({ "path": ensured.workspace.path, "base_sha": HEAD_SHA, "reused": ensured.reused }),
+                    ),
+                    Err(error) => (1, json!(format!("{error:?}"))),
+                }
+            }
+            ["gateway", "worktrees", "remove", key] => {
+                self.verbs
+                    .lock()
+                    .unwrap()
+                    .push(format!("worktree-remove:{key}"));
+                (0, json!({ "removed": true }))
+            }
+            ["flow", "git-branch", key] => {
+                self.verbs.lock().unwrap().push(format!("branch:{key}"));
+                (
+                    0,
+                    json!({ "branch": format!("feat/{key}"), "created": true }),
+                )
+            }
             ["flow", "git-checkout", key] => {
                 self.verbs.lock().unwrap().push(format!("checkout:{key}"));
                 if self.dirty.load(Ordering::SeqCst) {
@@ -249,11 +302,18 @@ impl ProcessRunner for FakeAidp {
 struct Script {
     reviews: Vec<&'static str>,
     tests: Vec<bool>,
-    /// The first `implement` session stays live this long.
-    implement_hold: Option<Duration>,
+    /// The first session of this stage (`implement` or `test`) stays live this long.
+    hold: Option<(&'static str, Duration)>,
 }
 
 impl Script {
+    fn held(&self, call: &Call) -> Behaviour {
+        match (call.nth, self.hold) {
+            (1, Some((stage, hold))) if stage == call.label => Behaviour::ok().hold(hold),
+            _ => Behaviour::ok(),
+        }
+    }
+
     fn behaviour(&self, call: &Call) -> Behaviour {
         let result = |value: Value| {
             std::fs::create_dir_all(&call.stage_dir).unwrap();
@@ -271,10 +331,7 @@ impl Script {
                 )
                 .unwrap();
                 result(json!({ "pr": PR_NUMBER, "branch": "feat/x", "summary": "implemented" }));
-                match (call.nth, self.implement_hold) {
-                    (1, Some(hold)) => Behaviour::ok().hold(hold),
-                    _ => Behaviour::ok(),
-                }
+                self.held(call)
             }
             "review" => {
                 let verdict = self.reviews[pick(self.reviews.len())];
@@ -288,7 +345,7 @@ impl Script {
             "test" => {
                 let passed = self.tests[pick(self.tests.len())];
                 result(json!({ "passed": passed, "report": "tests" }));
-                Behaviour::ok()
+                self.held(call)
             }
             other => panic!("unexpected stage {other}"),
         }
@@ -369,6 +426,8 @@ fn world(tag: &str, script: Script, tickets: &[&str]) -> World {
         .unwrap();
     let cli = Arc::new(FakeAidp {
         mock: mock.base_url(),
+        project: workspace.clone(),
+        vault: vault.clone(),
         dirty: AtomicBool::new(false),
         issues,
         verbs: Mutex::new(Vec::new()),
@@ -418,7 +477,7 @@ fn world(tag: &str, script: Script, tickets: &[&str]) -> World {
     let engine = FlowEngine::new(
         vault,
         state_dir,
-        Registry::with_builtins(),
+        registry_with_pr(),
         ports,
         FlowEngineConfig::default(),
     );
@@ -444,6 +503,14 @@ fn world(tag: &str, script: Script, tickets: &[&str]) -> World {
 
 impl World {
     fn start(&self, key: &str) {
+        self.start_flow(key, DEV_FLOW);
+    }
+
+    fn start_test(&self, key: &str) {
+        self.start_flow(key, TEST_FLOW);
+    }
+
+    fn start_flow(&self, key: &str, flow: &str) {
         let number = self.cli.issues[key];
         let ticket = json!({
             "key": key, "service": self.project_id, "summary": "game feature",
@@ -459,7 +526,7 @@ impl World {
             ..TicketFlowRequest::default()
         };
         self.engine
-            .start_request_with_def(request, FlowDef::from_yaml(FLOW).unwrap())
+            .start_request_with_def(request, FlowDef::from_yaml(flow).unwrap())
             .expect("the flow starts");
     }
 
@@ -536,32 +603,80 @@ fn status_of(state: &FlowState, step: &str) -> StepStatus {
 }
 
 #[test]
-fn happy_path_runs_every_step_and_leaves_one_state_label_at_a_time() {
+fn dev_flow_stops_at_to_test_and_never_touches_the_main_checkout() {
     let world = world(
-        "game-code-happy",
+        "game-code-dev",
         Script {
             reviews: vec!["need-fix", "done"],
-            tests: vec![false, true],
-            implement_hold: None,
+            tests: vec![true],
+            hold: None,
         },
         &["GH-1"],
     );
     world.start("GH-1");
+    let done = world.wait("the end", |state| state.status == FlowStatus::Done, "GH-1");
+
+    assert_eq!(
+        world.provider.labels(),
+        ["implement", "review", "fix", "review"],
+        "no Unity test in the dev lane"
+    );
+    assert_eq!(
+        world.cli.labels_in_order(),
+        [
+            "aidp:in-progress",
+            "aidp:review",
+            "aidp:review",
+            "aidp:to-test"
+        ]
+    );
+    assert_eq!(world.mock_labels("GH-1"), ["aidp:to-test"]);
+    let verbs = world.cli.verbs();
+    let position = |wanted: &str| verbs.iter().position(|verb| verb == wanted).unwrap();
+    assert_eq!(position("label:aidp:in-progress"), 0);
+    assert!(position("worktree:GH-1") < position("branch:GH-1"));
+    assert!(position("label:aidp:to-test") < position("worktree-remove:GH-1"));
+    for forbidden in ["checkout:GH-1", "restore:GH-1"] {
+        assert!(!verbs.contains(&forbidden.to_string()), "{verbs:?}");
+    }
+    assert!(
+        !verbs
+            .iter()
+            .any(|verb| verb.starts_with("pr-ready") || verb.starts_with("pr-merge")),
+        "nothing is made ready or merged by the dev lane: {verbs:?}"
+    );
+    let comments = world.comments("GH-1");
+    assert_eq!(comments.len(), 2, "comments: {comments:?}");
+    assert!(comments[0].starts_with("Revue unity-review : need-fix"));
+    assert!(comments[1].starts_with("Revue unity-review : done"));
+    assert_eq!(status_of(&done, "to_test"), StepStatus::Done);
+    assert_eq!(status_of(&done, "clean"), StepStatus::Done);
+    assert_eq!(status_of(&done, "review_exhausted"), StepStatus::Skipped);
+    let (holder, _) = world
+        .engine
+        .executor()
+        .resources()
+        .snapshot(&format!("unity-editor:{}", world.project_id));
+    assert!(holder.is_none(), "the dev lane never holds the editor");
+    world.finish();
+}
+
+#[test]
+fn test_flow_runs_the_test_loop_then_the_merge_in_the_main_checkout() {
+    let world = world(
+        "game-test-code-happy",
+        Script {
+            reviews: vec!["done"],
+            tests: vec![false, true],
+            hold: None,
+        },
+        &["GH-1"],
+    );
+    world.start_test("GH-1");
     let gate = world.wait_gate("GH-1");
 
     assert_eq!(gate.status, FlowStatus::WaitingHuman);
-    assert_eq!(
-        world.provider.labels(),
-        [
-            "implement",
-            "review",
-            "fix",
-            "review",
-            "test",
-            "fix",
-            "test"
-        ]
-    );
+    assert_eq!(world.provider.labels(), ["test", "fix", "test"]);
     assert_eq!(world.mock_labels("GH-1"), ["aidp:awaiting-merge"]);
     assert!(
         !world
@@ -581,9 +696,6 @@ fn happy_path_runs_every_step_and_leaves_one_state_label_at_a_time() {
     assert_eq!(
         world.cli.labels_in_order(),
         [
-            "aidp:in-progress",
-            "aidp:review",
-            "aidp:review",
             "aidp:testing",
             "aidp:testing",
             "aidp:awaiting-merge",
@@ -604,50 +716,41 @@ fn happy_path_runs_every_step_and_leaves_one_state_label_at_a_time() {
 
     let verbs = world.cli.verbs();
     let position = |wanted: &str| verbs.iter().position(|verb| verb == wanted).unwrap();
-    assert!(position(&format!("pr-ready:{PR_NUMBER}")) < position("label:aidp:awaiting-merge"));
-    assert!(
-        position("label:aidp:awaiting-merge")
-            < position(&format!("pr-merge:{PR_NUMBER}:{HEAD_SHA}"))
+    assert_eq!(
+        position("checkout:GH-1"),
+        0,
+        "the checkout is the first verb"
     );
+    assert!(position(&format!("pr-ready:{PR_NUMBER}")) < position("label:aidp:awaiting-merge"));
+    assert!(position("restore:GH-1") < position(&format!("pr-merge:{PR_NUMBER}:{HEAD_SHA}")));
     assert!(position(&format!("pr-merge:{PR_NUMBER}:{HEAD_SHA}")) < position("label:aidp:done"));
+    assert_eq!(
+        verbs.iter().filter(|verb| *verb == "restore:GH-1").count(),
+        1,
+        "the daemon does not restore a second time"
+    );
+    assert!(
+        !verbs.iter().any(|verb| verb.starts_with("worktree")),
+        "no worktree in the test lane: {verbs:?}"
+    );
 
     let comments = world.comments("GH-1");
-    assert_eq!(comments.len(), 4, "comments: {comments:?}");
+    assert_eq!(comments.len(), 2, "comments: {comments:?}");
     for (comment, expected) in comments.iter().zip([
-        "Revue unity-review : need-fix",
-        "Revue unity-review : done",
         "Test unity-test : passed=false",
         "Test unity-test : passed=true",
     ]) {
         assert!(comment.starts_with(expected), "{comment:?} vs {expected:?}");
         assert!(comment.contains(COST_LINE), "cost footer in {comment:?}");
     }
-
-    let first = |wanted: &str| position(wanted);
-    assert_eq!(first("checkout:GH-1"), 0, "the checkout is the first verb");
-    assert!(first("checkout:GH-1") < position("label:aidp:in-progress"));
-    assert!(
-        position("restore:GH-1") < position(&format!("pr-merge:{PR_NUMBER}:{HEAD_SHA}")),
-        "the checkout is given back before the merge"
-    );
-    assert_eq!(
-        verbs.iter().filter(|verb| *verb == "restore:GH-1").count(),
-        1,
-        "the daemon does not restore a second time"
-    );
     let (holder, _) = world
         .engine
         .executor()
         .resources()
         .snapshot(&format!("unity-editor:{}", world.project_id));
     assert!(holder.is_none(), "the lock is released");
-
-    assert_eq!(done.steps["review"].outputs["verdict"], json!("done"));
     assert_eq!(done.steps["test"].outputs["passed"], json!(true));
-    assert_eq!(status_of(&done, "fix"), StepStatus::Skipped);
     assert_eq!(status_of(&done, "fix_test"), StepStatus::Skipped);
-    assert_eq!(status_of(&done, "review_exhausted"), StepStatus::Skipped);
-    assert_eq!(status_of(&done, "review_escalate"), StepStatus::Skipped);
     assert_eq!(status_of(&done, "test_exhausted"), StepStatus::Skipped);
     assert_eq!(status_of(&done, "merge"), StepStatus::Done);
     assert_eq!(status_of(&done, "checkout_stop"), StepStatus::Skipped);
@@ -661,7 +764,7 @@ fn exhausted_review_loop_blocks_the_issue_and_escalates() {
         Script {
             reviews: vec!["need-fix"],
             tests: vec![true],
-            implement_hold: None,
+            hold: None,
         },
         &["GH-1"],
     );
@@ -674,7 +777,7 @@ fn exhausted_review_loop_blocks_the_issue_and_escalates() {
 
     assert_eq!(status_of(&state, "review_exhausted"), StepStatus::Done);
     assert_eq!(status_of(&state, "review_escalate"), StepStatus::Escalated);
-    assert_eq!(status_of(&state, "test_loop"), StepStatus::Pending);
+    assert_eq!(status_of(&state, "to_test"), StepStatus::Pending);
     assert_eq!(world.mock_labels("GH-1"), ["aidp:blocked"]);
     assert_eq!(
         world.cli.labels_in_order(),
@@ -686,21 +789,35 @@ fn exhausted_review_loop_blocks_the_issue_and_escalates() {
         ]
     );
     assert_eq!(
-        world
-            .provider
-            .labels()
-            .iter()
-            .filter(|label| *label == "review")
-            .count(),
-        2,
-        "the loop stops after max_review_rounds reviews"
-    );
-    assert_eq!(
         world.provider.labels(),
         ["implement", "review", "fix", "review", "fix"],
         "the last fix of an exhausted loop runs without a review after it"
     );
     assert_eq!(state.steps["review"].outputs["verdict"], json!("need-fix"));
+    world.finish();
+}
+
+#[test]
+fn exhausted_test_loop_blocks_the_issue_and_gives_the_checkout_back() {
+    let world = world(
+        "game-test-code-exhausted",
+        Script {
+            reviews: vec!["done"],
+            tests: vec![false],
+            hold: None,
+        },
+        &["GH-1"],
+    );
+    world.start_test("GH-1");
+    let state = world.wait(
+        "the escalation",
+        |state| state.status == FlowStatus::Escalated,
+        "GH-1",
+    );
+
+    assert_eq!(status_of(&state, "test_escalate"), StepStatus::Escalated);
+    assert_eq!(world.provider.labels(), ["test", "fix", "test", "fix"]);
+    assert_eq!(world.mock_labels("GH-1"), ["aidp:blocked"]);
     let deadline = Instant::now() + SETTLE;
     while !world.cli.verbs().contains(&"restore:GH-1".to_string()) {
         assert!(
@@ -729,27 +846,24 @@ fn exhausted_review_loop_blocks_the_issue_and_escalates() {
 }
 
 #[test]
-fn second_game_flow_waits_for_the_unity_editor_then_runs() {
+fn second_test_flow_waits_for_the_unity_editor_then_runs() {
     let world = world(
-        "game-code-lock",
+        "game-test-code-lock",
         Script {
             reviews: vec!["done"],
             tests: vec![true],
-            implement_hold: Some(Duration::from_millis(6000)),
+            hold: Some(("test", Duration::from_millis(6000))),
         },
         &["GH-1", "GH-2"],
     );
     let resource = format!("unity-editor:{}", world.project_id);
-    world.start("GH-1");
+    world.start_test("GH-1");
     world.wait(
-        "the first implement",
-        |state| {
-            step_is(state, "implement", StepStatus::Running)
-                && world.provider.count("implement") == 1
-        },
+        "the first test",
+        |state| step_is(state, "test", StepStatus::Running) && world.provider.count("test") == 1,
         "GH-1",
     );
-    world.start("GH-2");
+    world.start_test("GH-2");
     let waiting = world.wait(
         "the second flow to wait",
         |state| step_is(state, "checkout", StepStatus::WaitingExternal),
@@ -763,16 +877,21 @@ fn second_game_flow_waits_for_the_unity_editor_then_runs() {
     let (holder, queue) = world.engine.executor().resources().snapshot(&resource);
     assert_eq!(holder.unwrap().flow_key, "GH-1");
     assert_eq!(queue, ["GH-2"]);
+    let (_, held) = world.engine.lane_load();
     assert_eq!(
-        world.provider.count("implement"),
+        held.values().sum::<usize>(),
+        2,
+        "both count in the test lane of the project"
+    );
+    assert_eq!(
+        world.provider.count("test"),
         1,
-        "the second pipeline did not start"
+        "the second test did not start"
     );
 
     world.wait_gate("GH-1");
     let second = world.wait_gate("GH-2");
-    assert_eq!(world.provider.count("implement"), 2);
-    assert_eq!(status_of(&second, "implement"), StepStatus::Done);
+    assert_eq!(world.provider.count("test"), 2);
     let first_end = world.state("GH-1").steps["restore"]
         .finished_at
         .clone()
@@ -781,6 +900,11 @@ fn second_game_flow_waits_for_the_unity_editor_then_runs() {
     assert!(first_end <= second_start, "{first_end} then {second_start}");
     let (holder, queue) = world.engine.executor().resources().snapshot(&resource);
     assert!(holder.is_none() && queue.is_empty(), "the lock is released");
+    let (_, held) = world.engine.lane_load();
+    assert!(
+        held.is_empty(),
+        "past the restore a flow waiting for the merge no longer holds the lane: {held:?}"
+    );
 
     for key in ["GH-1", "GH-2"] {
         world.engine.approve(key, "merge_approval", "test").unwrap();
@@ -791,18 +915,63 @@ fn second_game_flow_waits_for_the_unity_editor_then_runs() {
 }
 
 #[test]
-fn dirty_main_checkout_blocks_the_issue_and_escalates() {
+fn dev_flows_run_in_parallel_and_a_test_flow_runs_beside_them() {
     let world = world(
-        "game-code-dirty",
+        "game-code-parallel",
         Script {
             reviews: vec!["done"],
             tests: vec![true],
-            implement_hold: None,
+            hold: Some(("implement", Duration::from_millis(8000))),
+        },
+        &["GH-1", "GH-2", "GH-3"],
+    );
+    world.start("GH-1");
+    world.wait(
+        "the first implement",
+        |state| step_is(state, "implement", StepStatus::Running),
+        "GH-1",
+    );
+    world.start("GH-2");
+    world.wait(
+        "the second implement beside the first",
+        |state| step_is(state, "implement", StepStatus::Running),
+        "GH-2",
+    );
+    world.start_test("GH-3");
+    world.wait(
+        "the test flow beside the dev flows",
+        |state| step_is(state, "test", StepStatus::Done),
+        "GH-3",
+    );
+    let (dev, test) = world.engine.lane_load();
+    assert_eq!(dev, 2);
+    assert_eq!(test.values().sum::<usize>(), 1);
+    for key in ["GH-1", "GH-2"] {
+        world.wait("the dev end", |state| state.status == FlowStatus::Done, key);
+        assert_eq!(world.mock_labels(key), ["aidp:to-test"]);
+    }
+    world.wait_gate("GH-3");
+    world
+        .engine
+        .approve("GH-3", "merge_approval", "test")
+        .unwrap();
+    world.wait("the end", |state| state.status == FlowStatus::Done, "GH-3");
+    world.finish();
+}
+
+#[test]
+fn dirty_main_checkout_blocks_the_test_and_escalates() {
+    let world = world(
+        "game-test-code-dirty",
+        Script {
+            reviews: vec!["done"],
+            tests: vec![true],
+            hold: None,
         },
         &["GH-1"],
     );
     world.cli.dirty.store(true, Ordering::SeqCst);
-    world.start("GH-1");
+    world.start_test("GH-1");
     let state = world.wait(
         "the escalation",
         |state| state.status == FlowStatus::Escalated,
@@ -811,7 +980,7 @@ fn dirty_main_checkout_blocks_the_issue_and_escalates() {
 
     assert_eq!(status_of(&state, "checkout"), StepStatus::Done);
     assert_eq!(status_of(&state, "checkout_stop"), StepStatus::Escalated);
-    assert_eq!(status_of(&state, "claim"), StepStatus::Pending);
+    assert_eq!(status_of(&state, "test_loop"), StepStatus::Pending);
     assert_eq!(world.mock_labels("GH-1"), ["aidp:blocked"]);
     assert_eq!(world.cli.labels_in_order(), ["aidp:blocked"]);
     let comments = world.comments("GH-1");

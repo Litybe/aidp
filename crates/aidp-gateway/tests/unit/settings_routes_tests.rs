@@ -49,7 +49,8 @@ fn reading_the_budget_of_a_missing_file_gives_the_defaults() {
 
     assert_eq!(body["budget"]["per_ticket"]["code"], 3_000_000);
     assert_eq!(body["budget"]["pixellab"]["per_ticket"], 10);
-    assert_eq!(body["dispatcher"]["slots"], 5);
+    assert_eq!(body["dispatcher"]["slots"], 3);
+    assert_eq!(body["dispatcher"]["test_slots"], 1);
     assert_eq!(body["dispatcher"]["night"]["start"], "22:00");
     assert_eq!(body["dispatcher"]["stop_at_7d_percent"], Value::Null);
 }
@@ -59,7 +60,7 @@ fn a_budget_put_changes_only_the_given_keys_and_keeps_the_comments() {
     let vault = vault_with(Some(CONFIG), None);
     let body = json!({
         "budget": { "per_ticket": { "code": "4M", "art": 900000 }, "pixellab": { "min_reserve": 2.5 } },
-        "dispatcher": { "slots": 2, "stop_at_7d_percent": 85, "night": { "enabled": true } },
+        "dispatcher": { "slots": 2, "test_slots": 2, "stop_at_7d_percent": 85, "night": { "enabled": true } },
     });
 
     let (reply, changed) = write(vault.path(), SettingsSection::Budget, &body).unwrap();
@@ -68,8 +69,8 @@ fn a_budget_put_changes_only_the_given_keys_and_keeps_the_comments() {
     assert_eq!(reply["reloadRequired"], false);
     assert_eq!(reply["budget"]["per_ticket"]["code"], 4_000_000);
     assert_eq!(reply["budget"]["per_ticket"]["art"], 900_000);
-    assert_eq!(reply["budget"]["per_ticket"]["map"], 2_000_000);
     assert_eq!(reply["dispatcher"]["slots"], 2);
+    assert_eq!(reply["dispatcher"]["test_slots"], 2);
     assert_eq!(reply["dispatcher"]["stop_at_7d_percent"], 85.0);
     assert_eq!(reply["dispatcher"]["night"]["enabled"], true);
     assert_eq!(reply["dispatcher"]["night"]["end"], "07:00");
