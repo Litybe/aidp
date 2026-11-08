@@ -853,7 +853,7 @@ pub fn pipeline_start_request(launch: &PipelineLaunch) -> StartRequest {
         }),
         auto_approve_gates: launch.auto_approve_gates.clone(),
         inputs_file: Some(launch.inputs_file.to_string_lossy().to_string()),
-        worktree: Some(launch.key.clone()),
+        worktree: (!launch.project_checkout).then(|| launch.key.clone()),
         engine: launch.engine.map(|engine| engine.as_str().to_string()),
         agent_executor: launch.agent_executor,
         env,

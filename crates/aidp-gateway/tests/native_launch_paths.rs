@@ -507,6 +507,7 @@ fn flow_pipeline_step_awaits_a_native_run_and_reads_its_outputs() {
         headless: false,
         engine: None,
         agent_executor: AgentExecutor::Internal,
+        project_checkout: false,
     };
 
     let SessionStart::Started(run_id) = port.start(&launch).unwrap() else {

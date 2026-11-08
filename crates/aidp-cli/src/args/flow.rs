@@ -23,6 +23,16 @@ pub enum Op {
         #[arg(value_name = "KEY")]
         key: String,
     },
+    /// Put the main checkout of the project on the ticket branch (created from the base branch when absent). Reports `blocked` when the checkout is dirty.
+    GitCheckout {
+        #[arg(value_name = "KEY")]
+        key: String,
+    },
+    /// Give the main checkout back to the base branch when it is clean; otherwise leave it and comment on the issue.
+    GitRestore {
+        #[arg(value_name = "KEY")]
+        key: String,
+    },
     /// Publish the worktree's branch as one commit GitHub signs, through its API: never `git push`.
     GitPush {
         /// Branch the worktree must be on; the current branch when omitted.

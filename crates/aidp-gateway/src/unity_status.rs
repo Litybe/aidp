@@ -176,7 +176,7 @@ fn newest_json(dir: &Path) -> Option<(Value, SystemTime)> {
         .collect();
     files.sort_by_key(|(_, modified)| std::cmp::Reverse(*modified));
     files.into_iter().find_map(|(path, modified)| {
-        let text = std::fs::read_to_string(path).ok()?;
+        let text = aidp_core::text::read_text_lenient(path).ok()?;
         Some((serde_json::from_str(&text).ok()?, modified))
     })
 }

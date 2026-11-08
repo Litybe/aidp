@@ -3,7 +3,8 @@
 use crate::models::constants::agent_jobs::HOST_SESSION_DIR;
 use crate::models::constants::task_scope::{
     COPY_MARKER, HEAD_REF, NUL_SEPARATED_FLAG, NUL_SEPARATOR, PORCELAIN_FLAG, RENAME_MARKER,
-    REV_PARSE_ARG, STATUS_ARG, STATUS_CODE_WIDTH, STATUS_PREFIX_WIDTH, UNTRACKED_ALL_FLAG,
+    REV_PARSE_ARG, STATUS_ARG, STATUS_CODE_WIDTH, STATUS_PREFIX_WIDTH, UNITY_EDITOR_OWNED,
+    UNITY_PROJECT_MARKER, UNTRACKED_ALL_FLAG,
 };
 use crate::models::scope_baseline::ScopeBaseline;
 use crate::models::scope_verdict::ScopeVerdict;
@@ -47,6 +48,20 @@ pub(crate) fn is_exempt(path: &str, exempt_prefix: Option<&str>) -> bool {
     is_under(path, HOST_SESSION_DIR) || exempt_prefix.is_some_and(|prefix| is_under(path, prefix))
 }
 
+/// True when `workspace` is a Unity project and `path` is a file the editor rewrites by itself.
+fn is_editor_owned(workspace: &Path, path: &str) -> bool {
+    workspace.join(UNITY_PROJECT_MARKER).is_file()
+        && UNITY_EDITOR_OWNED.iter().any(|entry| {
+            if let Some(suffix) = entry.strip_prefix('*') {
+                path.ends_with(suffix)
+            } else if entry.ends_with(GIT_PATH_SEPARATOR) {
+                path.starts_with(entry)
+            } else {
+                path == *entry
+            }
+        })
+}
+
 fn is_under(path: &str, prefix: &str) -> bool {
     path == prefix
         || path
@@ -86,6 +101,7 @@ pub fn verify(
         .into_iter()
         .filter(|path| !baseline.dirty_paths.contains(path))
         .filter(|path| !is_exempt(path, baseline.exempt_prefix.as_deref()))
+        .filter(|path| !is_editor_owned(workspace, path))
         .collect();
     let rules = [(String::new(), stage_rules.clone())];
     let mut verdict = ScopeVerdict::default();
@@ -213,6 +229,7 @@ fn dirty_contents(
     dirty_paths(worktree, runner)
         .into_iter()
         .filter(|path| !is_exempt(path, exempt_prefix))
+        .filter(|path| !is_editor_owned(worktree, path))
         .map(|path| {
             let bytes = std::fs::read(worktree.join(&path)).ok();
             (path, bytes)

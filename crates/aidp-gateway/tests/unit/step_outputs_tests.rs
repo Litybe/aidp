@@ -112,3 +112,18 @@ fn pr_number_wins_and_file_paths_move_to_a_file_key() {
     assert_eq!(outputs["findings_file"], json!("/p/findings.json"));
     assert_eq!(outputs["runId"], json!("run-1"));
 }
+
+#[test]
+fn result_json_with_a_utf8_bom_still_gives_outputs() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("last")).unwrap();
+    std::fs::write(
+        dir.path().join("last").join(RESULT_FILE),
+        b"\xEF\xBB\xBF{\"verdict\":\"done\",\"n\":3}",
+    )
+    .unwrap();
+    let stages = json!([row("last", "done", "2026-01-01T00:00:02Z", None)]);
+    let outputs = last_stage_outputs(&view(dir.path(), stages));
+    assert_eq!(outputs["verdict"], json!("done"));
+    assert_eq!(outputs["n"], json!(3));
+}

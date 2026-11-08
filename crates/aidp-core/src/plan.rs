@@ -120,7 +120,7 @@ pub fn load(path: &Path) -> anyhow::Result<Plan> {
             path.display()
         );
     }
-    parse(&text).map_err(|e| anyhow::anyhow!("{} — {e}", path.display()))
+    parse(crate::text::strip_bom(&text)).map_err(|e| anyhow::anyhow!("{} — {e}", path.display()))
 }
 
 /// Same as [`load`] on an in-memory document (used by tests and by callers that

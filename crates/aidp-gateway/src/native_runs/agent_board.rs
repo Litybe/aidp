@@ -142,7 +142,7 @@ fn load(directory: &Path) -> BTreeMap<u32, AgentJobRecord> {
         let (true, Some(seq)) = (is_job, seq) else {
             continue;
         };
-        let parsed = std::fs::read_to_string(&path)
+        let parsed = aidp_core::text::read_text_lenient(&path)
             .map_err(anyhow::Error::from)
             .and_then(|text| Ok(serde_json::from_str::<AgentJobRecord>(&text)?));
         match parsed {

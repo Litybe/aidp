@@ -6,6 +6,7 @@ use std::collections::BTreeMap;
 use std::io::{Cursor, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -45,10 +46,10 @@ const UNITY_REASON: &str = "resource:unity-editor";
 /// verb does), PR verbs are recorded. A `--cost-footer` appends a fixed line.
 struct FakeAidp {
     mock: String,
-    project: PathBuf,
-    vault: PathBuf,
+    /// The main checkout has local changes: `git-checkout` reports `blocked`.
+    dirty: AtomicBool,
     issues: BTreeMap<String, u64>,
-    /// Every verb in call order: `label:<aidp:x>`, `comment:<key>`, `pr-ready:<n>`, `pr-merge:<n>:<sha>`.
+    /// Every verb in call order: `checkout:<key>`, `restore:<key>`, `label:<aidp:x>`, `comment:<key>`, `pr-ready:<n>`, `pr-merge:<n>:<sha>`.
     verbs: Mutex<Vec<String>>,
     /// The `aidp:*` labels the issue showed after each label call.
     snapshots: Mutex<Vec<Vec<String>>>,
@@ -164,28 +165,29 @@ impl FakeAidp {
             .strip_suffix(&["--format", "json-compact"])
             .unwrap_or(&args);
         match args {
-            ["gateway", "worktrees", "ensure", key] => {
-                let repo = aidp_core::vault::repo_segment(&self.project);
-                match aidp_gateway::worktrees::ensure(
-                    &aidp_core::process_runner::OsProcessRunner,
-                    &self.project,
-                    &self.vault,
-                    &repo,
-                    key,
-                    &[],
-                ) {
-                    Ok(ensured) => (
+            ["flow", "git-checkout", key] => {
+                self.verbs.lock().unwrap().push(format!("checkout:{key}"));
+                if self.dirty.load(Ordering::SeqCst) {
+                    let message = "blocked: dirty-checkout. Le checkout principal a des modifications locales sur `main` :
+- `M Assets/Foo.cs`";
+                    return (
                         0,
-                        json!({ "path": ensured.workspace.path, "base_sha": HEAD_SHA, "reused": ensured.reused }),
-                    ),
-                    Err(error) => (1, json!(format!("{error:?}"))),
+                        json!({ "branch": format!("feat/{key}"), "base": "main", "created": false,
+                                "blocked": true, "blocked_reason": "dirty-checkout", "message": message }),
+                    );
                 }
+                (
+                    0,
+                    json!({ "branch": format!("feat/{key}"), "base": "main", "created": true, "blocked": false }),
+                )
             }
-            ["gateway", "worktrees", "remove", _] => (0, json!({ "removed": true })),
-            ["flow", "git-branch", key] => (
-                0,
-                json!({ "branch": format!("feat/{key}"), "created": true }),
-            ),
+            ["flow", "git-restore", key] => {
+                self.verbs.lock().unwrap().push(format!("restore:{key}"));
+                (
+                    0,
+                    json!({ "restored": true, "from": format!("feat/{key}"), "base": "main" }),
+                )
+            }
             ["ticket", "label", key, state] => self.label(key, state),
             ["ticket", "comment", key, rest @ ..] => self.comment(key, rest),
             ["gh", "pr-ready", number] => {
@@ -367,8 +369,7 @@ fn world(tag: &str, script: Script, tickets: &[&str]) -> World {
         .unwrap();
     let cli = Arc::new(FakeAidp {
         mock: mock.base_url(),
-        project: workspace.clone(),
-        vault: vault.clone(),
+        dirty: AtomicBool::new(false),
         issues,
         verbs: Mutex::new(Vec::new()),
         snapshots: Mutex::new(Vec::new()),
@@ -622,6 +623,25 @@ fn happy_path_runs_every_step_and_leaves_one_state_label_at_a_time() {
         assert!(comment.contains(COST_LINE), "cost footer in {comment:?}");
     }
 
+    let first = |wanted: &str| position(wanted);
+    assert_eq!(first("checkout:GH-1"), 0, "the checkout is the first verb");
+    assert!(first("checkout:GH-1") < position("label:aidp:in-progress"));
+    assert!(
+        position("restore:GH-1") < position(&format!("pr-merge:{PR_NUMBER}:{HEAD_SHA}")),
+        "the checkout is given back before the merge"
+    );
+    assert_eq!(
+        verbs.iter().filter(|verb| *verb == "restore:GH-1").count(),
+        1,
+        "the daemon does not restore a second time"
+    );
+    let (holder, _) = world
+        .engine
+        .executor()
+        .resources()
+        .snapshot(&format!("unity-editor:{}", world.project_id));
+    assert!(holder.is_none(), "the lock is released");
+
     assert_eq!(done.steps["review"].outputs["verdict"], json!("done"));
     assert_eq!(done.steps["test"].outputs["passed"], json!(true));
     assert_eq!(status_of(&done, "fix"), StepStatus::Skipped);
@@ -630,6 +650,7 @@ fn happy_path_runs_every_step_and_leaves_one_state_label_at_a_time() {
     assert_eq!(status_of(&done, "review_escalate"), StepStatus::Skipped);
     assert_eq!(status_of(&done, "test_exhausted"), StepStatus::Skipped);
     assert_eq!(status_of(&done, "merge"), StepStatus::Done);
+    assert_eq!(status_of(&done, "checkout_stop"), StepStatus::Skipped);
     world.finish();
 }
 
@@ -680,6 +701,30 @@ fn exhausted_review_loop_blocks_the_issue_and_escalates() {
         "the last fix of an exhausted loop runs without a review after it"
     );
     assert_eq!(state.steps["review"].outputs["verdict"], json!("need-fix"));
+    let deadline = Instant::now() + SETTLE;
+    while !world.cli.verbs().contains(&"restore:GH-1".to_string()) {
+        assert!(
+            Instant::now() < deadline,
+            "the daemon gives the checkout back"
+        );
+        std::thread::sleep(POLL);
+    }
+    let resource = format!("unity-editor:{}", world.project_id);
+    let released = Instant::now() + SETTLE;
+    while world
+        .engine
+        .executor()
+        .resources()
+        .snapshot(&resource)
+        .0
+        .is_some()
+    {
+        assert!(
+            Instant::now() < released,
+            "the lock is released after the escalation"
+        );
+        std::thread::sleep(POLL);
+    }
     world.finish();
 }
 
@@ -707,12 +752,12 @@ fn second_game_flow_waits_for_the_unity_editor_then_runs() {
     world.start("GH-2");
     let waiting = world.wait(
         "the second flow to wait",
-        |state| step_is(state, "implement", StepStatus::WaitingExternal),
+        |state| step_is(state, "checkout", StepStatus::WaitingExternal),
         "GH-2",
     );
 
     assert_eq!(
-        waiting.steps["implement"].reason.as_deref(),
+        waiting.steps["checkout"].detail.as_deref(),
         Some(UNITY_REASON)
     );
     let (holder, queue) = world.engine.executor().resources().snapshot(&resource);
@@ -724,15 +769,15 @@ fn second_game_flow_waits_for_the_unity_editor_then_runs() {
         "the second pipeline did not start"
     );
 
-    let second = world.wait_gate("GH-2");
     world.wait_gate("GH-1");
+    let second = world.wait_gate("GH-2");
     assert_eq!(world.provider.count("implement"), 2);
     assert_eq!(status_of(&second, "implement"), StepStatus::Done);
-    let first_end = world.state("GH-1").steps["implement"]
+    let first_end = world.state("GH-1").steps["restore"]
         .finished_at
         .clone()
         .unwrap();
-    let second_start = second.steps["implement"].started_at.clone().unwrap();
+    let second_start = second.steps["checkout"].started_at.clone().unwrap();
     assert!(first_end <= second_start, "{first_end} then {second_start}");
     let (holder, queue) = world.engine.executor().resources().snapshot(&resource);
     assert!(holder.is_none() && queue.is_empty(), "the lock is released");
@@ -742,6 +787,41 @@ fn second_game_flow_waits_for_the_unity_editor_then_runs() {
         world.wait("the end", |state| state.status == FlowStatus::Done, key);
         assert_eq!(world.mock_labels(key), ["aidp:done"]);
     }
+    world.finish();
+}
+
+#[test]
+fn dirty_main_checkout_blocks_the_issue_and_escalates() {
+    let world = world(
+        "game-code-dirty",
+        Script {
+            reviews: vec!["done"],
+            tests: vec![true],
+            implement_hold: None,
+        },
+        &["GH-1"],
+    );
+    world.cli.dirty.store(true, Ordering::SeqCst);
+    world.start("GH-1");
+    let state = world.wait(
+        "the escalation",
+        |state| state.status == FlowStatus::Escalated,
+        "GH-1",
+    );
+
+    assert_eq!(status_of(&state, "checkout"), StepStatus::Done);
+    assert_eq!(status_of(&state, "checkout_stop"), StepStatus::Escalated);
+    assert_eq!(status_of(&state, "claim"), StepStatus::Pending);
+    assert_eq!(world.mock_labels("GH-1"), ["aidp:blocked"]);
+    assert_eq!(world.cli.labels_in_order(), ["aidp:blocked"]);
+    let comments = world.comments("GH-1");
+    assert_eq!(comments.len(), 1, "comments: {comments:?}");
+    assert!(
+        comments[0].starts_with("blocked: dirty-checkout"),
+        "{comments:?}"
+    );
+    assert!(comments[0].contains("Assets/Foo.cs"), "{comments:?}");
+    assert!(world.provider.labels().is_empty(), "no pipeline ran");
     world.finish();
 }
 

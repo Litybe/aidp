@@ -4,6 +4,8 @@ pub const ACTION_NOOP: &str = "noop";
 pub const ACTION_FAIL: &str = "fail";
 pub const ACTION_GIT_WORKTREE: &str = "git.worktree";
 pub const ACTION_GIT_BRANCH: &str = "git.branch";
+pub const ACTION_GIT_CHECKOUT: &str = "git.checkout";
+pub const ACTION_GIT_RESTORE: &str = "git.restore";
 pub const ACTION_GIT_PUSH: &str = "git.push";
 pub const ACTION_GH_PR_CREATE: &str = "gh.pr_create";
 pub const ACTION_GH_PR_READY: &str = "gh.pr_ready";
@@ -14,6 +16,8 @@ pub const ACTION_WORKTREE_REMOVE: &str = "worktree.remove";
 
 pub const VERB_FLOW: &str = "flow";
 pub const VERB_FLOW_GIT_BRANCH: &str = "git-branch";
+pub const VERB_FLOW_GIT_CHECKOUT: &str = "git-checkout";
+pub const VERB_FLOW_GIT_RESTORE: &str = "git-restore";
 pub const VERB_FLOW_GIT_PUSH: &str = "git-push";
 pub const VERB_FLOW_PR_CREATE: &str = "pr-create";
 pub const VERB_GATEWAY: &str = "gateway";

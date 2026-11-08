@@ -52,7 +52,8 @@ fn stage_dir(view: &NativeRunView, name: &str) -> PathBuf {
 }
 
 fn read_object(path: &std::path::Path) -> Option<Map<String, Value>> {
-    let value: Value = serde_json::from_str(&std::fs::read_to_string(path).ok()?).ok()?;
+    let value: Value =
+        serde_json::from_str(&aidp_core::text::read_text_lenient(path).ok()?).ok()?;
     match value {
         Value::Object(map) => Some(map),
         _ => None,

@@ -243,7 +243,7 @@ pub fn parse_resume_anchor(raw: &str) -> anyhow::Result<ResumeAnchor> {
 pub fn read_resume_anchor(run_dir: &Path) -> anyhow::Result<Option<ResumeAnchor>> {
     use anyhow::Context;
     let path = run_dir.join(WORKFLOW_RESULT_FILE);
-    let raw = match std::fs::read_to_string(&path) {
+    let raw = match crate::text::read_text_lenient(&path) {
         Ok(raw) => raw,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(error) => {

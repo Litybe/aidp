@@ -78,7 +78,7 @@ impl MemoryManager<'_> {
         let mut report = IngestReport::default();
         for file in files {
             report.files += 1;
-            let outcome = std::fs::read_to_string(&file)
+            let outcome = aidp_core::text::read_text_lenient(&file)
                 .map_err(MemoryError::from)
                 .and_then(|content| parse(&content))
                 .and_then(|drafts| self.add_all(project, drafts));

@@ -100,7 +100,7 @@ pub fn balance_amount(raw: &Value) -> Option<f64> {
 
 /// Reads one usage file; `None` when it is missing or not the expected JSON.
 pub fn read_usage_file(path: &Path) -> Option<PixellabUsageFile> {
-    serde_json::from_str(&std::fs::read_to_string(path).ok()?).ok()
+    serde_json::from_str(&aidp_core::text::read_text_lenient(path).ok()?).ok()
 }
 
 fn collect_files(dir: &Path, depth: usize, found: &mut Vec<PathBuf>) {

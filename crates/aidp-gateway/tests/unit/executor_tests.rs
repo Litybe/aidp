@@ -1303,6 +1303,7 @@ fn manager_sessions_start_a_flow_origin_session_in_the_ticket_workspace() {
         headless: false,
         engine: Some(Engine::Workflow),
         agent_executor: crate::models::enums::agent_executor::AgentExecutor::Internal,
+        project_checkout: false,
     };
     let SessionStart::Started(session_id) = port.start(&launch).unwrap() else {
         panic!("expected a started session");

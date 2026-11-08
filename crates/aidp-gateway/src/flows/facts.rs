@@ -86,7 +86,8 @@ pub fn parse_artifact(value: &Value) -> PrArtifact {
 }
 
 fn read_artifact(path: &Path) -> Option<PrArtifact> {
-    let value: Value = serde_json::from_str(&std::fs::read_to_string(path).ok()?).ok()?;
+    let value: Value =
+        serde_json::from_str(&aidp_core::text::read_text_lenient(path).ok()?).ok()?;
     Some(parse_artifact(&value))
 }
 

@@ -88,6 +88,76 @@ fn an_output_for_another_file_still_misses_the_declared_output() {
     assert!(matches!(err, NativeReplyError::MissingOutput(name) if name == OUTPUT_REPORT));
 }
 
+fn reply_with_keys(dir: &tempfile::TempDir, keys: &[&str]) {
+    let outputs: Vec<String> = keys.iter().map(|k| format!(r#""{k}":"x""#)).collect();
+    let reply = format!(
+        r#"{{"status":"completed","summary":"s","outputs":{{{}}},"signals":{{}}}}"#,
+        outputs.join(",")
+    );
+    std::fs::write(dir.path().join(REPLY_FILE), reply).unwrap();
+}
+
+#[test]
+fn underscore_key_answers_for_dashed_declared_output() {
+    let dir = tempfile::tempdir().unwrap();
+    reply_with_keys(&dir, &["context", "memory_context"]);
+    let declared = vec!["context".to_string(), "memory-context".to_string()];
+    let envelope = read_reply(dir.path(), AgentRole::Analyzer, &declared).unwrap();
+    assert!(envelope.outputs.contains_key("memory-context"));
+    assert!(!envelope.outputs.contains_key("memory_context"));
+}
+
+#[test]
+fn underscore_key_with_other_case_and_extension_answers_for_dashed_output() {
+    let dir = tempfile::tempdir().unwrap();
+    reply_with_keys(&dir, &["Pixellab_Usage.json"]);
+    let declared = vec!["pixellab-usage".to_string()];
+    let envelope = read_reply(dir.path(), AgentRole::Analyzer, &declared).unwrap();
+    assert_eq!(
+        envelope.outputs.get("pixellab-usage").map(String::as_str),
+        Some("x")
+    );
+}
+
+#[test]
+fn declared_file_name_with_extension_matches_underscore_key() {
+    let dir = tempfile::tempdir().unwrap();
+    reply_with_keys(&dir, &["pixellab_usage"]);
+    let declared = vec!["pixellab-usage.json".to_string()];
+    let envelope = read_reply(dir.path(), AgentRole::Analyzer, &declared).unwrap();
+    assert!(envelope.outputs.contains_key("pixellab-usage.json"));
+}
+
+#[test]
+fn non_empty_file_without_key_is_accepted() {
+    let dir = tempfile::tempdir().unwrap();
+    reply_with_keys(&dir, &["other"]);
+    std::fs::write(dir.path().join("memory-context.md"), "notes").unwrap();
+    let declared = vec!["memory-context".to_string()];
+    let envelope = read_reply(dir.path(), AgentRole::Analyzer, &declared).unwrap();
+    let path = envelope.outputs.get("memory-context").unwrap();
+    assert!(path.ends_with("memory-context.md"));
+}
+
+#[test]
+fn empty_file_without_key_is_rejected() {
+    let dir = tempfile::tempdir().unwrap();
+    reply_with_keys(&dir, &["other"]);
+    std::fs::write(dir.path().join("memory-context.md"), "").unwrap();
+    let declared = vec!["memory-context".to_string()];
+    let err = read_reply(dir.path(), AgentRole::Analyzer, &declared).unwrap_err();
+    assert!(matches!(err, NativeReplyError::MissingOutput(n) if n == "memory-context"));
+}
+
+#[test]
+fn absent_file_without_key_is_rejected() {
+    let dir = tempfile::tempdir().unwrap();
+    reply_with_keys(&dir, &["other"]);
+    let declared = vec!["memory-context".to_string()];
+    let err = read_reply(dir.path(), AgentRole::Analyzer, &declared).unwrap_err();
+    assert!(matches!(err, NativeReplyError::MissingOutput(n) if n == "memory-context"));
+}
+
 #[test]
 fn repair_instruction_names_the_error() {
     let text = repair_instruction(&NativeReplyError::MissingOutput("plan".into()));
@@ -134,4 +204,16 @@ fn an_output_path_with_decoded_backslash_escapes_is_restored() {
         envelope.outputs.get(OUTPUT_REPORT).map(String::as_str),
         Some(expected.as_str())
     );
+}
+
+#[test]
+fn reply_with_a_utf8_bom_is_accepted() {
+    let dir = tempfile::tempdir().unwrap();
+    let source =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/tests/fixtures/native_reply/valid.md");
+    let mut bytes = b"\xEF\xBB\xBF".to_vec();
+    bytes.extend(std::fs::read(source).unwrap());
+    std::fs::write(dir.path().join(REPLY_FILE), bytes).unwrap();
+    let envelope = read_reply(dir.path(), AgentRole::Reviewer, &declared()).unwrap();
+    assert_eq!(envelope.status, "completed");
 }

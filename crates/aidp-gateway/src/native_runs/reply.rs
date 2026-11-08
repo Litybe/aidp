@@ -39,7 +39,7 @@ pub fn read_reply(
     if !reply_path.is_file() {
         return Err(NativeReplyError::Missing(reply_path));
     }
-    let text = std::fs::read_to_string(&reply_path)
+    let text = aidp_core::text::read_text_lenient(&reply_path)
         .map_err(|e| NativeReplyError::Unreadable(e.to_string()))?;
     let value = extract_json(&text)?;
     validate_schema(&value)?;
@@ -49,31 +49,75 @@ pub fn read_reply(
     let mut envelope: NativeReplyEnvelope = serde_json::from_value(value)
         .map_err(|e| NativeReplyError::SchemaViolation(e.to_string()))?;
     name_outputs_as_declared(&mut envelope, declared_outputs);
+    adopt_outputs_found_on_disk(&mut envelope, declared_outputs, stage_dir);
     restore_escaped_backslashes(&mut envelope);
     validate_outputs(&envelope, declared_outputs)?;
     Ok(envelope)
 }
 
-/// Files the stage writes as `study.md` answer for the declared output `study`.
-/// Templates list outputs with their extension, so agents key them that way;
+/// Output key used to compare a reply key with a declared output: file stem,
+/// lowercase, `_` and `-` equivalent (`memory_context` == `memory-context.md`).
+fn normalize_output_key(key: &str) -> String {
+    Path::new(key)
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .unwrap_or(key)
+        .to_lowercase()
+        .replace('_', "-")
+}
+
+/// A reply key answers for a declared output when both normalize to the same name
+/// (`study.md` for `study`, `memory_context` for `memory-context`). The declared name
+/// stays the canonical key. Agents rarely echo the declared name byte for byte;
 /// rejecting such a reply cost a second session that only renamed the key.
 fn name_outputs_as_declared(envelope: &mut NativeReplyEnvelope, declared_outputs: &[String]) {
     for name in declared_outputs {
         if envelope.outputs.contains_key(name) {
             continue;
         }
+        let wanted = normalize_output_key(name);
         let file_key = envelope
             .outputs
             .keys()
-            .find(|key| {
-                Path::new(key.as_str())
-                    .file_stem()
-                    .and_then(|stem| stem.to_str())
-                    == Some(name)
-            })
+            .find(|key| normalize_output_key(key) == wanted)
             .cloned();
         if let Some(value) = file_key.and_then(|key| envelope.outputs.remove(&key)) {
             envelope.outputs.insert(name.clone(), value);
+        }
+    }
+}
+
+/// A declared output the envelope omits is accepted when its file sits non-empty in the stage dir.
+fn adopt_outputs_found_on_disk(
+    envelope: &mut NativeReplyEnvelope,
+    declared_outputs: &[String],
+    stage_dir: &Path,
+) {
+    for name in declared_outputs {
+        if envelope.outputs.contains_key(name) {
+            continue;
+        }
+        let wanted = normalize_output_key(name);
+        let Ok(entries) = std::fs::read_dir(stage_dir) else {
+            return;
+        };
+        let found = entries.flatten().map(|e| e.path()).find(|path| {
+            path.is_file()
+                && path
+                    .file_name()
+                    .and_then(|f| f.to_str())
+                    .is_some_and(|f| f != REPLY_FILE && normalize_output_key(f) == wanted)
+                && std::fs::metadata(path).is_ok_and(|m| m.len() > 0)
+        });
+        if let Some(path) = found {
+            tracing::warn!(
+                output = %name,
+                file = %path.display(),
+                "declared output absent from the reply envelope; accepted from the stage directory"
+            );
+            envelope
+                .outputs
+                .insert(name.clone(), path.to_string_lossy().into_owned());
         }
     }
 }

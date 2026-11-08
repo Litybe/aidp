@@ -25,4 +25,6 @@ pub struct PipelineLaunch {
     pub engine: Option<Engine>,
     /// Who launches the agent sessions of the run.
     pub agent_executor: AgentExecutor,
+    /// True when the run works in the project's main checkout (flow `workspace: project`): no worktree.
+    pub project_checkout: bool,
 }

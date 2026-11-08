@@ -90,6 +90,7 @@ fn pipeline_launch(autonomous: bool) -> PipelineLaunch {
         headless: false,
         engine: None,
         agent_executor: AgentExecutor::Internal,
+        project_checkout: false,
     }
 }
 

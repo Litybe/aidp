@@ -114,6 +114,8 @@ A run directory inside the workspace is invisible to the write-scope guards: its
 
 After each writing stage the executor checks the changed files against the stage `scope`. Out-of-scope files are restored and the stage fails. The changed files come from the diff against the stage's starting commit plus `git status --untracked-files=all`, so a folder that was wholly untracked before a stage that commits it is not mistaken for new writes.
 
+In a Unity project (the workspace contains `ProjectSettings/ProjectVersion.txt`) the guards also ignore the files the editor rewrites by itself, the constant `UNITY_EDITOR_OWNED` in `models/constants/task_scope.rs`: `Packages/packages-lock.json`, `ProjectSettings/**`, `UserSettings/**`, `Library/**`, `Temp/**`, `Logs/**`, `obj/**`, `*.csproj`, `*.sln`. They are neither reported nor restored, since an open editor would rewrite them at once. Other out-of-scope files are refused and restored as before; non-Unity projects are unchanged.
+
 ### State and restart
 
 `run-state.json` has the same shape as in workflow mode, plus `mode: "native"`. After a daemon restart:

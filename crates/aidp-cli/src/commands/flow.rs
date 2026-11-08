@@ -23,6 +23,8 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
+mod checkout;
+
 const HTTP_CONFLICT_PREFIX: &str = "HTTP 409";
 const HTTP_NOT_FOUND_PREFIX: &str = "HTTP 404";
 const HTTP_BAD_REQUEST_PREFIX: &str = "HTTP 400";
@@ -39,6 +41,8 @@ pub fn run(ctx: &Ctx, op: Op) -> anyhow::Result<CommandOutput> {
         Op::Validate { path } => validate_file(ctx, &path),
         Op::Show { path } => show_file(ctx, &path),
         Op::GitBranch { key } => git_branch(ctx, &key),
+        Op::GitCheckout { key } => checkout::git_checkout(ctx, &key),
+        Op::GitRestore { key } => checkout::git_restore(ctx, &key),
         Op::GitPush { branch } => git_push(ctx, branch.as_deref()),
         Op::PrCreate {
             key,

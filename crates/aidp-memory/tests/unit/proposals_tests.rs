@@ -129,3 +129,16 @@ fn missing_path_is_not_found() {
     let error = manager.ingest(PROJECT, Path::new("Z:/nope")).unwrap_err();
     assert!(matches!(error, MemoryError::NotFound(_)));
 }
+
+#[test]
+fn file_with_a_utf8_bom_is_ingested() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("memory-proposals.json");
+    let mut bytes = b"\xEF\xBB\xBF".to_vec();
+    bytes.extend(proposal_json(2).into_bytes());
+    std::fs::write(&file, bytes).unwrap();
+    let store = MemoryStore::open_in_memory().unwrap();
+    let manager = MemoryManager::new(&store);
+    let report = manager.ingest(PROJECT, &file).unwrap();
+    assert_eq!((report.created, report.rejected.len()), (2, 0));
+}

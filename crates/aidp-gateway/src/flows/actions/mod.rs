@@ -159,6 +159,18 @@ pub fn register(registry: &mut Registry) {
         SubprocessAction::new([VERB_FLOW, VERB_FLOW_GIT_BRANCH, PLACEHOLDER_KEY_ARG])
             .holding_workspace(),
     );
+    // The main checkout of the project is the workspace of these two (workspace: project): the
+    // executor serializes them with the `unity-editor` resource, not with a worktree lock.
+    register_action(
+        registry,
+        BuiltinAction::GitCheckout,
+        SubprocessAction::new([VERB_FLOW, VERB_FLOW_GIT_CHECKOUT, PLACEHOLDER_KEY_ARG]),
+    );
+    register_action(
+        registry,
+        BuiltinAction::GitRestore,
+        SubprocessAction::new([VERB_FLOW, VERB_FLOW_GIT_RESTORE, PLACEHOLDER_KEY_ARG]),
+    );
     register_action(
         registry,
         BuiltinAction::GitPush,

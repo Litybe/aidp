@@ -302,7 +302,7 @@ pub fn parse(text: &str) -> Result<Findings, LoadError> {
 
 /// Read and validate `path`. Mirrors `plan::load`'s shape.
 pub fn load(path: &Path) -> Result<Findings, LoadError> {
-    let text = std::fs::read_to_string(path)
+    let text = crate::text::read_text_lenient(path)
         .map_err(|e| LoadError::Unreadable(format!("read findings {}: {e}", path.display())))?;
     parse(&text).map_err(|e| e.with_path_prefix(path))
 }

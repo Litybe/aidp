@@ -47,12 +47,16 @@ use std::sync::{Arc, Mutex, RwLock, RwLockReadGuard};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
+#[path = "project_checkout.rs"]
+mod project_checkout;
+
 const LOCK_POLL: Duration = Duration::from_millis(25);
 const FLOWS_ACTION_LOOP: &str = "flows-action";
 const PANIC_MESSAGE: &str = "action panicked";
 const UNKNOWN_ACTION_PREFIX: &str = "unknown action";
 /// Bus event published when a ticket reaches its token or Pixellab ceiling.
 pub const TICKET_BUDGET_EVENT: &str = "ticket.budget_exceeded";
+const NO_CHECKOUT_MESSAGE: &str = "the branch of the ticket could not be checked out again";
 const NO_PROJECT_MESSAGE: &str = "no project matches the ticket";
 
 pub struct Executor {
@@ -269,6 +273,7 @@ impl Executor {
         self.store.save_state(&repo, &next, &self.now())?;
         self.sync_ticket_status(&next);
         self.sync_resources(&next);
+        self.end_project_checkout(&repo, &next);
         self.apply_effects(&repo, key, effects)?;
         self.load(key).map(|(_, state)| state)
     }
@@ -495,8 +500,15 @@ impl Executor {
     }
 
     fn run_job(self: &Arc<Self>, job: &ActionJob) {
-        let Some(outcome) = self.execute_action(job) else {
-            return;
+        let outcome = match self.project_gate(job) {
+            Some(held) => held,
+            None => {
+                let Some(outcome) = self.execute_action(job) else {
+                    return;
+                };
+                self.project_job_done(job, &outcome);
+                outcome
+            }
         };
         if job.name == crate::models::constants::flow_actions::ACTION_GH_MERGE
             && matches!(outcome, ActionOutcome::Ok(_))
@@ -535,7 +547,14 @@ impl Executor {
         } else {
             None
         };
-        let workspace = crate::worktrees::worktree_path(vault, &job.repo, &job.key);
+        let project_dir = self
+            .load(&job.key)
+            .ok()
+            .map(|(_, state)| state)
+            .filter(project_checkout::is_project_flow)
+            .and_then(|state| self.project_checkout_path(&state));
+        let workspace = project_dir
+            .unwrap_or_else(|| crate::worktrees::worktree_path(vault, &job.repo, &job.key));
         let action_key = job.key.as_str();
         let context = ActionContext {
             key: action_key,
@@ -668,6 +687,13 @@ impl Executor {
                 )
                 .map(|_| ());
         }
+        if let Some(failure) = self.reenter_project_checkout(repo, state) {
+            let reason = match failure {
+                ActionOutcome::TechnicalError(text) | ActionOutcome::BusinessError(text) => text,
+                _ => NO_CHECKOUT_MESSAGE.to_string(),
+            };
+            return self.pipeline_start_failed(key, effect, reason);
+        }
         let iteration = state.steps.get(step).map_or(0, |s| s.iteration);
         if self.resume_previous_run(repo, key, effect, step, iteration)? {
             return Ok(());
@@ -698,6 +724,7 @@ impl Executor {
                 .and_then(Value::as_str)
                 .and_then(Engine::parse),
             agent_executor: AgentExecutor::Internal,
+            project_checkout: project_checkout::is_project_flow(state),
         };
         let mut launch = launch;
         if let Some(policy) = policy {
@@ -1040,7 +1067,10 @@ impl Executor {
 
     /// The resource key (`unity-editor:<project id>`) and name a step of `state` needs.
     fn resource_of(&self, state: &FlowState, step: &Step) -> Option<(String, String)> {
-        let name = step.resource.clone()?;
+        let name = step.resource.clone().or_else(|| {
+            (project_checkout::is_project_flow(state) && step.kind == StepKind::Pipeline)
+                .then(|| resource::UNITY_EDITOR.to_string())
+        })?;
         let project = self.ports.sessions.project_for(&state.ticket)?;
         Some((unity_lock::resource_key(&name, &project.id), name))
     }
@@ -1049,6 +1079,9 @@ impl Executor {
     /// key it waits for.
     fn resource_role(&self, state: &FlowState) -> (Option<String>, Option<String>) {
         let none = (None, None);
+        if project_checkout::is_project_flow(state) {
+            return self.project_role(state);
+        }
         let Some(rid) = state.current.as_ref() else {
             return none;
         };
@@ -1201,6 +1234,11 @@ impl Executor {
             {
                 self.retry_when_resource_free(&state, &step_id, &step)
             }
+            (StepKind::Action, StepStatus::WaitingExternal)
+                if project_checkout::waits_for_project(&state) =>
+            {
+                self.retry_project_when_free(&state, &step_id)
+            }
             (StepKind::Pipeline, StepStatus::WaitingHuman)
                 if step_state.reason.as_deref() == Some(StepReason::TicketBudget.as_str()) =>
             {
@@ -1282,6 +1320,26 @@ impl Executor {
         step: &Step,
     ) -> anyhow::Result<()> {
         if let Some((resource, _)) = self.resource_of(state, step) {
+            if !self.resources.can_grant(&resource, &state.key) {
+                return Ok(());
+            }
+        }
+        self.deliver_locked(
+            &state.key,
+            Event::Retry {
+                step: step_id.to_string(),
+                at: self.now(),
+            },
+        )
+        .map(|_| ())
+    }
+
+    fn retry_project_when_free(
+        self: &Arc<Self>,
+        state: &FlowState,
+        step_id: &str,
+    ) -> anyhow::Result<()> {
+        if let Some(resource) = self.project_resource(state) {
             if !self.resources.can_grant(&resource, &state.key) {
                 return Ok(());
             }

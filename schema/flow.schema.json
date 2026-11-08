@@ -16,7 +16,8 @@
       "description": "Named step lists, referenced by an action step whose `use` names the block.",
       "additionalProperties": { "type": "array", "items": { "$ref": "#/$defs/step" } }
     },
-    "steps": { "type": "array", "items": { "$ref": "#/$defs/step" } }
+    "steps": { "type": "array", "items": { "$ref": "#/$defs/step" } },
+    "workspace": { "type": "string", "enum": ["project"], "description": "project: the steps run in the main checkout of the project (no worktree); the run holds the project's unity-editor resource from its first step until git.restore gives the checkout back (also done by the daemon when the run ends)." }
   },
   "$defs": {
     "step": {

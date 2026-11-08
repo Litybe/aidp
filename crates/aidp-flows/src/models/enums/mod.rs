@@ -19,6 +19,7 @@ mod step_kind;
 mod step_reason;
 mod step_status;
 mod token;
+mod workspace_mode;
 
 pub use action_outcome::ActionOutcome;
 pub use binary_op::BinaryOp;
@@ -41,3 +42,4 @@ pub use step_kind::StepKind;
 pub use step_reason::StepReason;
 pub use step_status::StepStatus;
 pub(crate) use token::Token;
+pub use workspace_mode::WorkspaceMode;

@@ -1,7 +1,7 @@
 use crate::models::constants::flow_actions::{
     ACTION_FAIL, ACTION_GH_ISSUE_COMMENT, ACTION_GH_ISSUE_LABEL, ACTION_GH_MERGE,
-    ACTION_GH_PR_CREATE, ACTION_GH_PR_READY, ACTION_GIT_BRANCH, ACTION_GIT_PUSH,
-    ACTION_GIT_WORKTREE, ACTION_NOOP, ACTION_WORKTREE_REMOVE,
+    ACTION_GH_PR_CREATE, ACTION_GH_PR_READY, ACTION_GIT_BRANCH, ACTION_GIT_CHECKOUT,
+    ACTION_GIT_PUSH, ACTION_GIT_RESTORE, ACTION_GIT_WORKTREE, ACTION_NOOP, ACTION_WORKTREE_REMOVE,
 };
 
 /// Actions every registry holds.
@@ -11,6 +11,8 @@ pub enum BuiltinAction {
     Fail,
     GitWorktree,
     GitBranch,
+    GitCheckout,
+    GitRestore,
     GitPush,
     GhPrCreate,
     GhPrReady,
@@ -22,11 +24,13 @@ pub enum BuiltinAction {
 
 impl BuiltinAction {
     /// Every action the registry registers by name.
-    pub const ALL: [BuiltinAction; 11] = [
+    pub const ALL: [BuiltinAction; 13] = [
         BuiltinAction::Noop,
         BuiltinAction::Fail,
         BuiltinAction::GitWorktree,
         BuiltinAction::GitBranch,
+        BuiltinAction::GitCheckout,
+        BuiltinAction::GitRestore,
         BuiltinAction::GitPush,
         BuiltinAction::GhPrCreate,
         BuiltinAction::GhPrReady,
@@ -43,6 +47,8 @@ impl BuiltinAction {
             BuiltinAction::Fail => ACTION_FAIL,
             BuiltinAction::GitWorktree => ACTION_GIT_WORKTREE,
             BuiltinAction::GitBranch => ACTION_GIT_BRANCH,
+            BuiltinAction::GitCheckout => ACTION_GIT_CHECKOUT,
+            BuiltinAction::GitRestore => ACTION_GIT_RESTORE,
             BuiltinAction::GitPush => ACTION_GIT_PUSH,
             BuiltinAction::GhPrCreate => ACTION_GH_PR_CREATE,
             BuiltinAction::GhPrReady => ACTION_GH_PR_READY,
