@@ -57,6 +57,9 @@ use tiny_http::{Header, Method, Request, Response, Server, StatusCode};
 use tracing::{error, info, info_span, warn};
 
 const HTTP_OK: u16 = 200;
+/// Body field of `PUT /api/projects/:id`: the test checkout (`null` or blank clears it).
+const BODY_TEST_CHECKOUT: &str = "testCheckout";
+const TEST_CHECKOUT_NOT_STRING: &str = "testCheckout must be a string or null";
 /// Segment of `POST /api/projects/discover`.
 const DISCOVER_SEGMENT: &str = "discover";
 /// Body key listing the folders `discover` scans; the parents of the registered checkouts when absent.
@@ -2861,6 +2864,24 @@ fn route(
             match app.projects.get(id) {
                 Some(project) => list_claude_sessions(&project.path),
                 None => err(HTTP_NOT_FOUND, PROJECT_NOT_FOUND),
+            }
+        }
+        (Method::Put | Method::Patch, ["projects", id]) => {
+            if let Some(value) = body.get(BODY_TEST_CHECKOUT) {
+                let path = value.as_str();
+                if !value.is_null() && path.is_none() {
+                    return Ok(err(HTTP_BAD_REQUEST, TEST_CHECKOUT_NOT_STRING));
+                }
+                match app.projects.set_test_checkout(id, path) {
+                    Ok(Some(project)) => Reply::Json(HTTP_OK, json!(project)),
+                    Ok(None) => err(HTTP_NOT_FOUND, PROJECT_NOT_FOUND),
+                    Err(message) => err(HTTP_BAD_REQUEST, message),
+                }
+            } else {
+                match app.projects.get(id) {
+                    Some(project) => Reply::Json(HTTP_OK, json!(project)),
+                    None => err(HTTP_NOT_FOUND, PROJECT_NOT_FOUND),
+                }
             }
         }
         (Method::Delete, ["projects", id]) => {

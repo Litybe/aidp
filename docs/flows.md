@@ -300,11 +300,29 @@ A game ticket goes through two flows (decision of 2026-11-08, contract C13).
   carries the label `aidp:to-test` and the ticket the phase `to-test`. No Unity editor is open on a worktree, so the
   dev stages run no compile gate and no test (`verification.compile = "deferred"`).
 - **Test lane**: the `test_flow:` of the same route (`game-test-code`, `game-test-art`, `game-test-map`),
-  `workspace: project`: the main checkout of the project, where the editor is open, with the `unity-editor`
-  resource. `dispatcher.test_slots` (default 1) test flows at a time per project. The dispatcher starts the oldest
+  `workspace: project`: the test checkout of the project (see below), where the editor is open, with the
+  `unity-editor` resource. `dispatcher.test_slots` (default 1) test flows at a time per project. The dispatcher starts the oldest
   `to-test` issue first (a manual start promotes one ahead), as soon as the lane of its project is free. A test flow
   counts in the test lane while it holds, or waits for, the checkout; once it ran `git.restore` (the merge approval
   is pending) it no longer does. It never takes a dev slot. Pause, budget and night mode apply to both lanes.
+
+**Test checkout.** A project may have a `testCheckout` (absolute path of a dedicated clone of the same repository,
+for example on an SSD) in the registry `projects.json`. Set it with `aidp gateway projects test-checkout <project id>
+<path>` (`--clear` removes it) or `PUT /api/projects/:id` with `{ "testCheckout": "<path>" }` (`null` clears it); it is
+read back in `GET /api/projects`. When set, every `workspace: project` flow works there instead of in the project
+path: `git.checkout` / `git.restore`, the pipeline sessions (`cwd`, project root, `.aidp/` folders), the editor
+detection of `GET /api/unity/status` (`-projectpath`) and its compile and playtest results. The `unity-editor` lock
+stays keyed by the project id. Without a `testCheckout`, they work in the project path as before. Dev flows
+(worktrees of the project path) are not affected, and a session in the test checkout occupies the test lane only.
+In that clone, `git.checkout` starts with `git fetch origin`, then takes the ticket branch from `origin/<branch>`
+when it only exists there (a branch pushed from a dev worktree), fast-forwards a branch it already has, or creates
+the branch from an up-to-date `origin/<base>`. `git.restore` switches back to the base branch and runs
+`git pull --ff-only`. The test checkout is disposable and reserved to the test lane: no dev, art, map or doc flow
+writes there (worktrees stay under the project path). Because the editor rewrites tracked files there,
+`git.checkout` and `git.restore` never report `blocked: dirty-checkout` on it: they use `git switch --force` (local
+changes are discarded, untracked `.meta` files in the way are removed) and keep the editor's
+`ProjectSettings/ProjectVersion.txt` (saved before, written back after, then `git update-index --skip-worktree`) so the
+editor asks for no migration. A project without `testCheckout` keeps the dirty-checkout check.
 
 Ticket phase (`autopilot.phase`, exposed as `phase` and `branch` by `GET /api/tickets`): `dev` (default), `to-test`,
 `testing` (set when the test flow starts). The label `aidp:to-test` and the phase go together: the flow action

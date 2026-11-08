@@ -60,12 +60,18 @@ impl Executor {
             && !state.effects_applied.contains(RELEASED_MARKER)
     }
 
-    /// The directory a project flow works in: the project's main checkout.
+    /// The directory a project flow works in: the test checkout of the project when one is set,
+    /// else its main checkout.
     pub(super) fn project_checkout_path(&self, state: &FlowState) -> Option<PathBuf> {
         self.ports
             .sessions
-            .project_for(&state.ticket)
-            .map(|project| project.path)
+            .test_checkout_for(&state.ticket)
+            .or_else(|| {
+                self.ports
+                    .sessions
+                    .project_for(&state.ticket)
+                    .map(|project| project.path)
+            })
     }
 
     /// The resource a project flow holds, `unity-editor:<project id>`.

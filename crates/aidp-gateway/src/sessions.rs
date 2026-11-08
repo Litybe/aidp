@@ -520,6 +520,18 @@ fn project_workspace(path: &str) -> Workspace {
     }
 }
 
+/// The test checkout a flow pipeline step works in: a step of a `workspace: project` flow (origin
+/// `flow`, no ticket worktree, no explicit workspace) of a project that has one.
+fn flow_test_checkout(
+    req: &StartRequest,
+    origin: &Origin,
+    project: &crate::projects::Project,
+) -> Option<String> {
+    (origin.is(OriginKind::Flow) && req.worktree.is_none() && req.workspace.is_none())
+        .then(|| project.test_checkout.clone())
+        .flatten()
+}
+
 /// The admission key of a record: its workspace, else the checkout at its cwd.
 fn workspace_key_of(record: &SessionRecord) -> String {
     match &record.workspace {
@@ -1957,6 +1969,12 @@ impl SessionManager {
     ) -> anyhow::Result<ResolvedWorkspace> {
         if let Some(requested) = &req.workspace {
             return self.resolve_requested_workspace(requested, project);
+        }
+        if let Some(test) = flow_test_checkout(req, origin, project) {
+            return Ok(ResolvedWorkspace {
+                workspace: project_workspace(&test),
+                warnings: Vec::new(),
+            });
         }
         let checkout = project_workspace(&project.path);
         let unchanged = |warnings: Vec<String>| ResolvedWorkspace {

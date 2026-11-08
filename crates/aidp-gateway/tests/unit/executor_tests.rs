@@ -27,7 +27,7 @@ use aidp_flows::{
 use aidp_testkit::{EnvGuard, TempWorkspace};
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicI64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -1326,6 +1326,102 @@ fn manager_sessions_start_a_flow_origin_session_in_the_ticket_workspace() {
         other => panic!("unexpected state {other:?}"),
     }
     assert_eq!(port.state("unknown"), SessionState::Gone);
+}
+
+/// Starts a `workspace: project` pipeline step of a project that has (or has not) a test checkout
+/// and returns the cwd of the session, with the project dir and the clone dir.
+fn project_flow_session_cwd(tag: &str, with_test_checkout: bool) -> (String, PathBuf, PathBuf) {
+    let _vault_off = EnvGuard::set("AIDP_VAULT", "off");
+    let workspace = TempWorkspace::new(tag);
+    let state_dir = workspace.child("state");
+    let project_dir = workspace.child("project");
+    let clone_dir = workspace.child("test-clone");
+    for dir in [&state_dir, &project_dir, &clone_dir] {
+        std::fs::create_dir_all(dir).unwrap();
+    }
+    let projects = Arc::new(Projects::load(&state_dir));
+    let project = projects.add(project_dir.to_str().unwrap());
+    if with_test_checkout {
+        projects
+            .set_test_checkout(&project.id, clone_dir.to_str())
+            .unwrap();
+    }
+    let runner: Arc<dyn ProcessRunner> = Arc::new(
+        ScriptedProcessRunner::new().with_spawn_stdout(
+            b"{\"type\":\"result\"}
+"
+            .to_vec(),
+        ),
+    );
+    let manager = SessionManager::load_with_runner(
+        &state_dir,
+        Arc::new(Bus::new()),
+        projects.clone(),
+        runner,
+    );
+    let native = crate::native_runs::NativeRunManager::new(crate::native_runs::NativeDeps::new(
+        manager.clone(),
+        projects.clone(),
+        Arc::new(Bus::new()),
+        Arc::new(crate::flows::registry::AlwaysAllow),
+        Arc::new(crate::models::LocalLock::default()),
+        &state_dir,
+        None,
+    ));
+    let launcher = Arc::new(crate::launcher::RunLauncher::new(manager.clone(), native));
+    let port = ManagerSessions::new(manager.clone(), projects, launcher);
+    let ticket = json!({ "key": MANAGER_TICKET_KEY, "service": project.name });
+    assert_eq!(
+        port.test_checkout_for(&ticket).is_some(),
+        with_test_checkout
+    );
+    let launch = PipelineLaunch {
+        key: MANAGER_TICKET_KEY.to_string(),
+        ticket_key: MANAGER_TICKET_KEY.to_string(),
+        provider: None,
+        permission_mode: None,
+        strict_mcp_config: None,
+        mcp_config_id: None,
+        mcp_servers: None,
+        denied_shell_commands: Vec::new(),
+        denied_mcp_tools: BTreeMap::new(),
+        step: STEP_DEVELOP.to_string(),
+        template: "dev-aidp".to_string(),
+        project: port.project_for(&ticket).unwrap(),
+        inputs_file: workspace.child("inputs.json"),
+        auto_approve_gates: None,
+        autonomous: false,
+        headless: false,
+        engine: Some(Engine::Workflow),
+        agent_executor: crate::models::enums::agent_executor::AgentExecutor::Internal,
+        project_checkout: true,
+    };
+    let SessionStart::Started(session_id) = port.start(&launch).unwrap() else {
+        panic!("expected a started session");
+    };
+    let cwd = manager.get(&session_id).expect("the session record").cwd;
+    wait_for("the session to end", || {
+        matches!(port.state(&session_id), SessionState::Ended { .. })
+    });
+    (cwd, project_dir, clone_dir)
+}
+
+fn same_dir(left: &str, right: &Path) -> bool {
+    let norm = |text: &str| text.replace('\\', "/").trim_end_matches('/').to_lowercase();
+    norm(left) == norm(&right.to_string_lossy())
+}
+
+#[test]
+fn project_flow_session_runs_in_the_test_checkout() {
+    let (cwd, project_dir, clone_dir) = project_flow_session_cwd("flows_tc_session", true);
+    assert!(same_dir(&cwd, &clone_dir), "cwd {cwd}");
+    assert!(!same_dir(&cwd, &project_dir));
+}
+
+#[test]
+fn project_flow_session_falls_back_to_the_project_without_a_test_checkout() {
+    let (cwd, project_dir, _) = project_flow_session_cwd("flows_tc_fallback", false);
+    assert!(same_dir(&cwd, &project_dir), "cwd {cwd}");
 }
 
 #[test]

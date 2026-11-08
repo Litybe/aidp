@@ -656,6 +656,14 @@ not count against writers: up to 3 run at once (`read-only-ceiling`), even besid
 workspace. A writer launch on a busy workspace is queued with reason `workspace-busy`; a plan launch over
 the ceiling is queued with reason `read-only-ceiling`. The reason is the `reason` field of the queue entry.
 
+### `PUT /api/projects/:id`
+
+Sets the test checkout of a project: body `{ "testCheckout": "<absolute path>" }`; `null` or a blank string clears it.
+Answers `200` with the project, `400` for a relative path or a non-string value, `404` for an unknown project.
+A project with a `testCheckout` lists it in `GET /api/projects` (`"testCheckout": "C:/UNITY_PROJECT"`); without one the
+field is absent. `workspace: project` flows (the test lane), their sessions and `GET /api/unity/status` use it instead
+of `path`. CLI: `aidp gateway projects test-checkout <id> <path>`, `aidp gateway projects test-checkout <id> --clear`.
+
 ### `POST /api/projects/discover`
 
 Body `{roots?: string[]}`. Registers every git repository directly under each root (by default the
@@ -2611,7 +2619,8 @@ Both routes work on one registered project: `?project=<id or name>` (or `"projec
 }
 ```
 
-- `editor.running` is true when a `Unity.exe` process has `-projectpath <path>` on its command line equal to the project path. Case and `/` against `\` are ignored, as is a trailing separator. When no editor runs, `pid` is `null`. The process list is read with PowerShell (`Get-CimInstance Win32_Process`) on Windows and `ps` elsewhere, and cached for 5 seconds.
+- `editor.running` is true when a `Unity.exe` process has `-projectpath <path>` on its command line equal to the project's test checkout (`testCheckout`), else its path; `editor.projectPath` is that path, and the results below are read under it.
+- Case and `/` against `\` are ignored, as is a trailing separator. When no editor runs, `pid` is `null`. The process list is read with PowerShell (`Get-CimInstance Win32_Process`) on Windows and `ps` elsewhere, and cached for 5 seconds.
 - `lock.holder` is `null` when the lock is free; `lock.waiting` lists the run keys queued, first served first.
 - `lastCompile` is the newest `*.json` under `<project>/.aidp/compile/results/`, as written by the compile gate. `lastPlaytest` is `{id, passed, finishedAt}` from the newest `*.json` under `<project>/.aidp/playtest/results/`; `finishedAt` is the file's own field when present, else its write time. Both are `null` when there is no readable result.
 

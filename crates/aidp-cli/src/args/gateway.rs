@@ -220,6 +220,15 @@ pub enum ProjOp {
     Rm {
         id: String,
     },
+    /// Set the test checkout of a project: the clone where test flows (`workspace: project`) work.
+    TestCheckout {
+        /// Project id.
+        id: String,
+        /// Absolute path of the clone; omit with `--clear` to go back to the project path.
+        path: Option<String>,
+        #[arg(long, conflicts_with = "path")]
+        clear: bool,
+    },
     /// Import projects from an aidp-viewer `config/config.json` (`{"projects":[{path,...}]}`).
     Import {
         file: PathBuf,

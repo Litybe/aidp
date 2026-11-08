@@ -178,3 +178,83 @@ fn a_to_test_ticket_in_progress_is_never_a_dev_launch() {
     assert_eq!(result.launches.len(), 1);
     assert!(result.launches[0].test);
 }
+
+fn slot(origin_kind: &str, main_checkout: bool) -> aidp_tickets::plan::RunningSlot {
+    aidp_tickets::plan::RunningSlot {
+        project: "game".to_string(),
+        origin_kind: origin_kind.to_string(),
+        ticket_key: None,
+        started_at_ms: 0,
+        main_checkout,
+    }
+}
+
+fn plan_running(
+    tickets: &[Ticket],
+    running: &[aidp_tickets::plan::RunningSlot],
+) -> aidp_tickets::plan::DispatchPlan {
+    let routing = routing();
+    plan_with_lanes(
+        tickets,
+        running,
+        &Verdict::unconstrained(),
+        &TemplateCatalog::empty(),
+        &config(3, 1),
+        &HashMap::new(),
+        &LaneLoad {
+            routing: Some(&routing),
+            ..LaneLoad::default()
+        },
+    )
+}
+
+#[test]
+fn a_run_session_in_a_worktree_does_not_block_the_test_lane() {
+    let tickets = [ticket("T-1", Phase::ToTest, Status::InProgress, 5)];
+    let result = plan_running(&tickets, &[slot("run", false)]);
+    assert_eq!(result.launches.len(), 1, "{:?}", result.skipped);
+}
+
+#[test]
+fn a_session_in_the_main_checkout_still_blocks_the_test_lane() {
+    let tickets = [ticket("T-1", Phase::ToTest, Status::InProgress, 5)];
+    let result = plan_running(&tickets, &[slot("ui", true)]);
+    assert!(result.launches.is_empty());
+    assert!(result
+        .skipped
+        .contains(&("T-1".to_string(), SkipReason::ProjectBusy)));
+    let flow = plan_running(&tickets, &[slot("flow", true)]);
+    assert_eq!(flow.launches.len(), 1);
+}
+
+#[test]
+fn a_worktree_run_does_not_block_the_dev_lane_but_an_interactive_main_session_does() {
+    let tickets = [ticket("D-1", Phase::Dev, Status::Todo, 1)];
+    let free = plan_running(&tickets, &[slot("run", false)]);
+    assert_eq!(free.launches.len(), 1, "{:?}", free.skipped);
+    let busy = plan_running(&tickets, &[slot("ui", true)]);
+    assert!(busy.launches.is_empty());
+}
+
+#[test]
+fn main_checkout_ignores_case_separators_and_verbatim_prefix() {
+    use aidp_tickets::plan::is_main_checkout;
+    let project = r"D:\CLAUDE_UNITY\PixelHood";
+    assert!(is_main_checkout(r"d:/claude_unity/pixelhood/", project));
+    let verbatim = format!("{0}{0}?{0}{1}", '\\', project);
+    assert!(is_main_checkout(&verbatim, project));
+    assert!(!is_main_checkout(
+        r"D:\AIDP\Vault\Pipelines\PixelHood\GH-259\.worktree",
+        project
+    ));
+    assert!(!is_main_checkout("", ""));
+}
+
+#[test]
+fn a_ticket_already_carrying_a_test_flow_still_launches_it() {
+    let mut t = ticket("T-1", Phase::ToTest, Status::InProgress, 5);
+    t.flow = Some("game-test-code".to_string());
+    let result = plan(&[t], &config(3, 1), 0, &[]);
+    assert_eq!(result.launches.len(), 1, "{:?}", result.skipped);
+    assert_eq!(result.launches[0].flow.as_deref(), Some("game-test-code"));
+}

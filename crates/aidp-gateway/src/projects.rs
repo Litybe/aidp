@@ -35,6 +35,17 @@ pub struct Project {
     pub path: String,
     #[serde(default)]
     pub runs_count: u32,
+    /// Absolute path of the dedicated clone where `workspace: project` flows (the Unity test lane)
+    /// work. Unset: they work in `path`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub test_checkout: Option<String>,
+}
+
+impl Project {
+    /// Where test flows work and where the Unity editor is looked for: the test checkout, else `path`.
+    pub fn checkout_path(&self) -> &str {
+        self.test_checkout.as_deref().unwrap_or(&self.path)
+    }
 }
 
 pub struct Projects {
@@ -45,6 +56,13 @@ pub struct Projects {
 /// Stored with forward slashes so UI, vault `workspace_root` and root scans agree.
 fn to_forward_slashes(path: &str) -> String {
     path.replace(BACKSLASH, SLASH_STR)
+}
+
+/// A checkout path as stored: forward slashes, no trailing slash; `None` when blank.
+fn normalized_checkout(path: &str) -> Option<String> {
+    let norm = to_forward_slashes(path.trim());
+    let norm = norm.trim_end_matches(SLASH);
+    (!norm.is_empty()).then(|| norm.to_string())
 }
 
 fn basename(p: &str) -> String {
@@ -62,6 +80,7 @@ impl Projects {
             p.path = to_forward_slashes(&p.path)
                 .trim_end_matches(SLASH)
                 .to_string();
+            p.test_checkout = p.test_checkout.as_deref().and_then(normalized_checkout);
         }
         Projects {
             file,
@@ -99,6 +118,7 @@ impl Projects {
             name: basename(path),
             path: norm.trim_end_matches(SLASH).to_string(),
             runs_count: 0,
+            test_checkout: None,
         };
         l.push(p.clone());
         self.save(&l);
@@ -121,11 +141,39 @@ impl Projects {
                 name: p.name,
                 path: p.path,
                 runs_count: 0,
+                test_checkout: p.test_checkout.as_deref().and_then(normalized_checkout),
             });
             n += 1;
         }
         self.save(&l);
         n
+    }
+
+    /// Sets (`Some(absolute path)`) or clears (`None` or blank) the test checkout of a project.
+    /// `Ok(None)` for an unknown project; `Err` for a relative path.
+    pub fn set_test_checkout(
+        &self,
+        id_or_name: &str,
+        path: Option<&str>,
+    ) -> Result<Option<Project>, String> {
+        let norm = path.and_then(normalized_checkout);
+        if let Some(value) = &norm {
+            if !Path::new(value).is_absolute() {
+                return Err(format!("testCheckout must be an absolute path: `{value}`"));
+            }
+        }
+        let mut l = lock(&self.list);
+        let index = match l.iter().position(|p| p.id == id_or_name) {
+            Some(index) => index,
+            None => match l.iter().position(|p| p.name == id_or_name) {
+                Some(index) => index,
+                None => return Ok(None),
+            },
+        };
+        l[index].test_checkout = norm;
+        let updated = l[index].clone();
+        self.save(&l);
+        Ok(Some(updated))
     }
 
     pub fn remove(&self, id: &str) -> bool {

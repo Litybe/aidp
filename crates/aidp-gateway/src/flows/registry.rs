@@ -450,6 +450,12 @@ pub trait SessionPort: Send + Sync {
     /// The project a ticket belongs to, from its `project` or `service` field.
     fn project_for(&self, ticket: &Value) -> Option<ProjectRef>;
 
+    /// The test checkout of the project of a ticket, when one is set: where `workspace: project`
+    /// flows work instead of the project path.
+    fn test_checkout_for(&self, _ticket: &Value) -> Option<PathBuf> {
+        None
+    }
+
     fn start(&self, launch: &PipelineLaunch) -> anyhow::Result<SessionStart>;
 
     /// Restarts the failed stages of a paused native run, so a retried step continues it.
@@ -723,6 +729,13 @@ impl SessionPort for ManagerSessions {
             .mcp_configurations()
             .resolve(configuration_id)?;
         Ok(())
+    }
+
+    fn test_checkout_for(&self, ticket: &Value) -> Option<PathBuf> {
+        let name = [TICKET_PROJECT, TICKET_SERVICE]
+            .iter()
+            .find_map(|field| ticket.get(*field).and_then(Value::as_str))?;
+        self.projects.get(name)?.test_checkout.map(PathBuf::from)
     }
 
     fn project_for(&self, ticket: &Value) -> Option<ProjectRef> {

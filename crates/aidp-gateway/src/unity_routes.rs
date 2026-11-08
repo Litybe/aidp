@@ -64,7 +64,7 @@ fn get_status(app: &App, requested: Option<&str>) -> (u16, Value) {
     });
     let body = status(
         &project.id,
-        &project.path,
+        project.checkout_path(),
         &processes().list(),
         holder.as_ref(),
         &waiting,

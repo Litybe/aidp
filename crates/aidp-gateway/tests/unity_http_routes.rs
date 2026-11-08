@@ -159,3 +159,79 @@ fn release_of_a_free_lock_answers_released_false() {
     assert!(body["holder"].is_null());
     booted.handle.stop();
 }
+
+fn put(port: u16, path: &str, body: Value) -> (u16, Value) {
+    reply(ureq::put(&url(port, path)).send_json(body))
+}
+
+#[test]
+fn status_follows_the_test_checkout_of_the_project() {
+    let vault = TempWorkspace::new("gw-unity-tc-vault");
+    let project = TempWorkspace::new("gw-unity-tc-project");
+    let clone = TempWorkspace::new("gw-unity-tc-clone");
+    let _env = EnvGuard::set(VAULT_ENV, vault.path().to_str().unwrap());
+    write_result(
+        clone.path(),
+        "compile",
+        "c9.json",
+        &json!({ "id": "c9", "ok": true, "errors": [], "warnings": 0 }),
+    );
+    let mut entry = project_entry("p1", "game", project.path());
+    entry["testCheckout"] = json!(clone.path().to_string_lossy().replace('\\', "/"));
+    let booted = boot(vault.path(), vec![entry]);
+
+    let (status, body) = get(booted.port, STATUS_PATH);
+
+    assert_eq!(status, STATUS_OK, "{body}");
+    assert_eq!(
+        body["editor"]["projectPath"],
+        clone.path().to_string_lossy().replace('\\', "/").as_str()
+    );
+    assert_eq!(body["lastCompile"]["id"], "c9");
+    booted.handle.stop();
+}
+
+#[test]
+fn test_checkout_is_set_read_back_and_cleared_over_http() {
+    let vault = TempWorkspace::new("gw-unity-set-vault");
+    let project = TempWorkspace::new("gw-unity-set-project");
+    let clone = TempWorkspace::new("gw-unity-set-clone");
+    let _env = EnvGuard::set(VAULT_ENV, vault.path().to_str().unwrap());
+    let booted = boot(
+        vault.path(),
+        vec![project_entry("p1", "game", project.path())],
+    );
+    let clone_path = clone.path().to_string_lossy().replace('\\', "/");
+
+    let (status, body) = put(
+        booted.port,
+        "/api/projects/p1",
+        json!({ "testCheckout": clone_path }),
+    );
+    assert_eq!(status, STATUS_OK, "{body}");
+    assert_eq!(body["testCheckout"], clone_path.as_str());
+    let (_, listed) = get(booted.port, "/api/projects/p1");
+    assert_eq!(listed["testCheckout"], clone_path.as_str());
+
+    let (status, _) = put(
+        booted.port,
+        "/api/projects/p1",
+        json!({ "testCheckout": "relative/dir" }),
+    );
+    assert_eq!(status, STATUS_BAD_REQUEST);
+    let (status, _) = put(
+        booted.port,
+        "/api/projects/nope",
+        json!({ "testCheckout": clone_path }),
+    );
+    assert_eq!(status, STATUS_NOT_FOUND);
+
+    let (status, body) = put(
+        booted.port,
+        "/api/projects/p1",
+        json!({ "testCheckout": null }),
+    );
+    assert_eq!(status, STATUS_OK, "{body}");
+    assert!(body.get("testCheckout").is_none());
+    booted.handle.stop();
+}

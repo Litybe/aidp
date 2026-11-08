@@ -24,6 +24,14 @@ const GIT_SHOW_CURRENT: [&str; 2] = ["branch", "--show-current"];
 const GIT_ORIGIN_HEAD: [&str; 3] = ["symbolic-ref", "--short", "refs/remotes/origin/HEAD"];
 const GIT_NO_TRACK: &str = "--no-track";
 const BASE_CANDIDATES: [&str; 2] = ["main", "master"];
+const GIT_FORCE_FLAG: &str = "--force";
+const GIT_UPDATE_INDEX: &str = "update-index";
+const SKIP_WORKTREE: &str = "--skip-worktree";
+const NO_SKIP_WORKTREE: &str = "--no-skip-worktree";
+const EDITOR_VERSION_FILE: &str = "ProjectSettings/ProjectVersion.txt";
+const GIT_PULL: &str = "pull";
+const GIT_FF_ONLY: &str = "--ff-only";
+const GIT_MERGE: &str = "merge";
 const FILES_SHOWN: usize = 20;
 const BLOCKED_DIRTY: &str = "dirty-checkout";
 
@@ -130,7 +138,18 @@ fn overwritten_metas(stderr: &str) -> Vec<String> {
 
 /// `git switch`. In a Unity project, when untracked `.meta` files of the editor block it because
 /// the target branch tracks them, those files are removed and the switch is tried once more.
+#[cfg(test)]
 fn switch(ctx: &Ctx, workspace: &Path, args: &[&str]) -> anyhow::Result<()> {
+    switch_with(ctx, workspace, args, false)
+}
+
+/// `switch`, with `--force` (local changes of tracked files are discarded) when `force` is set.
+fn switch_with(ctx: &Ctx, workspace: &Path, args: &[&str], force: bool) -> anyhow::Result<()> {
+    let mut forced: Vec<&str> = args.to_vec();
+    if force {
+        forced.insert(1, GIT_FORCE_FLAG);
+    }
+    let args = forced.as_slice();
     let output = git_output(ctx, workspace, args)?;
     if output.status.success() {
         return Ok(());
@@ -176,14 +195,78 @@ fn switched(branch: &str, base: &str, created: bool) -> anyhow::Result<CommandOu
 /// Puts the main checkout on the branch of the ticket. A dirty checkout on another branch is
 /// reported as `blocked` and left untouched.
 pub(super) fn git_checkout(ctx: &Ctx, key: &str) -> anyhow::Result<CommandOutput> {
+    let force = is_test_checkout(&ctx.workspace());
+    keeping_editor_version(ctx, force, || checkout_in(ctx, key, force))
+}
+
+/// True when `workspace` is the test checkout of a registered project: a disposable clone owned by
+/// the Unity harness, whose local changes (the editor rewrites tracked files) are discarded.
+fn is_test_checkout(workspace: &Path) -> bool {
+    let Ok(state_dir) = aidp_gateway::paths::state_dir() else {
+        return false;
+    };
+    let wanted = normalized(workspace);
+    aidp_gateway::projects::Projects::load(&state_dir)
+        .list()
+        .iter()
+        .filter_map(|project| project.test_checkout.as_deref())
+        .any(|path| normalized(Path::new(path)) == wanted)
+}
+
+fn normalized(path: &Path) -> String {
+    path.to_string_lossy()
+        .replace('\\', "/")
+        .trim_end_matches('/')
+        .to_lowercase()
+}
+
+/// Runs `body`; with `force`, the editor's `ProjectSettings/ProjectVersion.txt` survives the
+/// switch (saved before, written back after) and is marked `skip-worktree` so it stays clean and
+/// the editor never asks for a migration.
+fn keeping_editor_version<T>(
+    ctx: &Ctx,
+    force: bool,
+    body: impl FnOnce() -> anyhow::Result<T>,
+) -> anyhow::Result<T> {
+    if !force {
+        return body();
+    }
     let workspace = ctx.workspace();
+    let file = workspace.join(EDITOR_VERSION_FILE);
+    let saved = std::fs::read(&file).ok();
+    let _ = git_output(
+        ctx,
+        &workspace,
+        &[GIT_UPDATE_INDEX, NO_SKIP_WORKTREE, EDITOR_VERSION_FILE],
+    );
+    let result = body();
+    if let Some(bytes) = saved {
+        let _ = std::fs::write(&file, bytes);
+        let _ = git_output(
+            ctx,
+            &workspace,
+            &[GIT_UPDATE_INDEX, SKIP_WORKTREE, EDITOR_VERSION_FILE],
+        );
+    }
+    result
+}
+
+fn checkout_in(ctx: &Ctx, key: &str, force: bool) -> anyhow::Result<CommandOutput> {
+    let workspace = ctx.workspace();
+    // The branch comes from a dev worktree and was pushed: it may not exist in this clone yet.
+    // Best effort, a clone without network goes on with the refs it has.
+    let _ = git_output(ctx, &workspace, &[GIT_FETCH, ORIGIN_REMOTE]);
     let branch = ticket_branch(ctx, key)?;
     let base = base_branch(ctx, &workspace)?;
     let current = current_branch(ctx, &workspace)?;
     if current == branch {
         return switched(&branch, &base, false);
     }
-    let files = dirty_files(ctx, &workspace)?;
+    let files = if force {
+        Vec::new()
+    } else {
+        dirty_files(ctx, &workspace)?
+    };
     if !files.is_empty() {
         let message = format!(
             "blocked: {BLOCKED_DIRTY}. Le checkout principal a des modifications locales sur `{current}` :\n{}\nValide-les ou jette-les, puis relance.",
@@ -196,7 +279,10 @@ pub(super) fn git_checkout(ctx: &Ctx, key: &str) -> anyhow::Result<CommandOutput
     }
     let local_ref = format!("{LOCAL_REF_PREFIX}{branch}");
     if git_succeeds(ctx, &workspace, &verify_args(&local_ref))? {
-        switch(ctx, &workspace, &[GIT_SWITCH, &branch])?;
+        switch_with(ctx, &workspace, &[GIT_SWITCH, &branch], force)?;
+        // Pushed fixes of the dev worktree reach a branch reused from an earlier test.
+        let remote_ref = format!("{ORIGIN_REMOTE}/{branch}");
+        let _ = git_output(ctx, &workspace, &[GIT_MERGE, GIT_FF_ONLY, &remote_ref]);
         return switched(&branch, &base, false);
     }
     let listed = git_stdout(
@@ -212,10 +298,11 @@ pub(super) fn git_checkout(ctx: &Ctx, key: &str) -> anyhow::Result<CommandOutput
         } else {
             base.clone()
         };
-        switch(
+        switch_with(
             ctx,
             &workspace,
             &[GIT_SWITCH, GIT_CREATE_FLAG, &branch, GIT_NO_TRACK, &start],
+            force,
         )?;
         return switched(&branch, &base, true);
     }
@@ -235,20 +322,32 @@ pub(super) fn git_checkout(ctx: &Ctx, key: &str) -> anyhow::Result<CommandOutput
             format!("{remote_ref} carries commits from {}", foreign.join(", ")),
         ));
     }
-    switch(ctx, &workspace, &[GIT_SWITCH, &branch])?;
+    switch_with(ctx, &workspace, &[GIT_SWITCH, &branch], force)?;
     switched(&branch, &base, false)
 }
 
 /// Gives the main checkout back to the base branch when it is clean. Otherwise it stays as it is
 /// and the issue gets a comment saying so. A dirty checkout is never an error.
 pub(super) fn git_restore(ctx: &Ctx, key: &str) -> anyhow::Result<CommandOutput> {
+    let force = is_test_checkout(&ctx.workspace());
+    keeping_editor_version(ctx, force, || restore_in(ctx, key, force))
+}
+
+fn restore_in(ctx: &Ctx, key: &str, force: bool) -> anyhow::Result<CommandOutput> {
     let workspace = ctx.workspace();
     let base = base_branch(ctx, &workspace)?;
     let current = current_branch(ctx, &workspace)?;
     if current.is_empty() || current == base {
-        return output(json!({ "restored": false, "reason": "already-on-base", "base": base }));
+        let pulled = pull_base(ctx, &workspace);
+        return output(
+            json!({ "restored": false, "reason": "already-on-base", "base": base, "pulled": pulled }),
+        );
     }
-    let files = dirty_files(ctx, &workspace)?;
+    let files = if force {
+        Vec::new()
+    } else {
+        dirty_files(ctx, &workspace)?
+    };
     if !files.is_empty() {
         let message = format!(
             "Le checkout principal reste sur `{current}` (base `{base}`) : il a des modifications locales.\n{}",
@@ -260,8 +359,15 @@ pub(super) fn git_restore(ctx: &Ctx, key: &str) -> anyhow::Result<CommandOutput>
             "message": message, "commented": commented, "files": files,
         }));
     }
-    switch(ctx, &workspace, &[GIT_SWITCH, &base])?;
-    output(json!({ "restored": true, "from": current, "base": base }))
+    switch_with(ctx, &workspace, &[GIT_SWITCH, &base], force)?;
+    let pulled = pull_base(ctx, &workspace);
+    output(json!({ "restored": true, "from": current, "base": base, "pulled": pulled }))
+}
+
+/// `git pull --ff-only` on the base branch, so the next test starts from `origin/<base>`.
+/// Best effort: false when it could not (no network, diverged, dirty).
+fn pull_base(ctx: &Ctx, workspace: &Path) -> bool {
+    git_succeeds(ctx, workspace, &[GIT_PULL, GIT_FF_ONLY]).unwrap_or(false)
 }
 
 /// Best effort: a comment that cannot be posted never fails the restore.

@@ -197,6 +197,16 @@ pub fn projects_add(url: &Option<String>, path: &str) -> Result<Reply> {
     Ok(Reply::raw(post(url, PROJECTS, json!({ "path": path }))?))
 }
 
+/// Sets the test checkout of a project (`None` clears it).
+pub fn projects_set_test_checkout(
+    url: &Option<String>,
+    id: &str,
+    path: Option<&str>,
+) -> Result<Reply> {
+    let body = json!({ "testCheckout": path });
+    Ok(Reply::raw(put(url, &format!("{PROJECTS}/{id}"), body)?))
+}
+
 pub fn projects_rm(url: &Option<String>, id: &str) -> Result<Reply> {
     Ok(Reply::raw(delete(url, &format!("{PROJECTS}/{id}"))?))
 }

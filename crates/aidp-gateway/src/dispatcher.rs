@@ -1109,6 +1109,12 @@ impl Dispatcher {
                 started_at_ms: DateTime::parse_from_rfc3339(&rec.started_at)
                     .map(|d| d.timestamp_millis())
                     .unwrap_or(0),
+                main_checkout: self
+                    .projects
+                    .get(&rec.project_name)
+                    .map(|p| plan::is_main_checkout(&rec.cwd, &p.path))
+                    // Unknown project: keep the old behaviour (the session occupies it).
+                    .unwrap_or(true),
             })
             .collect();
 

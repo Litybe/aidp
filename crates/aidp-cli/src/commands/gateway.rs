@@ -96,6 +96,16 @@ fn projects(ctx: &Ctx, url: &Option<String>, op: ProjOp) -> anyhow::Result<Comma
         ProjOp::List => render(ctx, cli_api::projects_list(url)?),
         ProjOp::Add { path } => render(ctx, cli_api::projects_add(url, &path)?),
         ProjOp::Rm { id } => render(ctx, cli_api::projects_rm(url, &id)?),
+        ProjOp::TestCheckout { id, path, clear } => {
+            anyhow::ensure!(
+                clear || path.is_some(),
+                "give the absolute path of the clone, or --clear"
+            );
+            render(
+                ctx,
+                cli_api::projects_set_test_checkout(url, &id, path.as_deref().filter(|_| !clear))?,
+            )
+        }
         ProjOp::Import { file } => render(ctx, cli_api::projects_import(url, &file)?),
     }
 }

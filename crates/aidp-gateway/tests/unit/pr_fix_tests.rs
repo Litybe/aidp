@@ -246,6 +246,7 @@ fn harness() -> Harness {
             name: REPO_DIR.to_string(),
             path: project_dir.display().to_string(),
             runs_count: 0,
+            test_checkout: None,
         },
         marks: PrMarks::new(&state_dir),
         comment_state: PrCommentState::new(&state_dir),

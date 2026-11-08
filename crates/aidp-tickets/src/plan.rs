@@ -50,6 +50,26 @@ pub struct RunningSlot {
     pub origin_kind: String,
     pub ticket_key: Option<String>,
     pub started_at_ms: i64,
+    /// The session works in the project's main checkout (not in a worktree). Only such a
+    /// session occupies the project; a pipeline run in a worktree does not.
+    #[serde(default = "default_main_checkout")]
+    pub main_checkout: bool,
+}
+
+fn default_main_checkout() -> bool {
+    true
+}
+
+/// Whether `cwd` is the project's main checkout `project_path`: case, `/` vs `\` and a
+/// `\\?\` prefix are ignored, as is a trailing separator.
+pub fn is_main_checkout(cwd: &str, project_path: &str) -> bool {
+    fn norm(p: &str) -> String {
+        let p = p.trim().replace('/', "\\");
+        let p = p.strip_prefix("\\\\?\\").unwrap_or(&p);
+        p.trim_end_matches('\\').to_lowercase()
+    }
+    let project = norm(project_path);
+    !project.is_empty() && norm(cwd) == project
 }
 
 /// The demand a launch carries into its pipeline run, mirroring the
@@ -454,11 +474,18 @@ pub fn build_test_launch(
     if t.service.is_empty() || t.service == "unrouted" {
         return Err(SkipReason::NeedsRouting);
     }
+    // The note may already carry a test flow (written by an earlier test launch): use it as is.
     let flow = t
         .flow
         .as_deref()
         .zip(routing)
-        .and_then(|(flow, routing)| routing.test_flow_for(flow, t.route.as_deref()))
+        .and_then(|(flow, routing)| {
+            routing
+                .repos
+                .values()
+                .find_map(|entry| entry.test_flow.as_deref().filter(|tf| *tf == flow))
+                .or_else(|| routing.test_flow_for(flow, t.route.as_deref()))
+        })
         .ok_or(SkipReason::NoTemplate)?;
     let demand = match t.github.as_ref().filter(|_| t.source == Source::Github) {
         Some(github) => Demand::Issue {
@@ -625,7 +652,7 @@ pub fn plan_with_lanes(
     // Projects held by a session that is not a flow's: a flow lane must not start there either.
     let session_busy: HashSet<String> = running
         .iter()
-        .filter(|r| r.origin_kind != FLOW_ORIGIN)
+        .filter(|r| r.main_checkout && r.origin_kind != FLOW_ORIGIN)
         .map(|r| r.project.clone())
         .collect();
     let mut launches: Vec<Launch> = Vec::new();
@@ -678,7 +705,11 @@ pub fn plan_with_lanes(
     let mut sorted: Vec<Ticket> = candidates.to_vec();
     crate::order::sort(&mut sorted);
 
-    let mut occupied: HashSet<String> = running.iter().map(|r| r.project.clone()).collect();
+    let mut occupied: HashSet<String> = running
+        .iter()
+        .filter(|r| r.main_checkout)
+        .map(|r| r.project.clone())
+        .collect();
 
     for t in sorted.iter().filter(|t| {
         matches!(t.status, Status::Todo | Status::Queued)

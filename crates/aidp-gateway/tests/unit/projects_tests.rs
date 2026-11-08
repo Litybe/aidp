@@ -93,3 +93,47 @@ fn discover_registers_the_checkout_a_vault_run_recorded() {
 
     assert_eq!(report.added.len(), 1);
 }
+
+#[test]
+fn test_checkout_is_stored_normalized_persisted_and_clearable() {
+    let workspace = TempWorkspace::new("projects_test_checkout");
+    let state = workspace.child(STATE_DIR);
+    let projects = Projects::load(&state);
+    let project = projects.add(&repo(&workspace, ALPHA).to_string_lossy());
+    assert_eq!(project.checkout_path(), project.path);
+
+    let clone = workspace.child("clone");
+    let raw = format!("{}\\", clone.to_string_lossy());
+    let updated = projects
+        .set_test_checkout(&project.id, Some(&raw))
+        .unwrap()
+        .unwrap();
+    let stored = updated.test_checkout.clone().unwrap();
+    assert!(!stored.contains('\\') && !stored.ends_with('/'));
+    assert_eq!(updated.checkout_path(), stored);
+
+    let reloaded = Projects::load(&state).get(ALPHA).unwrap();
+    assert_eq!(reloaded.test_checkout.as_deref(), Some(stored.as_str()));
+
+    let cleared = projects
+        .set_test_checkout(ALPHA, Some("  "))
+        .unwrap()
+        .unwrap();
+    assert!(cleared.test_checkout.is_none());
+    assert_eq!(cleared.checkout_path(), cleared.path);
+}
+
+#[test]
+fn test_checkout_refuses_a_relative_path_and_ignores_an_unknown_project() {
+    let workspace = TempWorkspace::new("projects_test_checkout_refused");
+    let projects = Projects::load(&workspace.child(STATE_DIR));
+    let project = projects.add(&repo(&workspace, ALPHA).to_string_lossy());
+    assert!(projects
+        .set_test_checkout(&project.id, Some("relative/dir"))
+        .is_err());
+    assert!(projects.get(ALPHA).unwrap().test_checkout.is_none());
+    assert!(projects
+        .set_test_checkout("missing", workspace.child("abs").to_str())
+        .unwrap()
+        .is_none());
+}

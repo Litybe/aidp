@@ -184,3 +184,131 @@ fn overwritten_metas_are_read_from_git_stderr() {
     let stderr = "error: The following untracked working tree files would be overwritten by checkout:\n\tAssets/a.png.meta\n\tAssets/b.cs\nPlease move or remove them before you switch branches.\nAborting\n";
     assert_eq!(overwritten_metas(stderr), ["Assets/a.png.meta"]);
 }
+
+/// `origin` (a dev checkout with the ticket branch pushed) and a separate clone of it where the
+/// branch exists only as `origin/<branch>`.
+fn clone_of(repo: &Repo) -> Repo {
+    let root = tempfile::tempdir().unwrap();
+    let dir = root.path().join("test-checkout");
+    let origin = repo.dir.to_string_lossy().to_string();
+    git(root.path(), &["clone", &origin, &dir.to_string_lossy()]);
+    git(&dir, &["config", "user.email", "t@example.com"]);
+    git(&dir, &["config", "user.name", "t"]);
+    let mut ctx = Ctx::for_test(dir.clone(), None);
+    ctx.runner = Box::new(OsProcessRunner);
+    Repo {
+        _root: root,
+        dir,
+        ctx,
+    }
+}
+
+#[test]
+fn checkout_takes_a_branch_that_exists_only_on_origin() {
+    let origin = repo(true);
+    let clone = clone_of(&origin);
+    git(&origin.dir, &["switch", "-c", "feat/GH-9"]);
+    write(&origin.dir, "Assets/new.txt", "from the dev worktree");
+    git(&origin.dir, &["add", "."]);
+    git(&origin.dir, &["commit", "-m", "work"]);
+    git(&origin.dir, &["switch", "main"]);
+    assert!(git(&clone.dir, &["branch", "--list", "feat/GH-9"]).is_empty());
+
+    let output = git_checkout(&clone.ctx, "GH-9").unwrap();
+    assert!(
+        matches!(output.payload, Payload::Text(ref text) if text.contains("\"blocked\":false"))
+    );
+    assert_eq!(git(&clone.dir, &["branch", "--show-current"]), "feat/GH-9");
+    assert!(clone.dir.join("Assets/new.txt").is_file());
+}
+
+#[test]
+fn checkout_reuses_a_local_branch_and_fast_forwards_it_to_origin() {
+    let origin = repo(true);
+    git(&origin.dir, &["switch", "-c", "feat/GH-9"]);
+    let clone = clone_of(&origin);
+    git(&clone.dir, &["switch", "main"]);
+    write(&origin.dir, "Assets/fix.txt", "pushed fix");
+    git(&origin.dir, &["add", "."]);
+    git(&origin.dir, &["commit", "-m", "fix"]);
+    git(&origin.dir, &["switch", "main"]);
+
+    git_checkout(&clone.ctx, "GH-9").unwrap();
+    assert_eq!(git(&clone.dir, &["branch", "--show-current"]), "feat/GH-9");
+    assert!(clone.dir.join("Assets/fix.txt").is_file());
+}
+
+#[test]
+fn checkout_creates_a_missing_branch_from_the_up_to_date_origin_base() {
+    let origin = repo(true);
+    let clone = clone_of(&origin);
+    write(&origin.dir, "Assets/later.txt", "merged after the clone");
+    git(&origin.dir, &["add", "."]);
+    git(&origin.dir, &["commit", "-m", "later"]);
+
+    let output = git_checkout(&clone.ctx, "GH-10").unwrap();
+    assert!(matches!(output.payload, Payload::Text(ref text) if text.contains("\"created\":true")));
+    assert_eq!(git(&clone.dir, &["branch", "--show-current"]), "feat/GH-10");
+    assert!(clone.dir.join("Assets/later.txt").is_file());
+}
+
+#[test]
+fn restore_goes_back_to_base_and_pulls_it() {
+    let origin = repo(true);
+    let clone = clone_of(&origin);
+    git(&clone.dir, &["switch", "-c", "feat/GH-9"]);
+    write(&origin.dir, "Assets/merged.txt", "merged on main");
+    git(&origin.dir, &["add", "."]);
+    git(&origin.dir, &["commit", "-m", "merged"]);
+
+    let output = git_restore(&clone.ctx, "GH-9").unwrap();
+    assert!(matches!(output.payload, Payload::Text(ref text) if text.contains("\"pulled\":true")));
+    assert_eq!(git(&clone.dir, &["branch", "--show-current"]), "main");
+    assert!(clone.dir.join("Assets/merged.txt").is_file());
+}
+
+#[test]
+fn forced_checkout_discards_local_changes_but_keeps_the_editor_version() {
+    let origin = repo(true);
+    let clone = clone_of(&origin);
+    write(&clone.dir, "Assets/a.txt", "rewritten by the editor");
+    write(
+        &clone.dir,
+        "ProjectSettings/ProjectVersion.txt",
+        "m_EditorVersion: 6000.6.8f1",
+    );
+    // Without force the checkout is blocked on the dirty tracked file.
+    let blocked = checkout_in(&clone.ctx, "GH-12", false).unwrap();
+    assert!(
+        matches!(blocked.payload, Payload::Text(ref text) if text.contains("\"blocked\":true"))
+    );
+
+    let output =
+        keeping_editor_version(&clone.ctx, true, || checkout_in(&clone.ctx, "GH-12", true))
+            .unwrap();
+    assert!(
+        matches!(output.payload, Payload::Text(ref text) if text.contains("\"blocked\":false"))
+    );
+    assert_eq!(git(&clone.dir, &["branch", "--show-current"]), "feat/GH-12");
+    assert_eq!(
+        std::fs::read_to_string(clone.dir.join("Assets/a.txt")).unwrap(),
+        "a"
+    );
+    assert_eq!(
+        std::fs::read_to_string(clone.dir.join("ProjectSettings/ProjectVersion.txt")).unwrap(),
+        "m_EditorVersion: 6000.6.8f1"
+    );
+    assert!(git(&clone.dir, &["ls-files", "-v"]).contains("S ProjectSettings/ProjectVersion.txt"));
+    assert_eq!(git(&clone.dir, &["status", "--porcelain"]), "");
+
+    let restored =
+        keeping_editor_version(&clone.ctx, true, || restore_in(&clone.ctx, "GH-12", true)).unwrap();
+    assert!(
+        matches!(restored.payload, Payload::Text(ref text) if text.contains("\"restored\":true"))
+    );
+    assert_eq!(git(&clone.dir, &["branch", "--show-current"]), "main");
+    assert_eq!(
+        std::fs::read_to_string(clone.dir.join("ProjectSettings/ProjectVersion.txt")).unwrap(),
+        "m_EditorVersion: 6000.6.8f1"
+    );
+}
