@@ -12,6 +12,9 @@ pub enum FlowTicketReason {
     /// The flow escalated and blocked the ticket.
     #[serde(rename = "flow escalated")]
     Escalated,
+    /// The flow failed and blocked the ticket.
+    #[serde(rename = "flow failed")]
+    Failed,
     /// The ticket reached its token ceiling and the human refused to continue.
     #[serde(rename = "budget")]
     Budget,
@@ -24,6 +27,7 @@ impl FlowTicketReason {
             FlowTicketReason::Started => "flow-started",
             FlowTicketReason::StatusSync => "flow-progress",
             FlowTicketReason::Escalated => "flow escalated",
+            FlowTicketReason::Failed => "flow failed",
             FlowTicketReason::Budget => "budget",
         }
     }

@@ -2,7 +2,7 @@
 //! A restart is a second engine over the same directories and sessions.
 
 use crate::bus::Bus;
-use crate::flows::executor::{ascii_json, Ports};
+use crate::flows::executor::{ascii_json, ticket_status_of, Ports};
 use crate::flows::lock::{workspace_key, LocalLock, WorkspaceLock};
 use crate::flows::recovery::{resume_all, tick};
 use crate::flows::registry::{
@@ -911,6 +911,10 @@ fn it_restart_with_a_vanished_session_fails_the_step_as_orphaned_and_retry_relau
     let develop = &state.steps[STEP_DEVELOP];
     assert_eq!(develop.status, StepStatus::Failed);
     assert_eq!(develop.reason.as_deref(), Some("orphaned"));
+    assert_eq!(
+        ticket_status_of(&state),
+        Some(aidp_tickets::model::Status::Blocked)
+    );
 
     second.retry("LOC-9", STEP_DEVELOP, ACTOR).unwrap();
     wait_for("a second launch", || harness.sessions.launch_count() == 2);
@@ -1616,4 +1620,20 @@ fn it_rejecting_the_ceiling_escalates_the_run() {
     assert_eq!(run_status(&engine, "LOC-16"), FlowStatus::Escalated);
     assert_eq!(harness.ceiling.raised.load(Ordering::SeqCst), 0);
     assert_eq!(harness.sessions.launch_count(), 0);
+}
+
+#[test]
+fn it_a_failed_action_reports_a_truncated_stderr_not_the_generic_message() {
+    let long = "x".repeat(5000);
+    let ActionOutcome::TechnicalError(message) = classify_exit(1, "", &long, &[]) else {
+        panic!("technical error expected");
+    };
+    assert!(message.starts_with("exit 1: xxx"), "{message}");
+    assert!(message.len() < 2100, "{}", message.len());
+    let ActionOutcome::TechnicalError(message) =
+        classify_exit(1, "", "fatal: Unable to create index.lock", &[])
+    else {
+        panic!("technical error expected");
+    };
+    assert_eq!(message, "exit 1: fatal: Unable to create index.lock");
 }

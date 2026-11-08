@@ -252,3 +252,173 @@ fn it_releasing_a_clean_scratch_removes_it_directly() {
     assert!(!workspace.path.exists());
     assert!(run_git(&fx.project, &["for-each-ref", WIP_REF_PREFIX]).is_empty());
 }
+
+#[test]
+fn it_parallel_creations_of_one_project_all_succeed() {
+    if !git_available() {
+        println!("SKIP: git not found on PATH");
+        return;
+    }
+    let fx = fixture();
+    let keys = ["LOC-1", "LOC-2", "LOC-3", "LOC-4"];
+    let results: Vec<_> = std::thread::scope(|scope| {
+        let handles: Vec<_> = keys
+            .iter()
+            .map(|key| {
+                let (project, vault) = (&fx.project, &fx.vault);
+                scope.spawn(move || ensure(&OsProcessRunner, project, vault, REPO, key, &[]))
+            })
+            .collect();
+        handles
+            .into_iter()
+            .map(|handle| handle.join().unwrap())
+            .collect()
+    });
+    for (key, result) in keys.iter().zip(results) {
+        let ensured = result.unwrap_or_else(|error| panic!("{key}: {error}"));
+        assert!(!ensured.reused);
+        assert!(ensured.workspace.path.join("a.txt").is_file());
+    }
+}
+
+#[test]
+fn it_lock_contention_is_recognised_from_git_stderr() {
+    use crate::worktrees::is_lock_contention;
+    assert!(is_lock_contention(
+        "fatal: Unable to create '/r/.git/index.lock': File exists."
+    ));
+    assert!(is_lock_contention(
+        "error: could not lock config file /r/.git/config.lock: File exists"
+    ));
+    assert!(!is_lock_contention(
+        "fatal: 'x' is a missing but already registered worktree"
+    ));
+    assert!(!is_lock_contention("fatal: not a git repository"));
+}
+
+/// Runs `git` for real except for `worktree add`, which fails `failures` times on a held lock.
+struct LockedRunner {
+    failures: std::sync::atomic::AtomicU32,
+    adds: std::sync::atomic::AtomicU32,
+    stderr: &'static str,
+}
+
+impl aidp_core::process_runner::ProcessRunner for LockedRunner {
+    fn output(
+        &self,
+        spec: &aidp_core::process_runner::ProcessSpec,
+    ) -> std::io::Result<std::process::Output> {
+        use std::sync::atomic::Ordering;
+        let is_add = spec.args.iter().any(|arg| arg == "worktree")
+            && spec.args.iter().any(|arg| arg == "add");
+        if is_add {
+            self.adds.fetch_add(1, Ordering::SeqCst);
+            if self.failures.load(Ordering::SeqCst) > 0 {
+                self.failures.fetch_sub(1, Ordering::SeqCst);
+                let mut failed = OsProcessRunner
+                    .output(&aidp_core::process_runner::ProcessSpec::new("git").arg("--version"))?;
+                failed.status = failing_status();
+                failed.stdout.clear();
+                failed.stderr = self.stderr.as_bytes().to_vec();
+                return Ok(failed);
+            }
+        }
+        OsProcessRunner.output(spec)
+    }
+
+    fn spawn(
+        &self,
+        spec: &aidp_core::process_runner::ProcessSpec,
+    ) -> std::io::Result<Box<dyn aidp_core::process_runner::SpawnedChild>> {
+        OsProcessRunner.spawn(spec)
+    }
+}
+
+fn failing_status() -> std::process::ExitStatus {
+    Command::new("git")
+        .arg("no-such-subcommand-xyz")
+        .output()
+        .unwrap()
+        .status
+}
+
+fn locked_runner(failures: u32, stderr: &'static str) -> LockedRunner {
+    LockedRunner {
+        failures: failures.into(),
+        adds: 0.into(),
+        stderr,
+    }
+}
+
+const INDEX_LOCKED: &str = "fatal: Unable to create '/r/.git/index.lock': File exists.";
+
+#[test]
+fn it_worktree_add_is_retried_on_a_held_lock() {
+    if !git_available() {
+        println!("SKIP: git not found on PATH");
+        return;
+    }
+    let fx = fixture();
+    let runner = locked_runner(2, INDEX_LOCKED);
+    let ensured = crate::worktrees::ensure_with_sleeper(
+        &runner,
+        &no_sleep,
+        &fx.project,
+        &fx.vault,
+        REPO,
+        KEY,
+        &[],
+    )
+    .unwrap();
+    assert!(ensured.workspace.path.join("a.txt").is_file());
+    assert_eq!(runner.adds.load(std::sync::atomic::Ordering::SeqCst), 3);
+}
+
+#[test]
+fn it_retry_is_bounded_and_the_error_carries_git_stderr() {
+    if !git_available() {
+        println!("SKIP: git not found on PATH");
+        return;
+    }
+    let fx = fixture();
+    let runner = locked_runner(u32::MAX, INDEX_LOCKED);
+    let error = crate::worktrees::ensure_with_sleeper(
+        &runner,
+        &no_sleep,
+        &fx.project,
+        &fx.vault,
+        REPO,
+        KEY,
+        &[],
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(error.contains("index.lock"), "{error}");
+    assert_eq!(
+        runner.adds.load(std::sync::atomic::Ordering::SeqCst),
+        crate::worktrees::LOCK_ATTEMPTS
+    );
+}
+
+#[test]
+fn it_other_git_failures_are_not_retried() {
+    if !git_available() {
+        println!("SKIP: git not found on PATH");
+        return;
+    }
+    let fx = fixture();
+    let runner = locked_runner(u32::MAX, "fatal: something else");
+    let error = crate::worktrees::ensure_with_sleeper(
+        &runner,
+        &no_sleep,
+        &fx.project,
+        &fx.vault,
+        REPO,
+        KEY,
+        &[],
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(error.contains("something else"), "{error}");
+    assert_eq!(runner.adds.load(std::sync::atomic::Ordering::SeqCst), 1);
+}

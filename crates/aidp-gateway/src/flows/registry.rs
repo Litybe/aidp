@@ -52,6 +52,7 @@ pub const DEFAULT_AUTONOMOUS: bool = true;
 
 const DEFAULT_FAIL_MESSAGE: &str = "fail action";
 const NO_STDERR: &str = "";
+const ERROR_DETAIL_MAX_CHARS: usize = 2000;
 const OUTPUT_RESULT: &str = "result";
 const OUTPUT_STDOUT: &str = "stdout";
 const OUTPUT_RUN_ID: &str = "runId";
@@ -204,6 +205,7 @@ impl SubprocessAction {
         let command = AidpCommand::json_action(args.iter().map(String::as_str));
         let mut spec = ProcessSpec::new(AIDP_PROGRAM).args(command.args().iter().cloned());
         spec.piped_stdout = true;
+        spec.piped_stderr = true;
         spec.cwd = workspace.map(Path::to_path_buf);
         spec
     }
@@ -238,6 +240,7 @@ impl FlowAction for SubprocessAction {
             }
         };
         let stdout_reader = child.take_stdout().map(drain);
+        let stderr_reader = child.take_stderr().map(drain);
         let deadline = Instant::now() + self.timeout;
         let code = loop {
             match child.try_wait() {
@@ -247,6 +250,9 @@ impl FlowAction for SubprocessAction {
                         return ActionOutcome::TechnicalError(error.to_string());
                     }
                     if let Some(reader) = stdout_reader {
+                        let _ = reader.join();
+                    }
+                    if let Some(reader) = stderr_reader {
                         let _ = reader.join();
                     }
                     return ActionOutcome::TechnicalError(format!(
@@ -261,7 +267,10 @@ impl FlowAction for SubprocessAction {
         let stdout = stdout_reader
             .and_then(|handle| handle.join().ok())
             .unwrap_or_default();
-        classify_exit(code, &stdout, NO_STDERR, &self.business_codes)
+        let stderr = stderr_reader
+            .and_then(|handle| handle.join().ok())
+            .unwrap_or_else(|| NO_STDERR.to_string());
+        classify_exit(code, &stdout, &stderr, &self.business_codes)
     }
 }
 
@@ -344,6 +353,7 @@ pub fn classify_exit(
     } else {
         text
     };
+    let text: String = text.chars().take(ERROR_DETAIL_MAX_CHARS).collect();
     let message = format!("exit {code}: {text}");
     if business_codes.contains(&code) {
         ActionOutcome::BusinessError(message)

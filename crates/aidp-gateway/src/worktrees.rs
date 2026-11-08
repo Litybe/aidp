@@ -328,6 +328,63 @@ fn git_checked(runner: &dyn ProcessRunner, dir: &Path, args: &[&str]) -> Result<
     }
 }
 
+/// Attempts made on a git command that meets a lock held by another git process.
+pub const LOCK_ATTEMPTS: u32 = 6;
+/// Pause before the first retry on a held lock; it grows with each attempt.
+pub const LOCK_RETRY_DELAY: Duration = Duration::from_millis(500);
+const LOCK_FILE_MARKER: &str = ".lock";
+const LOCK_HELD_MARKERS: [&str; 3] = ["File exists", "Unable to create", "another git process"];
+const GIT_ERROR_MAX_CHARS: usize = 2000;
+
+/// True when git's error says a `*.lock` file is held by another git process.
+pub fn is_lock_contention(stderr: &str) -> bool {
+    stderr.contains(LOCK_FILE_MARKER)
+        && LOCK_HELD_MARKERS
+            .iter()
+            .any(|marker| stderr.contains(marker))
+}
+
+/// `git_checked`, retried a bounded number of times while git reports a held lock.
+/// The error keeps git's own message (stderr), truncated.
+fn git_checked_retrying(
+    runner: &dyn ProcessRunner,
+    sleeper: &dyn Fn(Duration),
+    dir: &Path,
+    args: &[&str],
+) -> Result<GitOutput, String> {
+    let mut attempt = 1;
+    loop {
+        let output = git(runner, dir, args)?;
+        if output.success {
+            return Ok(output);
+        }
+        if attempt < LOCK_ATTEMPTS && is_lock_contention(&output.stderr) {
+            sleeper(LOCK_RETRY_DELAY * attempt);
+            attempt += 1;
+            continue;
+        }
+        let detail: String = output
+            .stderr
+            .trim()
+            .chars()
+            .take(GIT_ERROR_MAX_CHARS)
+            .collect();
+        return Err(format!("{}: {detail}", args.join(" ")));
+    }
+}
+
+/// The lock that serializes the worktree creations of one project.
+fn project_lock(project: &Path) -> std::sync::Arc<std::sync::Mutex<()>> {
+    static LOCKS: std::sync::OnceLock<
+        std::sync::Mutex<std::collections::HashMap<String, std::sync::Arc<std::sync::Mutex<()>>>>,
+    > = std::sync::OnceLock::new();
+    let mut locks = LOCKS
+        .get_or_init(Default::default)
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    locks.entry(normalize_path(project)).or_default().clone()
+}
+
 /// The branch checked out at `dir`, or `None` when it cannot be read or HEAD is detached.
 fn current_branch(runner: &dyn ProcessRunner, dir: &Path) -> Option<String> {
     let output = git(runner, dir, &[GIT_REV_PARSE, FLAG_ABBREV_REF, REV_HEAD]).ok()?;
@@ -409,6 +466,8 @@ fn worktree_workspace(path: PathBuf, branch: String) -> Workspace {
 
 /// Reuse or create the worktree of `key` on `feat/<key>`.
 /// Refuses, creating nothing, when the branch is checked out elsewhere.
+/// Creations of one project are serialized: concurrent `git worktree add` on a large repository
+/// contend on its index and ref locks and outlast the caller's read timeout.
 pub fn ensure(
     runner: &dyn ProcessRunner,
     project: &Path,
@@ -417,7 +476,34 @@ pub fn ensure(
     key: &str,
     copy: &[String],
 ) -> Result<Ensured, EnsureError> {
+    ensure_with_sleeper(runner, &std::thread::sleep, project, vault, repo, key, copy)
+}
+
+/// [`ensure`] with the pause between lock retries supplied by the caller.
+pub fn ensure_with_sleeper(
+    runner: &dyn ProcessRunner,
+    sleeper: &dyn Fn(Duration),
+    project: &Path,
+    vault: &Path,
+    repo: &str,
+    key: &str,
+    copy: &[String],
+) -> Result<Ensured, EnsureError> {
     safe_name::check(KEY_FIELD, key).map_err(|error| EnsureError::InvalidKey(error.to_string()))?;
+    let lock = project_lock(project);
+    let _guard = lock.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    ensure_locked(runner, sleeper, project, vault, repo, key, copy)
+}
+
+fn ensure_locked(
+    runner: &dyn ProcessRunner,
+    sleeper: &dyn Fn(Duration),
+    project: &Path,
+    vault: &Path,
+    repo: &str,
+    key: &str,
+    copy: &[String],
+) -> Result<Ensured, EnsureError> {
     let path = worktree_path(vault, repo, key);
     let branch = branch_for(key);
     let _ = git(runner, project, &[GIT_FETCH, ORIGIN_REMOTE]);
@@ -454,15 +540,17 @@ pub fn ensure(
     }
     let path_arg = path.to_string_lossy().to_string();
     if ref_exists(runner, project, &format!("{HEADS_REF_PREFIX}{branch}")) {
-        git_checked(
+        git_checked_retrying(
             runner,
+            sleeper,
             project,
             &[GIT_WORKTREE, GIT_ADD, &path_arg, &branch],
         )
     } else {
         let base = resolve_base(runner, project).map_err(EnsureError::Git)?;
-        git_checked(
+        git_checked_retrying(
             runner,
+            sleeper,
             project,
             &[
                 GIT_WORKTREE,

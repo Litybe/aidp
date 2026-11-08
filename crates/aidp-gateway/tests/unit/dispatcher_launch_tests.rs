@@ -369,6 +369,7 @@ fn flow_ticket_reasons_serialize_to_their_wire_strings() {
         FlowTicketReason::Started,
         FlowTicketReason::StatusSync,
         FlowTicketReason::Escalated,
+        FlowTicketReason::Failed,
     ];
     for reason in reasons {
         assert_eq!(
@@ -377,6 +378,7 @@ fn flow_ticket_reasons_serialize_to_their_wire_strings() {
         );
     }
     assert_eq!(FlowTicketReason::Started.as_str(), "flow-started");
+    assert_eq!(FlowTicketReason::Failed.as_str(), "flow failed");
 }
 
 const CONFIG_LANES: &str = include_str!("../fixtures/dispatcher_launch/config_lanes.yaml");

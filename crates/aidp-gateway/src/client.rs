@@ -110,6 +110,13 @@ pub(crate) fn post(url: &Option<String>, path: &str, body: Value) -> anyhow::Res
         Some(body),
     )
 }
+/// `post` with the long read timeout, for daemon calls that do slow git work.
+pub(crate) fn post_long(url: &Option<String>, path: &str, body: Value) -> anyhow::Result<Value> {
+    call(
+        with_auth(crate::net::long_agent().post(&format!("{}{}", base(url), path))),
+        Some(body),
+    )
+}
 pub(crate) fn put(url: &Option<String>, path: &str, body: Value) -> anyhow::Result<Value> {
     call(
         with_auth(crate::net::agent().put(&format!("{}{}", base(url), path))),
@@ -599,12 +606,12 @@ pub fn worktrees_prune(url: &Option<String>, dry_run: bool) -> anyhow::Result<Va
 
 /// Creates or reuses the worktree of a ticket.
 pub fn worktrees_ensure(url: &Option<String>, key: &str) -> anyhow::Result<Value> {
-    post(url, WORKTREES_ENSURE_PATH, key_body(key)?)
+    post_long(url, WORKTREES_ENSURE_PATH, key_body(key)?)
 }
 
 /// Saves the unsaved work of a ticket's worktree, then deletes it.
 pub fn worktrees_remove(url: &Option<String>, key: &str) -> anyhow::Result<Value> {
-    post(url, WORKTREES_REMOVE_PATH, key_body(key)?)
+    post_long(url, WORKTREES_REMOVE_PATH, key_body(key)?)
 }
 
 fn key_body(key: &str) -> anyhow::Result<Value> {

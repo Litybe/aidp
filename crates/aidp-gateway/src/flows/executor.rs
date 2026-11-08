@@ -103,7 +103,7 @@ fn file_safe(text: &str) -> String {
 }
 
 /// The ticket status a delivery run implies, or `None` once the run is aborted.
-fn ticket_status_of(state: &FlowState) -> Option<Status> {
+pub(crate) fn ticket_status_of(state: &FlowState) -> Option<Status> {
     let step_done = |id: &str| {
         state
             .steps
@@ -113,7 +113,7 @@ fn ticket_status_of(state: &FlowState) -> Option<Status> {
     match state.status {
         FlowStatus::Aborted => None,
         _ if step_done(STEP_MERGE) => Some(Status::Done),
-        FlowStatus::Escalated => Some(Status::Blocked),
+        FlowStatus::Escalated | FlowStatus::Failed => Some(Status::Blocked),
         _ if step_done(STEP_READY) => Some(Status::InReview),
         _ => Some(Status::InProgress),
     }
@@ -319,6 +319,8 @@ impl Executor {
             });
             let reason = if refused {
                 FlowTicketReason::Budget
+            } else if state.status == FlowStatus::Failed {
+                FlowTicketReason::Failed
             } else {
                 FlowTicketReason::Escalated
             };

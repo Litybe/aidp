@@ -48,18 +48,27 @@ pub(crate) fn is_exempt(path: &str, exempt_prefix: Option<&str>) -> bool {
     is_under(path, HOST_SESSION_DIR) || exempt_prefix.is_some_and(|prefix| is_under(path, prefix))
 }
 
+/// True when `workspace` is a Unity project (it has `ProjectSettings/ProjectVersion.txt`).
+pub fn is_unity_project(workspace: &Path) -> bool {
+    workspace.join(UNITY_PROJECT_MARKER).is_file()
+}
+
+/// True when `path` is one the Unity editor rewrites by itself (the `UNITY_EDITOR_OWNED` list).
+pub fn is_unity_editor_owned(path: &str) -> bool {
+    UNITY_EDITOR_OWNED.iter().any(|entry| {
+        if let Some(suffix) = entry.strip_prefix('*') {
+            path.ends_with(suffix)
+        } else if entry.ends_with(GIT_PATH_SEPARATOR) {
+            path.starts_with(entry)
+        } else {
+            path == *entry
+        }
+    })
+}
+
 /// True when `workspace` is a Unity project and `path` is a file the editor rewrites by itself.
 fn is_editor_owned(workspace: &Path, path: &str) -> bool {
-    workspace.join(UNITY_PROJECT_MARKER).is_file()
-        && UNITY_EDITOR_OWNED.iter().any(|entry| {
-            if let Some(suffix) = entry.strip_prefix('*') {
-                path.ends_with(suffix)
-            } else if entry.ends_with(GIT_PATH_SEPARATOR) {
-                path.starts_with(entry)
-            } else {
-                path == *entry
-            }
-        })
+    is_unity_project(workspace) && is_unity_editor_owned(path)
 }
 
 fn is_under(path: &str, prefix: &str) -> bool {
