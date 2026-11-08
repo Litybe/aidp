@@ -289,8 +289,13 @@ fn merge_stops_when_squash_is_disabled_and_tries_no_other_strategy() {
     assert!(!fake.called("--rebase"));
 }
 
+const FAST_POLL: MergeablePoll = MergeablePoll {
+    timeout: Duration::from_millis(30),
+    interval: Duration::from_millis(5),
+};
+
 #[test]
-fn merge_on_a_behind_branch_rebases_instead_of_merging() {
+fn merge_on_a_behind_branch_rebases_then_really_merges_on_the_rebased_head() {
     let fake = FakeGh::install(&merge_rules(
         mergeable_graphql(),
         REPO_ALLOWS_SQUASH,
@@ -299,14 +304,60 @@ fn merge_on_a_behind_branch_rebases_instead_of_merging() {
         answer(NEEDLE_DELETE, ""),
     ));
     let outcome = pr_merge(PR_NUMBER, Some(REPO), HEAD_SHA, false).unwrap();
-    assert!(!outcome.merged);
+    assert!(outcome.merged);
     assert!(outcome.rebased);
     assert_eq!(outcome.sha.as_deref(), Some(REBASED_SHA));
-    assert!(fake
-        .calls()
+    let calls = fake.calls();
+    let update = calls
         .iter()
-        .any(|line| line.contains(NEEDLE_UPDATE) && line.contains("--rebase")));
+        .position(|line| line.contains(NEEDLE_UPDATE) && line.contains("--rebase"))
+        .unwrap();
+    let merge = calls
+        .iter()
+        .position(|line| line.contains(NEEDLE_MERGE))
+        .unwrap();
+    assert!(update < merge);
+    assert!(calls[merge].contains(REBASED_SHA));
+    assert!(!calls[merge].contains(HEAD_SHA));
+}
+
+#[test]
+fn merge_after_a_rebase_fails_when_github_never_computes_mergeable() {
+    let unknown = mergeable_graphql().replace("\"MERGEABLE\"", "\"UNKNOWN\"");
+    let fake = FakeGh::install(&merge_rules(
+        unknown,
+        REPO_ALLOWS_SQUASH,
+        2,
+        answer(NEEDLE_MERGE, ""),
+        answer(NEEDLE_DELETE, ""),
+    ));
+    let error = pr_merge_polling(PR_NUMBER, Some(REPO), HEAD_SHA, false, FAST_POLL).unwrap_err();
+    assert!(error.to_string().contains("mergeable"), "{error}");
+    assert!(fake.called(NEEDLE_UPDATE));
     assert!(!fake.called(NEEDLE_MERGE));
+}
+
+#[test]
+fn waiting_for_mergeable_polls_until_github_answers() {
+    let mut answers = vec![Mergeable::Unknown, Mergeable::Unknown, Mergeable::Mergeable];
+    let mut reads = 0;
+    let result = wait_for_mergeable(FAST_POLL, || {
+        reads += 1;
+        Ok(answers.remove(0))
+    });
+    assert!(result.is_ok());
+    assert_eq!(reads, 3);
+}
+
+#[test]
+fn waiting_for_mergeable_reports_a_conflict_without_polling_further() {
+    let mut reads = 0;
+    let result = wait_for_mergeable(FAST_POLL, || {
+        reads += 1;
+        Ok(Mergeable::Conflicting)
+    });
+    assert!(matches!(result, Err(IntegrationError::Conflict(_))));
+    assert_eq!(reads, 1);
 }
 
 #[test]

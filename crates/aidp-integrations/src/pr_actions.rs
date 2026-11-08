@@ -6,13 +6,19 @@ use crate::models::pr_view_fields::PrViewFields;
 use crate::models::ready_outcome::ReadyOutcome;
 use crate::models::thread_result::ThreadResult;
 use crate::models::update_outcome::UpdateOutcome;
-use crate::pr::{pr_status, PrState};
+use crate::pr::{pr_status, Mergeable, PrState};
 use crate::IntegrationError;
 use serde_json::Value;
+use std::time::{Duration, Instant};
 
 const NO_REPOSITORY: &str = "cannot resolve the repository";
 const PR_NOT_OPEN: &str = "the pull request is merged or closed";
 const SQUASH_DISABLED: &str = "squash disabled on this repository";
+const MERGEABLE_TIMEOUT: Duration = Duration::from_secs(60);
+const MERGEABLE_INTERVAL: Duration = Duration::from_secs(3);
+const MERGEABLE_UNKNOWN: &str =
+    "github did not compute `mergeable` after the rebase within the allowed time";
+const CONFLICT_AFTER_REBASE: &str = "the pull request conflicts with its base after the rebase";
 const BRANCH_MOVED: &str = "the branch moved since you read it";
 const HEAD_MISMATCH_MARKER: &str = "head branch was modified";
 const ALLOW_SQUASH_KEY: &str = "allow_squash_merge";
@@ -92,13 +98,70 @@ fn delete_branch(slug: &str, branch: &str) -> anyhow::Result<()> {
     gh(&["api", "-X", "DELETE", &path], None).map(|_| ())
 }
 
+/// How long, and how often, to poll GitHub for `mergeable` after a rebase.
+#[derive(Debug, Clone, Copy)]
+pub struct MergeablePoll {
+    pub timeout: Duration,
+    pub interval: Duration,
+}
+
+impl Default for MergeablePoll {
+    fn default() -> Self {
+        MergeablePoll {
+            timeout: MERGEABLE_TIMEOUT,
+            interval: MERGEABLE_INTERVAL,
+        }
+    }
+}
+
+/// Polls `read` until GitHub reports `mergeable` or `conflicting`; `Unknown` means it still computes.
+pub(crate) fn wait_for_mergeable(
+    poll: MergeablePoll,
+    mut read: impl FnMut() -> Result<Mergeable, IntegrationError>,
+) -> Result<(), IntegrationError> {
+    let deadline = Instant::now() + poll.timeout;
+    loop {
+        match read()? {
+            Mergeable::Mergeable => return Ok(()),
+            Mergeable::Conflicting => {
+                return Err(IntegrationError::Conflict(
+                    CONFLICT_AFTER_REBASE.to_string(),
+                ))
+            }
+            Mergeable::Unknown => {}
+        }
+        if Instant::now() >= deadline {
+            return Err(IntegrationError::Conflict(MERGEABLE_UNKNOWN.to_string()));
+        }
+        std::thread::sleep(poll.interval);
+    }
+}
+
 /// Squash-merges the PR when its gate is open, pinned to `expected_head_sha`.
-/// A branch behind its base is rebased and reported as `rebased`, not merged.
+/// A branch behind its base is rebased first; the merge then waits (bounded) for
+/// GitHub to recompute `mergeable` and is pinned to the rebased head. `Ok` always
+/// means merged: a merge that cannot happen is an error.
 pub fn pr_merge(
     pr: u64,
     repo: Option<&str>,
     expected_head_sha: &str,
     keep_branch: bool,
+) -> Result<MergeOutcome, IntegrationError> {
+    pr_merge_polling(
+        pr,
+        repo,
+        expected_head_sha,
+        keep_branch,
+        MergeablePoll::default(),
+    )
+}
+
+pub fn pr_merge_polling(
+    pr: u64,
+    repo: Option<&str>,
+    expected_head_sha: &str,
+    keep_branch: bool,
+    poll: MergeablePoll,
 ) -> Result<MergeOutcome, IntegrationError> {
     let status = pr_status(repo, Some(pr), None)?;
     if !status.gate.ok {
@@ -109,14 +172,19 @@ pub fn pr_merge(
     if !squash_allowed(&slug)? {
         return Err(IntegrationError::Conflict(SQUASH_DISABLED.to_string()));
     }
+    let mut rebased = false;
+    let mut expected_head_sha = expected_head_sha.to_string();
     if status.behind_by.unwrap_or(0) > 0 {
         let updated = pr_update_branch(pr, repo)?;
-        return Ok(MergeOutcome {
-            rebased: true,
-            sha: updated.head_sha,
-            ..MergeOutcome::default()
-        });
+        rebased = true;
+        if let Some(sha) = updated.head_sha {
+            expected_head_sha = sha;
+        }
+        wait_for_mergeable(poll, || {
+            pr_status(repo, Some(pr), None).map(|fresh| fresh.mergeable)
+        })?;
     }
+    let expected_head_sha = expected_head_sha.as_str();
     let number = pr.to_string();
     let title = status.title.clone().unwrap_or_default();
     let subject = format!("{title} (#{pr})");
@@ -144,6 +212,7 @@ pub fn pr_merge(
     }
     let mut outcome = MergeOutcome {
         merged: true,
+        rebased,
         sha: Some(expected_head_sha.to_string()),
         ..MergeOutcome::default()
     };

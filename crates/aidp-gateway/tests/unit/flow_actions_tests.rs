@@ -222,7 +222,7 @@ fn pr_create_opens_a_draft_from_the_pipeline_body() {
 
 #[test]
 fn merge_pins_the_head_sha() {
-    let runner = RecordingRunner::new(EXIT_OK, "");
+    let runner = RecordingRunner::new(EXIT_OK, r#"{"merged":true}"#);
     let with = BTreeMap::from([
         (WITH_PR.to_string(), json!(PR_NUMBER)),
         (WITH_SHA.to_string(), json!(SHA)),
@@ -239,6 +239,29 @@ fn merge_pins_the_head_sha() {
         args[..5],
         strings(&[VERB_GH, VERB_GH_PR_MERGE, "42", FLAG_EXPECTED_HEAD_SHA, SHA])[..]
     );
+}
+
+#[test]
+fn merge_that_did_not_merge_fails_the_step_with_its_outputs() {
+    let runner = RecordingRunner::new(
+        EXIT_OK,
+        r#"{"merged":false,"rebased":true,"branchDeleted":false}"#,
+    );
+    let with = BTreeMap::from([
+        (WITH_PR.to_string(), json!(PR_NUMBER)),
+        (WITH_SHA.to_string(), json!(SHA)),
+    ]);
+    let outcome = run_with(
+        registered(BuiltinAction::GhMerge).as_ref(),
+        &runner,
+        TICKET,
+        with,
+    );
+    let ActionOutcome::TechnicalError(message) = outcome else {
+        panic!("expected a failed step, got {outcome:?}");
+    };
+    assert!(message.contains("without merging"), "{message}");
+    assert!(message.contains("rebased"), "{message}");
 }
 
 #[test]

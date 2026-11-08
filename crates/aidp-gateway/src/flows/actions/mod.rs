@@ -73,6 +73,40 @@ impl FlowAction for SkippableSubprocessAction {
     }
 }
 
+const OUTPUT_MERGED: &str = "merged";
+const NOT_MERGED_MESSAGE: &str = "gh.merge finished without merging the pull request";
+
+/// A successful merge output must carry `merged: true`; anything else fails the step.
+pub fn merged_or_failed(outcome: ActionOutcome) -> ActionOutcome {
+    let ActionOutcome::Ok(outputs) = &outcome else {
+        return outcome;
+    };
+    if outputs.get(OUTPUT_MERGED).and_then(Value::as_bool) == Some(true) {
+        return outcome;
+    }
+    let detail = Value::Object(outputs.clone().into_iter().collect());
+    ActionOutcome::TechnicalError(format!("{NOT_MERGED_MESSAGE}: {detail}"))
+}
+
+/// `gh.merge`: done only when the PR really is merged.
+pub struct MergeAction {
+    inner: SubprocessAction,
+}
+
+impl FlowAction for MergeAction {
+    fn writes(&self) -> bool {
+        self.inner.writes()
+    }
+
+    fn placeholders(&self) -> Vec<String> {
+        self.inner.placeholders()
+    }
+
+    fn run(&self, context: &ActionContext<'_>, with: &BTreeMap<String, Value>) -> ActionOutcome {
+        merged_or_failed(self.inner.run(context, with))
+    }
+}
+
 fn register_action(registry: &mut Registry, action: BuiltinAction, runner: SubprocessAction) {
     registry.register_action(
         action.as_str(),
@@ -202,16 +236,17 @@ pub fn register(registry: &mut Registry) {
         BuiltinAction::GhPrReady,
         SubprocessAction::new([VERB_GH, VERB_GH_PR_READY, PLACEHOLDER_PR_ARG]),
     );
-    register_action(
-        registry,
-        BuiltinAction::GhMerge,
-        SubprocessAction::new([
-            VERB_GH,
-            VERB_GH_PR_MERGE,
-            PLACEHOLDER_PR_ARG,
-            FLAG_EXPECTED_HEAD_SHA,
-            PLACEHOLDER_SHA_ARG,
-        ]),
+    registry.register_action(
+        BuiltinAction::GhMerge.as_str(),
+        Arc::new(MergeAction {
+            inner: SubprocessAction::new([
+                VERB_GH,
+                VERB_GH_PR_MERGE,
+                PLACEHOLDER_PR_ARG,
+                FLAG_EXPECTED_HEAD_SHA,
+                PLACEHOLDER_SHA_ARG,
+            ]),
+        }),
     );
     register_action(
         registry,

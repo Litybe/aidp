@@ -69,6 +69,8 @@ struct FakeAidp {
     vault: PathBuf,
     /// The main checkout has local changes: `git-checkout` reports `blocked`.
     dirty: AtomicBool,
+    /// `pr-merge` reports a rebase without merging (`merged: false`).
+    merge_stalls: AtomicBool,
     issues: BTreeMap<String, u64>,
     /// Every verb in call order: `worktree:<key>`, `branch:<key>`, `worktree-remove:<key>`, `checkout:<key>`, `restore:<key>`, `label:<aidp:x>`, `comment:<key>`, `pr-ready:<n>`, `pr-merge:<n>:<sha>`.
     verbs: Mutex<Vec<String>>,
@@ -255,6 +257,12 @@ impl FakeAidp {
                     .lock()
                     .unwrap()
                     .push(format!("pr-merge:{number}:{sha}"));
+                if self.merge_stalls.load(Ordering::SeqCst) {
+                    return (
+                        0,
+                        json!({ "merged": false, "rebased": true, "branchDeleted": false }),
+                    );
+                }
                 (0, json!({ "merged": true }))
             }
             other => (64, json!(format!("unexpected aidp verb {other:?}"))),
@@ -429,6 +437,7 @@ fn world(tag: &str, script: Script, tickets: &[&str]) -> World {
         project: workspace.clone(),
         vault: vault.clone(),
         dirty: AtomicBool::new(false),
+        merge_stalls: AtomicBool::new(false),
         issues,
         verbs: Mutex::new(Vec::new()),
         snapshots: Mutex::new(Vec::new()),
@@ -991,6 +1000,43 @@ fn dirty_main_checkout_blocks_the_test_and_escalates() {
     );
     assert!(comments[0].contains("Assets/Foo.cs"), "{comments:?}");
     assert!(world.provider.labels().is_empty(), "no pipeline ran");
+    world.finish();
+}
+
+#[test]
+fn merge_that_only_rebased_fails_the_step_and_never_posts_done() {
+    let world = world(
+        "game-test-code-merge-stalls",
+        Script {
+            reviews: vec!["done"],
+            tests: vec![true],
+            hold: None,
+        },
+        &["GH-1"],
+    );
+    world.cli.merge_stalls.store(true, Ordering::SeqCst);
+    world.start_test("GH-1");
+    world.wait_gate("GH-1");
+    world
+        .engine
+        .approve("GH-1", "merge_approval", "test")
+        .unwrap();
+    let state = world.wait(
+        "the failed merge",
+        |state| step_is(state, "merge", StepStatus::Failed),
+        "GH-1",
+    );
+
+    assert_ne!(state.status, FlowStatus::Done);
+    assert!(
+        !world
+            .cli
+            .labels_in_order()
+            .contains(&"aidp:done".to_string()),
+        "no done label: {:?}",
+        world.cli.labels_in_order()
+    );
+    assert_ne!(world.mock_labels("GH-1"), ["aidp:done"]);
     world.finish();
 }
 
