@@ -232,6 +232,7 @@ aidp flow skip KEY STEP
 aidp flow pause KEY
 aidp flow resume KEY
 aidp flow abort KEY
+aidp flow unity-refresh [--timeout SECONDS]   # local, in the project checkout
 ```
 
 `validate` and `show` run without the daemon. The others call it, as `aidp ticket start` does.
@@ -255,6 +256,7 @@ An action's placeholders the step's `with` leaves out are filled from the run it
 | `gh.issue_label` | `ticket label KEY STATE` | `key`, `label`, `changed`, `removed` | `with: { state }` (`in-progress`, `review`, `fixing`, `testing`, `awaiting-merge`, `done`...): replaces the single `aidp:*` state label of the ticket's issue; a no-op when it already shows it |
 | `gh.issue_comment` | `ticket comment KEY --body-file PATH [--cost-footer]` | `key`, `url`, `costFooter` | `with: { body }` (the report file of a step); `with: { cost_footer: true }` appends the ticket's cost line (contract C7) when the usage source is wired, see below |
 | `worktree.remove` | gateway worktree verb | `removed`, `salvaged_ref` | |
+| `unity.refresh` | `flow unity-refresh` | `ok`, `errors`, `warnings`, `duration_ms`, `request_id`, `blocked`, `message`, `heartbeat` | runs in the project checkout right after `git.checkout`: one compile gate (C1) through the playtest package's file bridge, so the editor's reimport of the new branch ends before the test stage. Skipped (`not-a-unity-project`, `unity-editor-closed`) when there is nothing to refresh; `blocked: true` when the editor never answers (600 s) or its heartbeat `.aidp/editor/heartbeat.json` is stale (30 s, 180 s during a domain reload). Compile errors are outputs, not a failure |
 
 The pull request of a game flow closes its issue by itself: `gh.pr_create` writes `Closes #<n>` in the PR body, so the merge closes the issue and the next sync marks the ticket `done`. The flow definition of a ticket comes from its route: the dispatcher starts the `flow:` of the winning `repos:` entry of `routing.yaml` (see [tickets.md](tickets.md#routingyaml)); a ticket with no routed flow keeps `dispatcher.launch`.
 

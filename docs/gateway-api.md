@@ -2608,7 +2608,8 @@ Both routes work on one registered project: `?project=<id or name>` (or `"projec
 ```json
 {
   "project": "p1",
-  "editor": { "running": true, "pid": 21156, "projectPath": "D:/CLAUDE_UNITY/mixandjam-celestemovement" },
+  "editor": { "running": true, "pid": 21156, "projectPath": "D:/CLAUDE_UNITY/mixandjam-celestemovement",
+              "heartbeat": { "at": "2026-11-06T16:00:02.120Z", "state": "idle", "activeScene": "Assets/Tests/Playtest/Scenes/PlaytestArena.unity", "dirty": false, "playtest": null, "compileFailed": false, "staleAfterSeconds": 15, "lastError": null, "lastGuard": { "at": "...", "steps": ["OpenEditScene", "RefreshAssets"], "skipped": null, "activeScene": "..." } } },
   "lock": {
     "held": true,
     "holder": { "flowKey": "GH-214", "ticketKey": "GH-214", "stepId": "implement", "since": "2026-11-06T16:00:00.000Z" },
@@ -2621,6 +2622,7 @@ Both routes work on one registered project: `?project=<id or name>` (or `"projec
 
 - `editor.running` is true when a `Unity.exe` process has `-projectpath <path>` on its command line equal to the project's test checkout (`testCheckout`), else its path; `editor.projectPath` is that path, and the results below are read under it.
 - Case and `/` against `\` are ignored, as is a trailing separator. When no editor runs, `pid` is `null`. The process list is read with PowerShell (`Get-CimInstance Win32_Process`) on Windows and `ps` elsewhere, and cached for 5 seconds.
+- `editor.heartbeat` is `<project>/.aidp/editor/heartbeat.json` as the playtest package writes it every two seconds (`state`: `idle`, `compiling`, `importing`, `compile-failed`, `entering-play`, `playing`, `paused`, `reloading`, `quitting`), `null` when the file is absent. An `at` older than `staleAfterSeconds` with `editor.running` true and a state other than `reloading` means the editor's main thread is stuck (dialog box, freeze); `aidp flow unity-refresh` reports it as `blocked` on that basis.
 - `lock.holder` is `null` when the lock is free; `lock.waiting` lists the run keys queued, first served first.
 - `lastCompile` is the newest `*.json` under `<project>/.aidp/compile/results/`, as written by the compile gate. `lastPlaytest` is `{id, passed, finishedAt}` from the newest `*.json` under `<project>/.aidp/playtest/results/`; `finishedAt` is the file's own field when present, else its write time. Both are `null` when there is no readable result.
 

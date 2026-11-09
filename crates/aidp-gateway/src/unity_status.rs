@@ -12,6 +12,7 @@ pub const PROCESS_CACHE_TTL: Duration = Duration::from_secs(5);
 const PROJECT_PATH_FLAG: &str = "-projectpath";
 const COMPILE_RESULTS: [&str; 3] = [".aidp", "compile", "results"];
 const PLAYTEST_RESULTS: [&str; 3] = [".aidp", "playtest", "results"];
+const HEARTBEAT_FILE: [&str; 3] = [".aidp", "editor", "heartbeat.json"];
 
 /// A running Unity editor.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -212,6 +213,16 @@ pub fn last_playtest(project: &Path) -> Value {
     })
 }
 
+/// The editor's last heartbeat (`.aidp/editor/heartbeat.json`, written by the playtest package every
+/// two seconds) as written, `null` when there is none. A reader compares `at` with `staleAfterSeconds`.
+pub fn last_heartbeat(project: &Path) -> Value {
+    let path = results_dir(project, &HEARTBEAT_FILE);
+    aidp_core::text::read_text_lenient(&path)
+        .ok()
+        .and_then(|text| serde_json::from_str(&text).ok())
+        .unwrap_or(Value::Null)
+}
+
 /// The body of `GET /api/unity/status` for the project at `project_path`.
 pub fn status(
     project_id: &str,
@@ -228,6 +239,7 @@ pub fn status(
             "running": editor.is_some(),
             "pid": editor.map(|process| process.pid),
             "projectPath": project_path,
+            "heartbeat": last_heartbeat(project),
         },
         "lock": {
             "held": holder.is_some(),

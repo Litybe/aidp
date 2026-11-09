@@ -24,6 +24,7 @@ use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
 mod checkout;
+mod unity_refresh;
 
 const HTTP_CONFLICT_PREFIX: &str = "HTTP 409";
 const HTTP_NOT_FOUND_PREFIX: &str = "HTTP 404";
@@ -43,6 +44,7 @@ pub fn run(ctx: &Ctx, op: Op) -> anyhow::Result<CommandOutput> {
         Op::GitBranch { key } => git_branch(ctx, &key),
         Op::GitCheckout { key } => checkout::git_checkout(ctx, &key),
         Op::GitRestore { key } => checkout::git_restore(ctx, &key),
+        Op::UnityRefresh { timeout } => unity_refresh::unity_refresh(&ctx.workspace(), timeout),
         Op::GitPush { branch } => git_push(ctx, branch.as_deref()),
         Op::PrCreate {
             key,

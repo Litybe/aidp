@@ -395,3 +395,41 @@ fn issue_comment_writes_a_text_body_to_a_file_for_body_file() {
     assert_ne!(args[at + 1], "Revue : done");
     assert!(args[at + 1].contains("aidp-comment-"));
 }
+
+/// The refresh runs the flow verb alone: the checkout it works in is the action's workspace.
+#[test]
+fn unity_refresh_runs_the_flow_verb_without_placeholders() {
+    let runner = RecordingRunner::new(EXIT_OK, "{\"ok\":true,\"blocked\":false}");
+    let action = registered(BuiltinAction::UnityRefresh);
+    assert!(action.placeholders().is_empty());
+    let outcome = run_with(action.as_ref(), &runner, TICKET, BTreeMap::new());
+    let ActionOutcome::Ok(outputs) = outcome else {
+        panic!("expected a successful outcome");
+    };
+    assert_eq!(outputs.get("ok"), Some(&json!(true)));
+    let args = runner.spawned_args();
+    let verb = strings(&[VERB_FLOW, VERB_FLOW_UNITY_REFRESH]);
+    assert!(
+        args.windows(verb.len())
+            .any(|window| window == verb.as_slice()),
+        "{args:?}"
+    );
+}
+
+/// A closed editor is no failure of the refresh: the step is skipped and the test stage decides.
+#[test]
+fn unity_refresh_skipped_when_the_verb_says_so() {
+    let runner = RecordingRunner::new(
+        EXIT_OK,
+        "{\"skipped\":true,\"reason\":\"unity-editor-closed\"}",
+    );
+    let outcome = run_with(
+        registered(BuiltinAction::UnityRefresh).as_ref(),
+        &runner,
+        TICKET,
+        BTreeMap::new(),
+    );
+    assert!(
+        matches!(outcome, ActionOutcome::Skipped { reason } if reason == "unity-editor-closed")
+    );
+}

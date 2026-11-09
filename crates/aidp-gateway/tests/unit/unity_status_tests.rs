@@ -185,10 +185,34 @@ fn status_has_the_c3_shape() {
     assert_eq!(value["lock"]["waiting"][0], "g");
     assert!(value["lastCompile"].is_null());
     assert!(value["lastPlaytest"].is_null());
+    assert!(value["editor"]["heartbeat"].is_null());
 
     let idle = status("p1", &path, &[], None, &[]);
     assert_eq!(idle["editor"]["running"], false);
     assert!(idle["editor"]["pid"].is_null());
     assert_eq!(idle["lock"]["held"], false);
     assert!(idle["lock"]["holder"].is_null());
+}
+
+#[test]
+fn heartbeat_is_read_as_written() {
+    let dir = tempfile::tempdir().unwrap();
+    let editor_dir = dir.path().join(".aidp").join("editor");
+    std::fs::create_dir_all(&editor_dir).unwrap();
+    std::fs::write(
+        editor_dir.join("heartbeat.json"),
+        r#"{"at":"2026-11-09T10:00:02.120Z","state":"idle","staleAfterSeconds":15}"#,
+    )
+    .unwrap();
+
+    let heartbeat = last_heartbeat(dir.path());
+    assert_eq!(heartbeat["state"], "idle");
+    assert_eq!(heartbeat["staleAfterSeconds"], 15);
+
+    let path = dir.path().to_string_lossy().replace('\\', "/");
+    let value = status("p1", &path, &[], None, &[]);
+    assert_eq!(
+        value["editor"]["heartbeat"]["at"],
+        "2026-11-09T10:00:02.120Z"
+    );
 }

@@ -33,6 +33,12 @@ pub enum Op {
         #[arg(value_name = "KEY")]
         key: String,
     },
+    /// Run one compile gate of the Unity editor open on the workspace (after `git-checkout`), through the playtest package's file bridge. Skipped without a Unity project or an open editor; `blocked` when the editor never answers.
+    UnityRefresh {
+        /// Seconds to wait for the compile result before reporting the editor blocked.
+        #[arg(long, value_name = "SECONDS", default_value_t = crate::models::constants::flow_unity::DEFAULT_TIMEOUT_SECONDS)]
+        timeout: u64,
+    },
     /// Publish the worktree's branch as one commit GitHub signs, through its API: never `git push`.
     GitPush {
         /// Branch the worktree must be on; the current branch when omitted.

@@ -14,6 +14,8 @@ pub const ACTION_GH_ISSUE_LABEL: &str = "gh.issue_label";
 pub const ACTION_GH_ISSUE_COMMENT: &str = "gh.issue_comment";
 pub const ACTION_WORKTREE_REMOVE: &str = "worktree.remove";
 pub const ACTION_TICKET_TO_TEST: &str = "ticket.to_test";
+/// One compile gate of the open Unity editor after `git.checkout`, before the test stage.
+pub const ACTION_UNITY_REFRESH: &str = "unity.refresh";
 /// State label (and phase) the `ticket.to_test` action sets.
 pub const STATE_TO_TEST: &str = "to-test";
 
@@ -23,6 +25,7 @@ pub const VERB_FLOW_GIT_CHECKOUT: &str = "git-checkout";
 pub const VERB_FLOW_GIT_RESTORE: &str = "git-restore";
 pub const VERB_FLOW_GIT_PUSH: &str = "git-push";
 pub const VERB_FLOW_PR_CREATE: &str = "pr-create";
+pub const VERB_FLOW_UNITY_REFRESH: &str = "unity-refresh";
 pub const VERB_GATEWAY: &str = "gateway";
 pub const VERB_GATEWAY_WORKTREES: &str = "worktrees";
 pub const VERB_WORKTREES_ENSURE: &str = "ensure";
@@ -58,5 +61,7 @@ pub const OUTPUT_REASON: &str = "reason";
 pub const OUTPUT_WAITING_EXTERNAL: &str = "waiting_external";
 
 pub const GIT_PUSH_TIMEOUT_SECONDS: u64 = 15 * 60;
+/// Above the verb's own 600 s wait for the compile result, so the verb reports `blocked` itself.
+pub const UNITY_REFRESH_TIMEOUT_SECONDS: u64 = 11 * 60;
 
 pub const LOCAL_KEY_SEPARATOR: &str = "-";
