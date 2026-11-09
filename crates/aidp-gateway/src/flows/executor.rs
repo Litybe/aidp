@@ -689,7 +689,7 @@ impl Executor {
                 )
                 .map(|_| ());
         }
-        if let Some(failure) = self.reenter_project_checkout(repo, state) {
+        if let Some(failure) = self.reenter_project_checkout(repo, state, true) {
             let reason = match failure {
                 ActionOutcome::TechnicalError(text) | ActionOutcome::BusinessError(text) => text,
                 _ => NO_CHECKOUT_MESSAGE.to_string(),

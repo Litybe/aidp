@@ -123,22 +123,28 @@ impl Executor {
         if job.name == ACTION_GIT_CHECKOUT {
             return None;
         }
-        self.reenter_project_checkout(&job.repo, &state)
+        self.reenter_project_checkout(&job.repo, &state, false)
     }
 
     /// A run retried after the daemon gave its checkout back checks its branch out again.
-    /// `Some(outcome)` when that failed.
+    /// `Some(outcome)` when that failed. `key_lock_held`: the caller already holds the key lock of
+    /// the run (a pipeline start, from a transition or a reconcile), and it is not reentrant.
     pub(super) fn reenter_project_checkout(
         self: &Arc<Self>,
         repo: &str,
         state: &FlowState,
+        key_lock_held: bool,
     ) -> Option<ActionOutcome> {
         if !state.effects_applied.contains(RELEASED_MARKER) {
             return None;
         }
         let outcome = self.run_registered(state, ACTION_GIT_CHECKOUT);
         if matches!(outcome, ActionOutcome::Ok(_)) {
-            self.set_released(repo, &state.key, false);
+            if key_lock_held {
+                self.write_released(repo, &state.key, false);
+            } else {
+                self.set_released(repo, &state.key, false);
+            }
             return None;
         }
         Some(outcome)
@@ -162,6 +168,11 @@ impl Executor {
     pub(super) fn set_released(&self, repo: &str, key: &str, released: bool) {
         let guard = self.key_lock(key);
         let _held = crate::sync::lock(&guard);
+        self.write_released(repo, key, released);
+    }
+
+    /// [`Self::set_released`] for a caller that already holds the key lock.
+    fn write_released(&self, repo: &str, key: &str, released: bool) {
         let Ok((_, mut state)) = self.load(key) else {
             return;
         };
