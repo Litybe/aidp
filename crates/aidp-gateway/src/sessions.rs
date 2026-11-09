@@ -2004,13 +2004,17 @@ impl SessionManager {
             let copy = aidp_tickets::config::load(&vault.root)
                 .dispatcher
                 .worktree_copy;
-            let ensured = worktrees::ensure(
+            let base = aidp_tickets::store::TicketStore::open(&vault.root)
+                .ok()
+                .and_then(|store| worktrees::ticket_base(&store, key));
+            let ensured = worktrees::ensure_based(
                 self.runner.as_ref(),
                 project_path,
                 &vault.root,
                 &repo,
                 key,
                 &copy,
+                base.as_deref(),
             )
             .map_err(|error| match error {
                 worktrees::EnsureError::BranchCheckedOutElsewhere { .. } => {

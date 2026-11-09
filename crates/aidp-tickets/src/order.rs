@@ -244,6 +244,8 @@ mod tests {
             state: crate::models::enums::issue_state::IssueState::Open,
             synced_at: None,
             blocked_by: Vec::new(),
+            base_branch: None,
+            parent: None,
         });
         t.milestone = milestone.map(|(title, days)| crate::models::milestone::Milestone {
             title: title.to_string(),

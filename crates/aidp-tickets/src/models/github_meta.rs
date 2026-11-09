@@ -18,4 +18,10 @@ pub struct GithubMeta {
     /// Open and closed blockers, from the body and from GitHub's native dependencies.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub blocked_by: Vec<BlockerLink>,
+    /// Branch the ticket starts from and its PR targets, when it is not the default one (a bug ticket).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_branch: Option<String>,
+    /// Number of the parent issue of a bug ticket.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent: Option<u64>,
 }

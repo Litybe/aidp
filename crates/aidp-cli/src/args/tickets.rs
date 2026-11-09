@@ -204,6 +204,11 @@ pub enum Op {
         #[arg(value_name = "STATE")]
         state: String,
     },
+    /// Close the issue of a GitHub mirror (a bug merged into its parent branch is not closed by GitHub itself).
+    Close {
+        #[arg(value_name = "KEY")]
+        key: String,
+    },
     /// Post a comment on the issue of a GitHub mirror.
     Comment {
         #[arg(value_name = "KEY")]

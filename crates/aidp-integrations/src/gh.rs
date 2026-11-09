@@ -137,9 +137,10 @@ pub fn pr_create_for_head(
     title: &str,
     body: &str,
     head: &str,
+    base: Option<&str>,
     draft: bool,
 ) -> anyhow::Result<String> {
-    pr_create_on(title, body, None, Some(head), draft)
+    pr_create_on(title, body, base, Some(head), draft)
 }
 
 fn pr_create_on(

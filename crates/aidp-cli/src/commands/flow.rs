@@ -23,6 +23,7 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
+mod bug;
 mod checkout;
 mod unity_refresh;
 
@@ -46,6 +47,16 @@ pub fn run(ctx: &Ctx, op: Op) -> anyhow::Result<CommandOutput> {
         Op::GitRestore { key } => checkout::git_restore(ctx, &key),
         Op::UnityRefresh { timeout } => unity_refresh::unity_refresh(&ctx.workspace(), timeout),
         Op::GitPush { branch } => git_push(ctx, branch.as_deref()),
+        Op::BugCreate {
+            key,
+            report_file,
+            summary,
+        } => bug::bug_create(
+            ctx,
+            &key,
+            report_file.as_deref(),
+            summary.as_deref().unwrap_or_default(),
+        ),
         Op::PrCreate {
             key,
             branch,
@@ -456,8 +467,22 @@ fn git_branch(ctx: &Ctx, key: &str) -> anyhow::Result<CommandOutput> {
         &workspace,
         &[GIT_LS_REMOTE, GIT_HEADS_FLAG, ORIGIN_REMOTE, &branch],
     )?;
+    let ticket_base = base_branch_of(ctx, key);
     if listed.trim().is_empty() {
-        git_stdout(ctx, &workspace, &[GIT_SWITCH, GIT_CREATE_FLAG, &branch])?;
+        match ticket_base.as_deref() {
+            // A bug ticket leaves its parent's branch, never the default one.
+            Some(own) => {
+                let start = format!("{ORIGIN_REMOTE}/{own}");
+                git_stdout(
+                    ctx,
+                    &workspace,
+                    &[GIT_SWITCH, GIT_CREATE_FLAG, &branch, &start],
+                )?;
+            }
+            None => {
+                git_stdout(ctx, &workspace, &[GIT_SWITCH, GIT_CREATE_FLAG, &branch])?;
+            }
+        }
         return report_output(&FlowBranchReport {
             branch,
             created: true,
@@ -465,10 +490,11 @@ fn git_branch(ctx: &Ctx, key: &str) -> anyhow::Result<CommandOutput> {
     }
     git_stdout(ctx, &workspace, &[GIT_FETCH, ORIGIN_REMOTE, &branch])?;
     let has_origin_head = git_succeeds(ctx, &workspace, &verify_args(ORIGIN_HEAD_REF))?;
-    let base = if has_origin_head {
-        ORIGIN_HEAD_REF
-    } else {
-        ORIGIN_DEFAULT_REF
+    let own_base = ticket_base.map(|own| format!("{ORIGIN_REMOTE}/{own}"));
+    let base = match own_base.as_deref() {
+        Some(own) => own,
+        None if has_origin_head => ORIGIN_HEAD_REF,
+        None => ORIGIN_DEFAULT_REF,
     };
     let remote_ref = format!("{ORIGIN_REMOTE}/{branch}");
     let excluded_base = format!("{EXCLUDE_MARK}{base}");
@@ -497,13 +523,31 @@ fn git_branch(ctx: &Ctx, key: &str) -> anyhow::Result<CommandOutput> {
     })
 }
 
+/// The branch ticket `key` starts from and its pull request targets, when it is not the default one
+/// (a bug ticket: its parent's branch).
+pub(crate) fn base_branch_of(ctx: &Ctx, key: &str) -> Option<String> {
+    local_ticket(ctx, key)?
+        .0
+        .github
+        .and_then(|github| github.base_branch)
+        .filter(|base| !base.trim().is_empty())
+}
+
 /// Publishes the worktree's branch through the GitHub API and prints `{branch, sha, changed}`.
+/// A new branch of a bug ticket starts where it leaves its parent's branch.
 fn git_push(ctx: &Ctx, branch: Option<&str>) -> anyhow::Result<CommandOutput> {
     let workspace = ctx.workspace();
+    let current = gh::in_dir(&workspace, gh::current_branch);
+    let base = branch
+        .map(str::to_string)
+        .or(current)
+        .and_then(|name| aidp_integrations::branch_key::ticket_key_from_branch(&name))
+        .and_then(|key| base_branch_of(ctx, &key));
     report_output(&branch_publish::publish_in(
         ctx.runner.as_ref(),
         &workspace,
         branch,
+        base.as_deref(),
     )?)
 }
 
@@ -529,7 +573,8 @@ fn pr_create(
             None => {
                 let body = closing_body(ctx, key, github_body(&read_pr_body(body_file)?));
                 let title = pr_title(&ticket_heading(ctx, key)?);
-                gh::pr_create_for_head(&title, &body, &branch, draft)
+                let base = base_branch_of(ctx, key);
+                gh::pr_create_for_head(&title, &body, &branch, base.as_deref(), draft)
                     .map_err(|error| typed(ExitStatus::UpstreamFailure, error.to_string()))?;
                 open_pr_of(&branch)?
                     .ok_or_else(|| typed(ExitStatus::UpstreamFailure, NO_OPENED_PR_MESSAGE))?

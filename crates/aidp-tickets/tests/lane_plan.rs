@@ -258,3 +258,50 @@ fn a_ticket_already_carrying_a_test_flow_still_launches_it() {
     assert_eq!(result.launches.len(), 1, "{:?}", result.skipped);
     assert_eq!(result.launches[0].flow.as_deref(), Some("game-test-code"));
 }
+
+fn waiting_for(bug: &str, state: aidp_tickets::models::enums::issue_state::IssueState) -> Ticket {
+    use aidp_tickets::models::blocker_link::BlockerLink;
+    use aidp_tickets::models::github_meta::GithubMeta;
+    let mut parent = ticket("GH-272", Phase::ToTest, Status::InProgress, 5);
+    parent.source = Source::Github;
+    parent.github = Some(GithubMeta {
+        repo: "o/r".to_string(),
+        number: 272,
+        url: String::new(),
+        state: aidp_tickets::models::enums::issue_state::IssueState::Open,
+        synced_at: None,
+        blocked_by: vec![BlockerLink {
+            key: bug.to_string(),
+            state,
+        }],
+        base_branch: None,
+        parent: None,
+    });
+    parent
+}
+
+#[test]
+fn a_to_test_ticket_waits_while_its_bug_is_open() {
+    use aidp_tickets::models::enums::issue_state::IssueState;
+    let tickets = [waiting_for("GH-300", IssueState::Open)];
+    let result = plan(&tickets, &config(1, 1), 0, &[]);
+    assert!(result.launches.is_empty());
+    assert_eq!(
+        result.skipped,
+        vec![(
+            "GH-272".to_string(),
+            SkipReason::WaitingOn(vec!["GH-300".to_string()])
+        )]
+    );
+    assert_eq!(result.skipped[0].1.as_str(), "waiting-on:GH-300");
+}
+
+#[test]
+fn a_to_test_ticket_goes_back_to_its_test_flow_once_the_bug_is_closed() {
+    use aidp_tickets::models::enums::issue_state::IssueState;
+    let tickets = [waiting_for("GH-300", IssueState::Closed)];
+    let result = plan(&tickets, &config(1, 1), 0, &[]);
+    assert_eq!(result.launches.len(), 1);
+    assert_eq!(result.launches[0].flow.as_deref(), Some("game-test-code"));
+    assert!(result.launches[0].test);
+}

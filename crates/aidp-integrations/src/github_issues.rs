@@ -6,6 +6,7 @@
 use crate::pr_writes::{run_gh, send, strings};
 use crate::IntegrationError;
 use aidp_core::process_runner::{OsProcessRunner, ProcessRunner};
+use aidp_tickets::models::created_issue::{CreatedIssue, SubIssue};
 use aidp_tickets::models::enums::issue_state::IssueState;
 use aidp_tickets::models::github_issue::{GithubIssue, IssueDependency};
 use aidp_tickets::models::github_port::GithubPort;
@@ -25,6 +26,24 @@ const NOT_FOUND_MARKERS: [&str; 2] = ["Not Found", "HTTP 404"];
 #[derive(Serialize)]
 struct LabelsBody<'a> {
     labels: &'a [String],
+}
+
+#[derive(Serialize)]
+struct NewIssueBody<'a> {
+    title: &'a str,
+    body: &'a str,
+    labels: &'a [String],
+}
+
+#[derive(Serialize)]
+struct SubIssueBody {
+    sub_issue_id: u64,
+}
+
+#[derive(Serialize)]
+struct CloseBody {
+    state: &'static str,
+    state_reason: &'static str,
 }
 
 #[derive(Serialize)]
@@ -259,6 +278,77 @@ impl GithubPort for GhIssuePort {
             .get("html_url")
             .and_then(Value::as_str)
             .map(str::to_string))
+    }
+
+    fn create_issue(
+        &self,
+        repo: &str,
+        title: &str,
+        body: &str,
+        labels: &[String],
+    ) -> anyhow::Result<CreatedIssue> {
+        let reply = send(
+            self.runner.as_ref(),
+            "POST",
+            format!("repos/{repo}/issues"),
+            Some(&NewIssueBody {
+                title,
+                body,
+                labels,
+            }),
+        )?;
+        let value: Value = serde_json::from_str(&reply)?;
+        Ok(CreatedIssue {
+            number: value
+                .get("number")
+                .and_then(Value::as_u64)
+                .ok_or_else(|| anyhow::anyhow!("GitHub answered without an issue number"))?,
+            id: value
+                .get("id")
+                .and_then(Value::as_u64)
+                .ok_or_else(|| anyhow::anyhow!("GitHub answered without an issue id"))?,
+            url: text(&value, "html_url"),
+        })
+    }
+
+    fn add_sub_issue(&self, repo: &str, parent: u64, sub_issue_id: u64) -> anyhow::Result<()> {
+        send(
+            self.runner.as_ref(),
+            "POST",
+            format!("repos/{repo}/issues/{parent}/sub_issues"),
+            Some(&SubIssueBody { sub_issue_id }),
+        )?;
+        Ok(())
+    }
+
+    fn sub_issues(&self, repo: &str, parent: u64) -> anyhow::Result<Vec<SubIssue>> {
+        let path = format!("repos/{repo}/issues/{parent}/sub_issues?per_page=100");
+        let Some(Value::Array(items)) = self.get_optional(&path)? else {
+            return Ok(Vec::new());
+        };
+        Ok(items
+            .iter()
+            .filter_map(|item| {
+                Some(SubIssue {
+                    number: item.get("number").and_then(Value::as_u64)?,
+                    state: IssueState::from_wire(&text(item, "state")),
+                    labels: labels_of(item),
+                })
+            })
+            .collect())
+    }
+
+    fn close_issue(&self, repo: &str, number: u64) -> anyhow::Result<()> {
+        send(
+            self.runner.as_ref(),
+            "PATCH",
+            format!("repos/{repo}/issues/{number}"),
+            Some(&CloseBody {
+                state: "closed",
+                state_reason: "completed",
+            }),
+        )?;
+        Ok(())
     }
 }
 

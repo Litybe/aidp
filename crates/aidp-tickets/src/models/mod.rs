@@ -4,6 +4,7 @@
 pub mod adopted_pr;
 pub mod blocker_link;
 pub mod constants;
+pub mod created_issue;
 pub mod enums;
 pub mod github_issue;
 pub mod github_meta;

@@ -43,6 +43,12 @@ pub fn label(store: &TicketStore, key: &str, state: &str) -> anyhow::Result<Comm
     Ok(CommandOutput::text(serde_json::to_string(&outcome)?))
 }
 
+/// `aidp ticket close <key>`: closes the issue of a mirror, once.
+pub fn close(store: &TicketStore, key: &str) -> anyhow::Result<CommandOutput> {
+    let outcome = aidp_tickets::bug_ticket::close(store, &GhIssuePort::new(), key)?;
+    Ok(CommandOutput::text(serde_json::to_string(&outcome)?))
+}
+
 /// `aidp ticket comment <key> --body-file F | --body T [--cost-footer]`.
 pub fn comment(
     store: &TicketStore,

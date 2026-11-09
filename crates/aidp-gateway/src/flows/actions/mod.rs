@@ -156,22 +156,134 @@ impl FlowAction for IssueCommentAction {
 /// path stays as it is): text that is no existing file goes to a temporary file whose path
 /// replaces it. Returns that file, to delete after the call.
 fn materialize_body(with: &mut BTreeMap<String, Value>) -> Option<PathBuf> {
-    let text = with.get(WITH_BODY).and_then(Value::as_str)?.to_string();
+    materialize_text(with, WITH_BODY, "aidp-comment")
+}
+
+/// [`materialize_body`] for the `with` key `key`; the temporary file name starts with `prefix`.
+fn materialize_text(
+    with: &mut BTreeMap<String, Value>,
+    key: &str,
+    prefix: &str,
+) -> Option<PathBuf> {
+    let text = with.get(key).and_then(Value::as_str)?.to_string();
     if Path::new(&text).is_file() {
         return None;
     }
     static COUNTER: AtomicU64 = AtomicU64::new(0);
     let path = std::env::temp_dir().join(format!(
-        "aidp-comment-{}-{}.md",
+        "{prefix}-{}-{}.md",
         std::process::id(),
         COUNTER.fetch_add(1, Ordering::Relaxed)
     ));
     std::fs::write(&path, &text).ok()?;
     with.insert(
-        WITH_BODY.to_string(),
+        key.to_string(),
         Value::String(path.to_string_lossy().to_string()),
     );
     Some(path)
+}
+
+/// `bug.create`: raises the bug issue of a failed test (`aidp flow bug-create KEY`). `with.report`
+/// is the failure report (text, or the path of a report file), `with.summary` the one-line summary
+/// of the title. Outputs `bug`, `number`, `url`, `parent`, `base`, `count`, `capped`, `changed`,
+/// `linked`: `capped: true` means the parent already holds the most bugs and nothing was created.
+pub struct BugCreateAction;
+
+impl BugCreateAction {
+    /// The verb line: texts travel as `{name}` placeholders, filled once, so braces inside them stay.
+    fn command(with: &BTreeMap<String, Value>) -> SubprocessAction {
+        let mut args = vec![
+            VERB_FLOW.to_string(),
+            VERB_FLOW_BUG_CREATE.to_string(),
+            PLACEHOLDER_KEY_ARG.to_string(),
+        ];
+        if with.contains_key(WITH_REPORT) {
+            args.push(FLAG_REPORT_FILE.to_string());
+            args.push(format!("{{{WITH_REPORT}}}"));
+        }
+        let has_summary = with
+            .get(WITH_SUMMARY)
+            .and_then(Value::as_str)
+            .is_some_and(|summary| !summary.trim().is_empty());
+        if has_summary {
+            args.push(format!("{FLAG_SUMMARY_PREFIX}{{{WITH_SUMMARY}}}"));
+        }
+        SubprocessAction::new(args)
+    }
+}
+
+/// Deepest folder level searched under the run folder for a report named without a path.
+const REPORT_SEARCH_DEPTH: usize = 6;
+/// A report value longer than this is text, never a file name.
+const REPORT_NAME_MAX_CHARS: usize = 200;
+
+/// The file called `name` under `root`, looking `depth` levels down.
+fn find_named_file(root: &Path, name: &std::ffi::OsStr, depth: usize) -> Option<PathBuf> {
+    let mut folders = Vec::new();
+    for entry in std::fs::read_dir(root).ok()?.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            folders.push(path);
+        } else if path.file_name() == Some(name) {
+            return Some(path);
+        }
+    }
+    if depth == 0 {
+        return None;
+    }
+    folders
+        .iter()
+        .find_map(|folder| find_named_file(folder, name, depth - 1))
+}
+
+/// A stage names its report by file name (`test-report.md`): with `with.run_dir` the file is looked
+/// up under the run folder and `with.report` becomes its path. Text and existing paths stay as they are.
+fn locate_report(with: &mut BTreeMap<String, Value>) {
+    let Some(report) = with.get(WITH_REPORT).and_then(Value::as_str) else {
+        return;
+    };
+    let report = report.trim();
+    if report.is_empty()
+        || report.contains('\n')
+        || report.chars().count() > REPORT_NAME_MAX_CHARS
+        || Path::new(report).is_file()
+    {
+        return;
+    }
+    let Some(name) = Path::new(report).file_name() else {
+        return;
+    };
+    let Some(run_dir) = with
+        .get(WITH_RUN_DIR)
+        .and_then(Value::as_str)
+        .map(Path::new)
+        .filter(|dir| dir.is_dir())
+    else {
+        return;
+    };
+    if let Some(found) = find_named_file(run_dir, name, REPORT_SEARCH_DEPTH) {
+        with.insert(
+            WITH_REPORT.to_string(),
+            Value::String(found.to_string_lossy().to_string()),
+        );
+    }
+}
+
+impl FlowAction for BugCreateAction {
+    fn run(&self, context: &ActionContext<'_>, with: &BTreeMap<String, Value>) -> ActionOutcome {
+        let mut with = with.clone();
+        locate_report(&mut with);
+        if let Some(summary) = with.get(WITH_SUMMARY).and_then(Value::as_str) {
+            let trimmed = Value::String(summary.trim().to_string());
+            with.insert(WITH_SUMMARY.to_string(), trimmed);
+        }
+        let temporary = materialize_text(&mut with, WITH_REPORT, "aidp-bug-report");
+        let outcome = Self::command(&with).run(context, &with);
+        if let Some(path) = temporary {
+            let _ = std::fs::remove_file(path);
+        }
+        outcome
+    }
 }
 
 /// Registers the flow actions. The writers hold the ticket workspace.
@@ -271,6 +383,13 @@ pub fn register(registry: &mut Registry) {
     registry.register_action(
         BuiltinAction::GhIssueComment.as_str(),
         Arc::new(IssueCommentAction),
+    );
+    registry.register_action(BuiltinAction::BugCreate.as_str(), Arc::new(BugCreateAction));
+    // A bug merged into its parent's branch does not close its issue by itself.
+    register_action(
+        registry,
+        BuiltinAction::GhIssueClose,
+        SubprocessAction::new([VERB_TICKET, VERB_TICKET_CLOSE, PLACEHOLDER_KEY_ARG]),
     );
     // Runs in the project checkout (workspace: project) right after `git.checkout`: the editor's
     // reimport and recompilation of the new branch end before the test stage starts.

@@ -399,6 +399,8 @@ mod tests {
                     key: "GH-12".to_string(),
                     state: IssueState::Closed,
                 }],
+                base_branch: None,
+                parent: None,
             }),
             autopilot: Autopilot {
                 attempts: 0,

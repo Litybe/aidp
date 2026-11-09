@@ -52,6 +52,8 @@ pub fn github_meta(number: u64, blocked_by: Vec<BlockerLink>) -> GithubMeta {
         state: IssueState::Open,
         synced_at: None,
         blocked_by,
+        base_branch: None,
+        parent: None,
     }
 }
 

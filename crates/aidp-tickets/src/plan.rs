@@ -682,6 +682,12 @@ pub fn plan_with_lanes(
                 continue;
             }
         };
+        // A parent whose test raised a bug waits for that bug (open blocker) before its next test.
+        let open_keys = graph.get(&t.key).cloned().unwrap_or_default();
+        if !launch.manual && !open_keys.is_empty() && !blockers::in_cycle(&t.key, &graph) {
+            skipped.push((t.key.clone(), SkipReason::WaitingOn(open_keys)));
+            continue;
+        }
         if session_busy.contains(&launch.service) {
             skipped.push((t.key.clone(), SkipReason::ProjectBusy));
             continue;

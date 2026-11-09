@@ -255,6 +255,8 @@ An action's placeholders the step's `with` leaves out are filled from the run it
 | `gh.merge` | `gh pr-merge N --sha SHA` | `merged` | behind the human gate; red gate or moved head is escalated |
 | `gh.issue_label` | `ticket label KEY STATE` | `key`, `label`, `changed`, `removed` | `with: { state }` (`in-progress`, `review`, `fixing`, `testing`, `awaiting-merge`, `done`...): replaces the single `aidp:*` state label of the ticket's issue; a no-op when it already shows it |
 | `gh.issue_comment` | `ticket comment KEY --body-file PATH [--cost-footer]` | `key`, `url`, `costFooter` | `with: { body }` (the report file of a step); `with: { cost_footer: true }` appends the ticket's cost line (contract C7) when the usage source is wired, see below |
+| `bug.create` | `flow bug-create KEY [--report-file PATH] [--summary=TEXT]` | `bug`, `number`, `url`, `count`, `capped`, `changed`, `linked` | `with: { report, summary, run_dir }`; `report` is text or a file name resolved under `run_dir`. Creates the bug issue (label `bug` and `bug:<route>`, title `fix(GH-n): summary`, body with the marker `<!-- aidp:bug parent=n base=feat/GH-n -->`), attaches it as a GitHub sub-issue, comments the parent. Reuses an open bug of the parent. At most 3 bugs per parent: the 4th answers `capped: true` and creates nothing |
+| `gh.issue_close` | `ticket close KEY` | `key`, `number`, `changed` | closes the issue; GitHub closes by itself only when a PR reaches the default branch, so a bug merged into its parent branch needs this |
 | `worktree.remove` | gateway worktree verb | `removed`, `salvaged_ref` | |
 | `unity.refresh` | `flow unity-refresh` | `ok`, `errors`, `warnings`, `duration_ms`, `request_id`, `blocked`, `message`, `heartbeat` | runs in the project checkout right after `git.checkout`: one compile gate (C1) through the playtest package's file bridge, so the editor's reimport of the new branch ends before the test stage. Skipped (`not-a-unity-project`, `unity-editor-closed`) when there is nothing to refresh; `blocked: true` when the editor never answers (600 s) or its heartbeat `.aidp/editor/heartbeat.json` is stale (30 s, 180 s during a domain reload). Compile errors are outputs, not a failure |
 
@@ -432,3 +434,14 @@ A `reject` decision escalates the human step and flow with reason `rejected` and
 The decision, actor and time remain in the step outputs. Following steps never run, including on gates with `on_error: warn`.
 Retry creates a fresh inbox entry and waits for another decision. Skip returns a conflict for a rejected gate.
 These rules also apply to frozen definitions and expanded block step IDs. A `ko` test verdict still advances to the correction path.
+
+### Bug tickets raised by a failed test
+
+`game-test-code`, `game-test-art` and `game-test-map` (version 2) no longer loop on a fix. When `steps.test.outputs.passed == false`, `bug.create` opens a bug issue under the ticket and `ticket.to_test` leaves the ticket in the `to-test` phase. The run ends `done`, not failed.
+
+- The sync reads the marker in the bug body: the bug mirror gets `github.parent` and `github.base_branch`, and the parent gets the open bug as a blocker. The test lane plan skips a `to-test` ticket with an open blocker (`waiting_on`). The native GitHub dependency is not created.
+- The bug takes the route of the parent through the label `bug:code|art|map` (`routing.yaml`, flows `game-bug-code|art|map`). Its branch `fix/GH-<bug>` starts from `origin/feat/GH-<parent>`; the pipelines receive the input `base_branch`, and `flow git-branch`, `git-push` and `pr-create` use it. The PR targets the parent branch, never `main`.
+- The bug flows merge on their own once the review verdict is `done` (`gh.pr_ready`, `gh.merge`, `gh.issue_close`). Without a `done` verdict the bug is labelled `blocked` and nothing is merged.
+- When the bug closes, the sync (or `ticket close`, which also marks the blocker closed on the parent mirror) frees the parent, and the dispatcher starts the test flow again.
+- Cap: 3 bugs per parent. Past it the parent is labelled `blocked`, commented, and the run ends `escalated`.
+- The final PR of the parent toward `main` stays a human decision.
