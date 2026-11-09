@@ -18,6 +18,7 @@ const MERGEABLE_TIMEOUT: Duration = Duration::from_secs(60);
 const MERGEABLE_INTERVAL: Duration = Duration::from_secs(3);
 const MERGEABLE_UNKNOWN: &str =
     "github did not compute `mergeable` after the rebase within the allowed time";
+const REBASE_NOT_APPLIED: &str = "github did not apply the rebase within the allowed time";
 const CONFLICT_AFTER_REBASE: &str = "the pull request conflicts with its base after the rebase";
 const BRANCH_MOVED: &str = "the branch moved since you read it";
 const HEAD_MISMATCH_MARKER: &str = "head branch was modified";
@@ -114,24 +115,38 @@ impl Default for MergeablePoll {
     }
 }
 
-/// Polls `read` until GitHub reports `mergeable` or `conflicting`; `Unknown` means it still computes.
-pub(crate) fn wait_for_mergeable(
+/// GitHub applies `update-branch` asynchronously: right after the call the PR
+/// may still report its old head and its old `mergeable`. Polls `read` until the
+/// head has left `previous_head` and GitHub knows whether it merges, then
+/// returns the rebased head.
+pub(crate) fn wait_for_rebased_head(
     poll: MergeablePoll,
-    mut read: impl FnMut() -> Result<Mergeable, IntegrationError>,
-) -> Result<(), IntegrationError> {
+    previous_head: &str,
+    mut read: impl FnMut() -> Result<(Option<String>, Mergeable), IntegrationError>,
+) -> Result<String, IntegrationError> {
     let deadline = Instant::now() + poll.timeout;
     loop {
-        match read()? {
-            Mergeable::Mergeable => return Ok(()),
-            Mergeable::Conflicting => {
-                return Err(IntegrationError::Conflict(
-                    CONFLICT_AFTER_REBASE.to_string(),
-                ))
+        let (head, mergeable) = read()?;
+        let rebased_head = head.filter(|sha| sha != previous_head);
+        let head_moved = rebased_head.is_some();
+        if let Some(sha) = rebased_head {
+            match mergeable {
+                Mergeable::Mergeable => return Ok(sha),
+                Mergeable::Conflicting => {
+                    return Err(IntegrationError::Conflict(
+                        CONFLICT_AFTER_REBASE.to_string(),
+                    ))
+                }
+                Mergeable::Unknown => {}
             }
-            Mergeable::Unknown => {}
         }
         if Instant::now() >= deadline {
-            return Err(IntegrationError::Conflict(MERGEABLE_UNKNOWN.to_string()));
+            let reason = if head_moved {
+                MERGEABLE_UNKNOWN
+            } else {
+                REBASE_NOT_APPLIED
+            };
+            return Err(IntegrationError::Conflict(reason.to_string()));
         }
         std::thread::sleep(poll.interval);
     }
@@ -172,20 +187,24 @@ pub fn pr_merge_polling(
     if !squash_allowed(&slug)? {
         return Err(IntegrationError::Conflict(SQUASH_DISABLED.to_string()));
     }
+    let number = pr.to_string();
     let mut rebased = false;
     let mut expected_head_sha = expected_head_sha.to_string();
     if status.behind_by.unwrap_or(0) > 0 {
-        let updated = pr_update_branch(pr, repo)?;
+        let previous_head = status
+            .head
+            .sha
+            .clone()
+            .unwrap_or_else(|| expected_head_sha.clone());
+        pr_update_branch(pr, repo)?;
         rebased = true;
-        if let Some(sha) = updated.head_sha {
-            expected_head_sha = sha;
-        }
-        wait_for_mergeable(poll, || {
-            pr_status(repo, Some(pr), None).map(|fresh| fresh.mergeable)
+        expected_head_sha = wait_for_rebased_head(poll, &previous_head, || {
+            let head = view_fields(&number, HEAD_VIEW_FIELDS, repo)?.head_ref_oid;
+            let mergeable = pr_status(repo, Some(pr), None)?.mergeable;
+            Ok((head, mergeable))
         })?;
     }
     let expected_head_sha = expected_head_sha.as_str();
-    let number = pr.to_string();
     let title = status.title.clone().unwrap_or_default();
     let subject = format!("{title} (#{pr})");
     let merge = gh(
@@ -205,7 +224,7 @@ pub fn pr_merge_polling(
     );
     if let Err(error) = merge {
         let message = error.to_string();
-        if message.contains(HEAD_MISMATCH_MARKER) {
+        if message.to_lowercase().contains(HEAD_MISMATCH_MARKER) {
             return Err(IntegrationError::Conflict(BRANCH_MOVED.to_string()));
         }
         return Err(IntegrationError::Upstream(message));

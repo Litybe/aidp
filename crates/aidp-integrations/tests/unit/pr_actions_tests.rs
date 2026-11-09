@@ -337,27 +337,48 @@ fn merge_after_a_rebase_fails_when_github_never_computes_mergeable() {
     assert!(!fake.called(NEEDLE_MERGE));
 }
 
-#[test]
-fn waiting_for_mergeable_polls_until_github_answers() {
-    let mut answers = vec![Mergeable::Unknown, Mergeable::Unknown, Mergeable::Mergeable];
-    let mut reads = 0;
-    let result = wait_for_mergeable(FAST_POLL, || {
-        reads += 1;
-        Ok(answers.remove(0))
-    });
-    assert!(result.is_ok());
-    assert_eq!(reads, 3);
+fn head(sha: &str) -> Option<String> {
+    Some(sha.to_string())
 }
 
 #[test]
-fn waiting_for_mergeable_reports_a_conflict_without_polling_further() {
+fn waiting_for_the_rebase_ignores_the_old_head_even_when_it_looks_mergeable() {
+    let mut answers = vec![
+        (head(HEAD_SHA), Mergeable::Mergeable),
+        (head(HEAD_SHA), Mergeable::Unknown),
+        (head(REBASED_SHA), Mergeable::Unknown),
+        (head(REBASED_SHA), Mergeable::Mergeable),
+    ];
     let mut reads = 0;
-    let result = wait_for_mergeable(FAST_POLL, || {
+    let result = wait_for_rebased_head(FAST_POLL, HEAD_SHA, || {
         reads += 1;
-        Ok(Mergeable::Conflicting)
+        Ok(answers.remove(0))
+    });
+    assert_eq!(result.unwrap(), REBASED_SHA);
+    assert_eq!(reads, 4);
+}
+
+#[test]
+fn waiting_for_the_rebase_reports_a_conflict_without_polling_further() {
+    let mut reads = 0;
+    let result = wait_for_rebased_head(FAST_POLL, HEAD_SHA, || {
+        reads += 1;
+        Ok((head(REBASED_SHA), Mergeable::Conflicting))
     });
     assert!(matches!(result, Err(IntegrationError::Conflict(_))));
     assert_eq!(reads, 1);
+}
+
+#[test]
+fn waiting_for_the_rebase_fails_when_the_head_never_moves() {
+    let error = wait_for_rebased_head(FAST_POLL, HEAD_SHA, || {
+        Ok((head(HEAD_SHA), Mergeable::Mergeable))
+    })
+    .unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        "github did not apply the rebase within the allowed time"
+    );
 }
 
 #[test]
@@ -366,7 +387,10 @@ fn merge_reports_a_moved_head() {
         mergeable_graphql(),
         REPO_ALLOWS_SQUASH,
         0,
-        failure(NEEDLE_MERGE, "Pull request head branch was modified"),
+        failure(
+            NEEDLE_MERGE,
+            "GraphQL: Head branch was modified. Review and try the merge again. (mergePullRequest)",
+        ),
         answer(NEEDLE_DELETE, ""),
     ));
     let error = pr_merge(PR_NUMBER, Some(REPO), HEAD_SHA, false).unwrap_err();
