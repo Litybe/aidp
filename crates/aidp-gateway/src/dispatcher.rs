@@ -1152,6 +1152,16 @@ impl Dispatcher {
                 .into_iter()
                 .filter(|t| t.autopilot.phase() == model::Phase::ToTest),
         );
+        // A ticket still tied to a flow run cannot start: it must not take the slot of the next one.
+        let flow_owned: Vec<String> = match lock(&self.flows).clone() {
+            Some(engine) => candidates
+                .iter()
+                .filter(|t| engine.has_active_run(&t.key))
+                .map(|t| t.key.clone())
+                .collect(),
+            None => Vec::new(),
+        };
+        candidates.retain(|t| !flow_owned.contains(&t.key));
         let plan_updated_at: HashMap<String, DateTime<Utc>> = candidates
             .iter()
             .map(|t| (t.key.clone(), t.updated))
@@ -1194,7 +1204,7 @@ impl Dispatcher {
             .as_ref()
             .map(|engine| engine.lane_load())
             .unwrap_or_default();
-        let dispatch_plan = plan::plan_with_lanes(
+        let mut dispatch_plan = plan::plan_with_lanes(
             &candidates,
             &running_slots,
             &verdict,
@@ -1206,6 +1216,11 @@ impl Dispatcher {
                 dev_flows,
                 test_flows,
             },
+        );
+        dispatch_plan.skipped.extend(
+            flow_owned
+                .into_iter()
+                .map(|key| (key, plan::SkipReason::FlowOwned)),
         );
         for launch in &dispatch_plan.launches {
             if let Some(detail) = &launch.detail {

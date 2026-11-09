@@ -355,6 +355,14 @@ impl FlowEngine {
         entries
     }
 
+    /// True while a run still owns `key`: starting a new one would be refused.
+    pub fn has_active_run(&self, key: &str) -> bool {
+        self.executor
+            .store
+            .index_get(key)
+            .is_some_and(|entry| is_active(entry.status))
+    }
+
     /// What the live runs occupy: dev flows (worktrees) and, per project, the test flows that
     /// hold or wait for its main checkout.
     pub fn lane_load(&self) -> (usize, HashMap<String, usize>) {

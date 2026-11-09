@@ -322,6 +322,27 @@ fn merge_on_a_behind_branch_rebases_then_really_merges_on_the_rebased_head() {
 }
 
 #[test]
+fn a_rebase_conflict_updates_the_branch_by_merging_the_base() {
+    let fake = FakeGh::install(&[
+        failure(
+            "--rebase",
+            "GraphQL: rebase conflict between base and head (updatePullRequestBranch)",
+        ),
+        answer(NEEDLE_UPDATE, ""),
+        answer(NEEDLE_VIEW, &json!({"headRefOid": REBASED_SHA}).to_string()),
+    ]);
+    let updated = pr_update_branch(PR_NUMBER, Some(REPO)).unwrap();
+    assert_eq!(updated.head_sha.as_deref(), Some(REBASED_SHA));
+    let updates: Vec<String> = fake
+        .calls()
+        .into_iter()
+        .filter(|line| line.contains(NEEDLE_UPDATE))
+        .collect();
+    assert_eq!(updates.len(), 2, "{updates:?}");
+    assert!(!updates[1].contains("--rebase"), "{updates:?}");
+}
+
+#[test]
 fn merge_after_a_rebase_fails_when_github_never_computes_mergeable() {
     let unknown = mergeable_graphql().replace("\"MERGEABLE\"", "\"UNKNOWN\"");
     let fake = FakeGh::install(&merge_rules(

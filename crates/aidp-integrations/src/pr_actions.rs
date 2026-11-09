@@ -22,6 +22,7 @@ const REBASE_NOT_APPLIED: &str = "github did not apply the rebase within the all
 const CONFLICT_AFTER_REBASE: &str = "the pull request conflicts with its base after the rebase";
 const BRANCH_MOVED: &str = "the branch moved since you read it";
 const HEAD_MISMATCH_MARKER: &str = "head branch was modified";
+const REBASE_CONFLICT_MARKER: &str = "conflict";
 const ALLOW_SQUASH_KEY: &str = "allow_squash_merge";
 const PR_VIEW_FIELDS: &str = "isDraft,state";
 const HEAD_VIEW_FIELDS: &str = "headRefOid";
@@ -74,10 +75,20 @@ pub fn pr_ready(pr: u64, repo: Option<&str>, undo: bool) -> Result<ReadyOutcome,
     })
 }
 
-/// Rebases the PR branch onto its base through GitHub, then re-reads the head.
+/// Rebases the PR branch onto its base through GitHub, then re-reads the head. A rebase replays
+/// each commit and can conflict where the final state does not: the base is then merged instead.
 pub fn pr_update_branch(pr: u64, repo: Option<&str>) -> Result<UpdateOutcome, IntegrationError> {
     let number = pr.to_string();
-    gh(&["pr", "update-branch", &number, "--rebase"], repo).map_err(upstream)?;
+    if let Err(error) = gh(&["pr", "update-branch", &number, "--rebase"], repo) {
+        if !error
+            .to_string()
+            .to_lowercase()
+            .contains(REBASE_CONFLICT_MARKER)
+        {
+            return Err(upstream(error));
+        }
+        gh(&["pr", "update-branch", &number], repo).map_err(upstream)?;
+    }
     let view = view_fields(&number, HEAD_VIEW_FIELDS, repo)?;
     Ok(UpdateOutcome {
         head_sha: view.head_ref_oid,

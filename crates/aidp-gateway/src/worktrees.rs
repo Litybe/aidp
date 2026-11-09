@@ -547,7 +547,12 @@ fn ensure_locked(
             &[GIT_WORKTREE, GIT_ADD, &path_arg, &branch],
         )
     } else {
-        let base = resolve_base(runner, project).map_err(EnsureError::Git)?;
+        // The dev flow's cleanup deletes the local branch: a later flow resumes what it pushed.
+        let base = if ref_exists(runner, project, &format!("{REMOTES_ORIGIN_PREFIX}{branch}")) {
+            format!("{ORIGIN_REMOTE}/{branch}")
+        } else {
+            resolve_base(runner, project).map_err(EnsureError::Git)?
+        };
         git_checked_retrying(
             runner,
             sleeper,

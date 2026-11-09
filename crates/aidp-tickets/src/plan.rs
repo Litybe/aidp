@@ -135,6 +135,8 @@ pub enum SkipReason {
     WaitingOn(Vec<String>),
     /// The test lane of the project is full (`dispatcher.test_slots`).
     NoTestSlot,
+    /// A flow run still owns the ticket: it takes no slot from the next candidates.
+    FlowOwned,
 }
 
 /// Wire slug of [`SkipReason::WorktreeCap`].
@@ -167,6 +169,7 @@ impl SkipReason {
             SkipReason::ProjectBusy => "project-busy".to_string(),
             SkipReason::NoSlot => "no-slot".to_string(),
             SkipReason::NoTestSlot => "no-test-slot".to_string(),
+            SkipReason::FlowOwned => "owned-by-flow".to_string(),
             SkipReason::NeedsRouting => "needs-routing".to_string(),
             SkipReason::NoTemplate => "no-template".to_string(),
             SkipReason::TemplateWithoutDemandMode => "template-without-demand-mode".to_string(),

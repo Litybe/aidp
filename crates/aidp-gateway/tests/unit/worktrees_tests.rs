@@ -162,6 +162,11 @@ fn ensure_creates_from_origin_default_branch() {
         .rule("symbolic-ref", 0, "refs/remotes/origin/master\n")
         .rule("show-ref --verify --quiet refs/heads/feat/K-1", 1, "")
         .rule(
+            "show-ref --verify --quiet refs/remotes/origin/feat/K-1",
+            1,
+            "",
+        )
+        .rule(
             "worktree list",
             0,
             "worktree C:/CODE/repo\nHEAD a\nbranch refs/heads/master\n",
@@ -174,6 +179,22 @@ fn ensure_creates_from_origin_default_branch() {
         .calls()
         .iter()
         .any(|call| call.contains("worktree add -b feat/K-1") && call.ends_with(" origin/master")));
+}
+
+#[test]
+fn ensure_resumes_the_branch_only_the_remote_still_has() {
+    let vault = tempfile::tempdir().unwrap();
+    let runner = FakeRunner::default()
+        .rule("show-ref --verify --quiet refs/heads/feat/K-1", 1, "")
+        .rule(
+            "worktree list",
+            0,
+            "worktree C:/CODE/repo\nHEAD a\nbranch refs/heads/master\n",
+        );
+    ensure(&runner, &nowhere(), vault.path(), "repo", "K-1", &[]).unwrap();
+    assert!(runner.calls().iter().any(
+        |call| call.contains("worktree add -b feat/K-1") && call.ends_with(" origin/feat/K-1")
+    ));
 }
 
 #[test]

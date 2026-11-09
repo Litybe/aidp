@@ -144,12 +144,14 @@ fn heartbeat_staleness_depends_on_the_state() {
         .unwrap()
         .with_timezone(&chrono::Utc);
     let fresh = json!({ "at": "2026-11-09T10:00:50Z", "state": "idle" });
-    let stale = json!({ "at": "2026-11-09T10:00:00Z", "state": "compiling" });
+    let importing = json!({ "at": "2026-11-09T09:58:45Z", "state": "idle" });
+    let stale = json!({ "at": "2026-11-09T09:54:00Z", "state": "compiling" });
     let reloading = json!({ "at": "2026-11-09T10:00:00Z", "state": "reloading" });
     let long_reload = json!({ "at": "2026-11-09T09:50:00Z", "state": "reloading" });
 
     assert_eq!(stale_heartbeat_age(&fresh, now), None);
-    assert_eq!(stale_heartbeat_age(&stale, now), Some(60));
+    assert_eq!(stale_heartbeat_age(&importing, now), None);
+    assert_eq!(stale_heartbeat_age(&stale, now), Some(420));
     assert_eq!(stale_heartbeat_age(&reloading, now), None);
     assert_eq!(stale_heartbeat_age(&long_reload, now), Some(660));
     assert_eq!(stale_heartbeat_age(&Value::Null, now), None);

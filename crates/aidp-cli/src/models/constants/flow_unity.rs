@@ -11,10 +11,11 @@ pub const EMPTY_REQUEST_BODY: &str = "{}";
 
 pub const DEFAULT_TIMEOUT_SECONDS: u64 = 600;
 pub const POLL_INTERVAL_MILLIS: u64 = 2000;
-/// A heartbeat older than this, outside a domain reload, means the editor's main thread is stuck.
-pub const HEARTBEAT_STALE_SECONDS: i64 = 30;
+/// A heartbeat older than this means the editor's main thread is stuck. The reimport of a branch
+/// silences the heartbeat too: 135 s observed on PixelHood, so this leaves it a wide margin.
+pub const HEARTBEAT_STALE_SECONDS: i64 = 300;
 /// A domain reload can keep the heartbeat silent this long before the editor counts as stuck.
-pub const HEARTBEAT_RELOAD_STALE_SECONDS: i64 = 180;
+pub const HEARTBEAT_RELOAD_STALE_SECONDS: i64 = 300;
 
 pub const RESULT_FIELD_OK: &str = "ok";
 pub const RESULT_FIELD_ERRORS: &str = "errors";
