@@ -1,0 +1,24 @@
+id: doctor-unit
+version: 1
+inputs:
+  ticket: { required: true }
+steps:
+  - id: prepare
+    kind: action
+    use: noop
+    phase: setup
+  - id: implement
+    kind: pipeline
+    use: unity-implement
+    phase: build
+  - id: wait_ci
+    kind: wait
+    use: timer
+    phase: ci
+  - id: merge_approval
+    kind: human
+    phase: review
+  - id: merge
+    kind: action
+    use: gh.merge
+    phase: review

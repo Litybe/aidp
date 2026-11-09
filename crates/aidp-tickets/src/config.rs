@@ -325,6 +325,42 @@ impl Default for LocalConfig {
     }
 }
 
+/// Pipeline doctor settings: the daemon investigates a broken flow or run by itself.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct DoctorConfig {
+    #[serde(default = "DoctorConfig::default_enabled")]
+    pub enabled: bool,
+    /// Minutes a step may run without a live run, session or process before it counts as stuck.
+    #[serde(default = "DoctorConfig::default_stuck_minutes")]
+    pub stuck_minutes: u32,
+    /// Investigations one ticket may get over a sliding 24 hours.
+    #[serde(default = "DoctorConfig::default_max_attempts_per_ticket")]
+    pub max_attempts_per_ticket: u32,
+}
+
+impl DoctorConfig {
+    fn default_enabled() -> bool {
+        true
+    }
+    fn default_stuck_minutes() -> u32 {
+        10
+    }
+    fn default_max_attempts_per_ticket() -> u32 {
+        2
+    }
+}
+
+impl Default for DoctorConfig {
+    fn default() -> Self {
+        DoctorConfig {
+            enabled: Self::default_enabled(),
+            stuck_minutes: Self::default_stuck_minutes(),
+            max_attempts_per_ticket: Self::default_max_attempts_per_ticket(),
+        }
+    }
+}
+
 /// One GitHub repository whose open issues are mirrored under `TODO/<service>/`.
 ///
 /// Written either as a bare `owner/name` string or as a mapping.
@@ -538,6 +574,8 @@ pub struct Config {
     pub github: GithubConfig,
     /// `models: { <route>: { <stageId>: haiku|sonnet|opus } }`, applied when a pipeline is compiled.
     pub models: ModelPolicy,
+    /// The pipeline doctor: automatic investigation of broken flows and runs.
+    pub doctor: DoctorConfig,
 }
 
 /// Load `<vault>/TODO/config.yaml`. A missing file, an empty file, or a file
@@ -646,6 +684,11 @@ github:                          # GitHub issues as the ticket source (aidp tick
     - "aidp:fixing"
     - "aidp:to-test"
     - "aidp:testing"
+
+doctor:                          # investigates a failed, escalated or stuck flow by itself
+  enabled: true
+  stuck_minutes: 10              # a running step with no live run for this long is stuck
+  max_attempts_per_ticket: 2     # investigations per ticket over 24 h
 
 # Model policy, applied when a pipeline is compiled (CLI override, then this, then the template).
 # models:

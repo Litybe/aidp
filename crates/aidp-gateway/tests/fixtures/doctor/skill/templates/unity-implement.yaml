@@ -1,0 +1,13 @@
+version: 5
+id: unity-implement
+kind: pipeline
+description: Minimal stand-in for the skill pipeline unity-implement; the fake provider writes its result.json.
+inputs:
+  feature: { required: false, kind: string, default: game-flow }
+  prompt: { required: false, kind: string, default: "" }
+  issue: { required: false, kind: string, default: "" }
+stages:
+  - name: implement
+    description: Writes the summary; result.json comes from the test provider.
+    agent: executor
+    outputs: [summary.md]

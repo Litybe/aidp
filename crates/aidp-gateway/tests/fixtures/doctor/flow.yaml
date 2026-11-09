@@ -1,0 +1,9 @@
+id: doctor-delivery
+version: 1
+inputs:
+  ticket: { required: true }
+steps:
+  - id: implement
+    kind: pipeline
+    use: unity-implement
+    phase: build

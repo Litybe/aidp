@@ -6,6 +6,7 @@ pub mod autonomy;
 pub mod catalog;
 pub mod claude_permissions;
 pub mod dispatcher_pause;
+pub mod doctor;
 pub mod engine;
 pub mod flow_actions;
 pub mod flow_execution;

@@ -391,6 +391,13 @@ The host returns the outputs listed in the built-in tables, because later steps 
 
 `business_error` escalates the step, as exit codes 3, 4 and 6 do for a built-in action. A `waiting_external` action stays listed until the host answers with another outcome.
 
+## Pipeline doctor
+
+A flow that ends `failed` or `escalated` (not by an exhausted loop or a human), a paused run, a step
+stuck `running` or waiting external too long opens an incident of the daemon's doctor: it runs the
+`flow-doctor` investigation, may retry the step or requeue the ticket, and comments on the issue.
+Its lines are journaled as actor `doctor`. See [doctor.md](doctor.md).
+
 ## See also
 
 - [gateway-api.md](gateway-api.md) for routes
