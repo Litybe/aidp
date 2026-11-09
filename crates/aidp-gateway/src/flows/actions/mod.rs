@@ -272,6 +272,14 @@ pub fn register(registry: &mut Registry) {
         BuiltinAction::GhIssueComment.as_str(),
         Arc::new(IssueCommentAction),
     );
+    // Runs in the project checkout (workspace: project) right after `git.checkout`: the editor's
+    // reimport and recompilation of the new branch end before the test stage starts.
+    register_action(
+        registry,
+        BuiltinAction::UnityRefresh,
+        SubprocessAction::new([VERB_FLOW, VERB_FLOW_UNITY_REFRESH])
+            .timeout(Duration::from_secs(UNITY_REFRESH_TIMEOUT_SECONDS)),
+    );
     register_action(
         registry,
         BuiltinAction::WorktreeRemove,
