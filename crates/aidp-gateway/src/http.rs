@@ -240,6 +240,8 @@ pub struct App {
     pub memory: Arc<crate::memory_ingest::MemoryHub>,
     /// Web UI build answering the non-API reads (`--ui-dir`); empty serves none.
     pub static_ui: crate::static_ui::StaticUi,
+    /// The pipeline doctor; `None` without a flow engine.
+    pub doctor: Option<Arc<crate::doctor::Doctor>>,
 }
 
 /// The JSON answer of a launch: a native run acknowledgement, or the session launch unchanged.
@@ -381,6 +383,7 @@ pub struct ServeHandle {
     shutdown: Arc<crate::shutdown::Shutdown>,
     accept_thread: Option<std::thread::JoinHandle<()>>,
     flows_background: Option<crate::flows::recovery::Background>,
+    doctor_thread: Option<std::thread::JoinHandle<()>>,
 }
 
 impl ServeHandle {
@@ -410,6 +413,9 @@ impl ServeHandle {
         }
         if let Some(background) = self.flows_background.take() {
             background.join();
+        }
+        if let Some(doctor) = self.doctor_thread.take() {
+            let _ = doctor.join();
         }
         if let Some(flows) = &self.app.flows {
             flows.shutdown()?;
@@ -771,6 +777,10 @@ fn serve_on_with_auth(
     let pr_comment_state = crate::pr_comment_state::PrCommentState::new(&config.state_dir);
     let pr_drafts = crate::pr_drafts::PrDrafts::new(&config.state_dir);
     let pr_viewed = crate::pr_viewed::PrViewed::new(&config.state_dir);
+    let doctor = flows
+        .as_ref()
+        .map(|engine| build_doctor(&config, engine, &native_runs, &projects));
+    let doctor_thread = doctor.as_ref().map(|doctor| doctor.spawn(shutdown.clone()));
     let memory =
         crate::memory_ingest::MemoryHub::new(&config.state_dir, &config.vault_root, bus.clone());
     memory.spawn_listener(native_runs.clone(), projects.clone());
@@ -811,6 +821,7 @@ fn serve_on_with_auth(
         launcher,
         memory,
         static_ui,
+        doctor,
     });
 
     let server =
@@ -841,6 +852,7 @@ fn serve_on_with_auth(
         shutdown,
         accept_thread: Some(accept_thread),
         flows_background,
+        doctor_thread,
     })
 }
 
@@ -985,6 +997,36 @@ fn start_flow_engine(
         crate::flows::recovery::TICK_INTERVAL,
     );
     Some((engine, background))
+}
+
+/// Builds the pipeline doctor over the flow engine and the native runs. Its thread starts
+/// later, outside the start path, and its first pass waits for the daemon to be up.
+fn build_doctor(
+    config: &HttpConfig,
+    engine: &Arc<crate::flows::FlowEngine>,
+    native_runs: &Arc<crate::native_runs::NativeRunManager>,
+    projects: &Arc<Projects>,
+) -> Arc<crate::doctor::Doctor> {
+    use crate::models::constants::doctor::{FIRST_TICK_DELAY, TICK_INTERVAL};
+    let vault = config.vault_root.clone();
+    let unity_projects = projects.clone();
+    let unity_engine = Arc::downgrade(engine);
+    crate::doctor::Doctor::new(crate::doctor::DoctorDeps {
+        engine: engine.clone(),
+        runs: Arc::new(crate::doctor::ports::NativeDoctorRuns(native_runs.clone())),
+        settings: Arc::new(move || aidp_tickets::config::load(&vault).doctor),
+        state_dir: config.state_dir.clone(),
+        unity: Some(Arc::new(move |project_id: &str| {
+            let project = unity_projects.get(project_id)?;
+            let engine = unity_engine.upgrade();
+            Some(crate::unity_routes::project_status(
+                &project,
+                engine.as_ref(),
+            ))
+        })),
+        first_delay: FIRST_TICK_DELAY,
+        interval: TICK_INTERVAL,
+    })
 }
 
 /// Resolves a ticket key to its ticket and the directory of its registered project.
@@ -2549,6 +2591,11 @@ fn route(
         return Ok(Reply::Json(reply.status, reply.body));
     }
 
+    if let Some((status, reply)) =
+        crate::doctor::http_routes::handle(app.doctor.as_ref(), app.flows.as_ref(), m, path)
+    {
+        return Ok(Reply::Json(status, reply));
+    }
     if segs.first() == Some(&FLOWS_SEGMENT) {
         let Some(engine) = app.flows.as_ref() else {
             return Ok(err(HTTP_SERVICE_UNAVAILABLE, FLOWS_UNAVAILABLE_MESSAGE));

@@ -120,7 +120,7 @@ pub(crate) fn ticket_status_of(state: &FlowState) -> Option<Status> {
 }
 
 /// The step the machine is positioned on: the top frame's step at its index.
-pub(super) fn step_at_cursor(state: &FlowState) -> Option<Step> {
+pub fn step_at_cursor(state: &FlowState) -> Option<Step> {
     let frame = state.stack.last()?;
     frame.steps.get(frame.index).cloned()
 }
@@ -203,6 +203,24 @@ impl Executor {
 
     pub fn registry(&self) -> &Registry {
         &self.registry
+    }
+
+    /// The ports the executor reaches the outside world through.
+    pub fn ports(&self) -> &Ports {
+        &self.ports
+    }
+
+    /// The persisted runs, read without taking any run lock.
+    pub fn store(&self) -> &FlowStore {
+        &self.store
+    }
+
+    /// True while an action of run `key` is being executed by a worker thread.
+    pub fn has_inflight_action(&self, key: &str) -> bool {
+        let prefix = format!("{key}{ID_SEPARATOR}");
+        lock(&self.inflight)
+            .iter()
+            .any(|id| id.starts_with(&prefix))
     }
 
     pub fn now(&self) -> String {

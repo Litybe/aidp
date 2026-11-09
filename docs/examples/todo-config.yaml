@@ -53,3 +53,8 @@ github:                          # GitHub issues as the ticket source (aidp tick
     "blocked:needs-routing": "aidp:triage"
     "blocked:skip": "aidp:skip"
   phase_labels: ["aidp:review", "aidp:fixing", "aidp:testing"]
+
+doctor:                          # the pipeline doctor (docs/doctor.md)
+  enabled: true
+  stuck_minutes: 10              # a running step with no live run for this long is stuck
+  max_attempts_per_ticket: 2     # investigations per ticket over 24 h

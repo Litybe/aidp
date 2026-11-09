@@ -1,5 +1,6 @@
 //! `GET /api/unity/status` and `POST /api/unity/lock/release`.
 
+use crate::flows::FlowEngine;
 use crate::http::App;
 use crate::models::enums::ApiStatus;
 use crate::projects::Project;
@@ -8,7 +9,7 @@ use crate::unity_status::{status, CachedProcesses, SystemProcesses, PROCESS_CACH
 use aidp_flows::models::constants::resource::UNITY_EDITOR;
 use serde_json::{json, Value};
 use std::collections::HashMap;
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 use tiny_http::Method;
 
 const UNITY_SEGMENT: &str = "unity";
@@ -58,18 +59,22 @@ fn get_status(app: &App, requested: Option<&str>) -> (u16, Value) {
         Ok(project) => project,
         Err(reply) => return reply,
     };
-    let (holder, waiting) = app.flows.as_ref().map_or((None, Vec::new()), |engine| {
+    (STATUS_OK, project_status(&project, app.flows.as_ref()))
+}
+
+/// The body of `GET /api/unity/status` for `project`; shared with the doctor's evidence.
+pub fn project_status(project: &Project, flows: Option<&Arc<FlowEngine>>) -> Value {
+    let (holder, waiting) = flows.map_or((None, Vec::new()), |engine| {
         let key = resource_key(UNITY_EDITOR, &project.id);
         engine.executor().resources().snapshot(&key)
     });
-    let body = status(
+    status(
         &project.id,
         project.checkout_path(),
         &processes().list(),
         holder.as_ref(),
         &waiting,
-    );
-    (STATUS_OK, body)
+    )
 }
 
 fn release_lock(app: &App, requested: Option<&str>) -> (u16, Value) {

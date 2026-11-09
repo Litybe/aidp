@@ -2252,6 +2252,7 @@ so an automation on `session.*` starts seeing `session.updated` the moment this 
 | `flow.waiting_you` | `{key, stepId, kind, inboxId?}` | **Lot 29a.** A step waits for a human. |
 | `flow.ended` | `{key, status}` | **Lot 29a.** |
 | `unity.lock_changed` | `{resource, held, holder, waiting}` | The Unity editor lock changed hands or its queue changed. See [Unity editor lock and status](#unity-editor-lock-and-status). |
+| `doctor.incident` | the incident | An incident of the pipeline doctor opened, started its investigation or closed. See [Pipeline doctor](#pipeline-doctor). |
 | `memory.proposed` / `memory.changed` / `rag.reindexed` | see [Project memory and RAG](#project-memory-and-rag) | Memory proposals, memory changes and finished re-indexes. |
 
 Because an `Event` trigger already subscribes with `on: [...]` glob patterns (see above), an
@@ -2598,6 +2599,43 @@ unresolves it. It prints `{thread_id, replied, unresolved}`.
   outright in the Workflow tool result, so the gateway resolves it by parsing that text — no
   workspace-path encoding and no directory globbing — and as a consequence `aidp-gateway` still does
   not depend on `aidp-core`, and did not need to duplicate `tokens.rs`'s path logic either.
+
+## Pipeline doctor
+
+The daemon investigates a broken flow or run by itself; see [doctor.md](doctor.md). Both routes are
+reads, allowed in read-only mode, and answer `503` when the daemon has no flow engine (no vault).
+
+| Route | Answer |
+|---|---|
+| `GET /api/flows/:key/doctor` | `200 {key, enabled, incidents}`: the incidents of flow or ticket `key`, newest first. `404` when the key has no flow run and no incident. |
+| `GET /api/doctor` | `200 {settings, incidents}`: the `doctor:` settings in force and every incident, oldest first. |
+
+An incident:
+
+```json
+{ "id": "GH-214/implement@1", "key": "GH-214", "ticket": "GH-214", "trigger": "flow_failed",
+  "step": "implement", "iteration": 1, "runId": "20261109-101500-a1b2",
+  "detail": "implement failed (pipeline-failed): pipeline run failed",
+  "status": "fixed", "detectedAt": "…", "updatedAt": "…",
+  "investigationRunId": "20261109-101630-c3d4", "investigatedMs": 1794241107819,
+  "bundle": "D:/Vault/Pipelines/pixelhood/GH-214/doctor/GH-214_implement_1",
+  "diagnosis": { "category": "false_failure", "cause": "…", "evidence": [], "confidence": 0.85,
+                 "action": "retry_step", "params": {"step": "implement"}, "needs_human": false,
+                 "summary": "…" },
+  "outcome": { "action": "retry_step", "idempotencyKey": "GH-214/implement@1:action", "ok": true,
+               "detail": "retried `implement`", "at": "…" },
+  "note": "retry_step : retried `implement`", "commented": true }
+```
+
+`trigger`: `flow_failed`, `flow_escalated`, `run_paused`, `step_stuck`, `waiting_too_long`.
+`status`: `detected`, `investigating`, `fixed`, `action_failed`, `needs_human`, `refused`,
+`no_action`, `investigation_failed`, `capped`. `diagnosis` keeps the snake_case keys of
+`diagnosis.json`. Optional fields are absent until set.
+
+### Event `doctor.incident`
+
+Published with the incident above when it opens, when its investigation starts, and when it
+closes (or its note changes while it waits for budget).
 
 ## Unity editor lock and status
 

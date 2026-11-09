@@ -24,6 +24,7 @@ pub mod cost_routes;
 pub mod cron;
 pub mod crypto;
 pub mod dispatcher;
+pub mod doctor;
 pub mod flows;
 pub mod github_rate_limit;
 pub mod health;

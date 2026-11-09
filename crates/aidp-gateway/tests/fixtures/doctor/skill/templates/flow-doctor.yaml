@@ -1,0 +1,23 @@
+version: 5
+id: flow-doctor
+kind: pipeline
+description: Minimal stand-in for the skill pipeline flow-doctor; the fake provider writes diagnosis.json and report.md.
+inputs:
+  incident: { required: true, kind: string }
+  bundle: { required: true, kind: string }
+  feature: { required: false, kind: string, default: doctor }
+stages:
+  - name: prepare
+    description: Reads the bundle.
+    agent: executor
+    outputs: [context.json]
+  - name: diagnose
+    description: Writes diagnosis.json; the test provider writes it beside its notes.
+    agent: executor
+    needs: [prepare]
+    outputs: [notes.md]
+  - name: report
+    description: Writes report.md.
+    agent: executor
+    needs: [diagnose]
+    outputs: [report.md]

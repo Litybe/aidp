@@ -313,9 +313,13 @@ budget:
 local:
   key_prefix: LOC
   archive_after_days: 30         # done/cancelled moved to <service>/archive/
+doctor:                          # the pipeline doctor, see doctor.md
+  enabled: true
+  stuck_minutes: 10              # a running step with no live run for this long is stuck
+  max_attempts_per_ticket: 2     # investigations per ticket over 24 h
 ```
 
-`local.*` is read by every verb (key allocation, the archive sweep). `dispatcher` is read by the
+`doctor` is read by the daemon's doctor on every pass ([doctor.md](doctor.md)). `local.*` is read by every verb (key allocation, the archive sweep). `dispatcher` is read by the
 resident dispatcher on every tick ([The dispatcher](#the-dispatcher)), and so is `budget`, to compute
 the token-budget verdict (see [Budget](#budget)). A leftover `jira:` section is ignored. The `github:` section is described in [GitHub issues as tickets](#github-issues-as-tickets). No secret
 lives in the vault.

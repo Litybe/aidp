@@ -19,7 +19,7 @@ through `AIDP_SKILL_ROOT`. End-to-end tests live in `D:\AIDP\src\aidp-e2e`.
 | `schema/` | JSON schemas `aidp` embeds and validates against |
 | `fixtures/` | Test inputs: the frozen skill (`skill/`), mock answers (`mocks/`), template inputs |
 | `scripts/`, `bootstrap.*` | Toolchain on D: (`setup-gamedev-toolchain.ps1`); build, install into `AIDP_INSTALL_DIR` (`D:\AIDP\bin`), PATH |
-| `docs/` | `PLAN-GAMEDEV.md`, `development.md`, `gateway-api.md`, `tickets.md`, `flows.md`, `providers.md`, `native-execution.md`, `exit-codes.md`, `memory.md`, `adr/` |
+| `docs/` | `PLAN-GAMEDEV.md`, `development.md`, `gateway-api.md`, `tickets.md`, `flows.md`, `providers.md`, `native-execution.md`, `exit-codes.md`, `memory.md`, `doctor.md`, `adr/` |
 
 ## Rust commands
 
