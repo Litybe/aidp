@@ -45,6 +45,17 @@ pub enum Op {
         #[arg(long)]
         branch: Option<String>,
     },
+    /// Raise the bug issue of a failed test under the ticket `KEY`: label `bug`, sub-issue of the ticket, branch base `feat/<KEY>`. Reports `capped: true` (and creates nothing) when the ticket already holds 3 bugs.
+    BugCreate {
+        #[arg(value_name = "KEY")]
+        key: String,
+        /// File holding the failure report.
+        #[arg(long = "report-file", value_name = "PATH")]
+        report_file: Option<PathBuf>,
+        /// One-line summary of the failure (title of the bug).
+        #[arg(long)]
+        summary: Option<String>,
+    },
     /// Open the pull request of a ticket branch, or reuse the open one, and write its `pr.json`.
     PrCreate {
         #[arg(value_name = "KEY")]

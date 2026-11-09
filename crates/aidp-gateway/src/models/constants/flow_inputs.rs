@@ -8,6 +8,9 @@ pub const INPUT_ISSUE: &str = "issue";
 pub const INPUT_PROMPT: &str = "prompt";
 /// Input carrying the run depth.
 pub const INPUT_TRACK: &str = "track";
+/// Branch the ticket starts from and its PR targets, when it is not the default one (a bug ticket).
+pub const INPUT_BASE_BRANCH: &str = "base_branch";
+pub const GITHUB_BASE_BRANCH: &str = "base_branch";
 /// Run input naming the ticket route, read by the model policy.
 pub const INPUT_ROUTE: &str = "route";
 /// Input telling a run who publishes its branch.

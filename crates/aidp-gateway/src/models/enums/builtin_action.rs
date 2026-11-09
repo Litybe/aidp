@@ -1,8 +1,9 @@
 use crate::models::constants::flow_actions::{
-    ACTION_FAIL, ACTION_GH_ISSUE_COMMENT, ACTION_GH_ISSUE_LABEL, ACTION_GH_MERGE,
-    ACTION_GH_PR_CREATE, ACTION_GH_PR_READY, ACTION_GIT_BRANCH, ACTION_GIT_CHECKOUT,
-    ACTION_GIT_PUSH, ACTION_GIT_RESTORE, ACTION_GIT_WORKTREE, ACTION_NOOP, ACTION_TICKET_TO_TEST,
-    ACTION_UNITY_REFRESH, ACTION_WORKTREE_REMOVE,
+    ACTION_BUG_CREATE, ACTION_FAIL, ACTION_GH_ISSUE_CLOSE, ACTION_GH_ISSUE_COMMENT,
+    ACTION_GH_ISSUE_LABEL, ACTION_GH_MERGE, ACTION_GH_PR_CREATE, ACTION_GH_PR_READY,
+    ACTION_GIT_BRANCH, ACTION_GIT_CHECKOUT, ACTION_GIT_PUSH, ACTION_GIT_RESTORE,
+    ACTION_GIT_WORKTREE, ACTION_NOOP, ACTION_TICKET_TO_TEST, ACTION_UNITY_REFRESH,
+    ACTION_WORKTREE_REMOVE,
 };
 
 /// Actions every registry holds.
@@ -25,11 +26,15 @@ pub enum BuiltinAction {
     TicketToTest,
     /// One compile gate of the open Unity editor, right after `git.checkout` of a test flow.
     UnityRefresh,
+    /// Failed test: raises the bug issue under the ticket and makes the ticket wait for it.
+    BugCreate,
+    /// Closes the ticket's issue (a bug merged into its parent branch).
+    GhIssueClose,
 }
 
 impl BuiltinAction {
     /// Every action the registry registers by name.
-    pub const ALL: [BuiltinAction; 15] = [
+    pub const ALL: [BuiltinAction; 17] = [
         BuiltinAction::Noop,
         BuiltinAction::Fail,
         BuiltinAction::GitWorktree,
@@ -45,6 +50,8 @@ impl BuiltinAction {
         BuiltinAction::WorktreeRemove,
         BuiltinAction::TicketToTest,
         BuiltinAction::UnityRefresh,
+        BuiltinAction::BugCreate,
+        BuiltinAction::GhIssueClose,
     ];
 
     /// The registry name of the action.
@@ -65,6 +72,8 @@ impl BuiltinAction {
             BuiltinAction::WorktreeRemove => ACTION_WORKTREE_REMOVE,
             BuiltinAction::TicketToTest => ACTION_TICKET_TO_TEST,
             BuiltinAction::UnityRefresh => ACTION_UNITY_REFRESH,
+            BuiltinAction::BugCreate => ACTION_BUG_CREATE,
+            BuiltinAction::GhIssueClose => ACTION_GH_ISSUE_CLOSE,
         }
     }
 }

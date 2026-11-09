@@ -2133,15 +2133,27 @@ fn ensure_worktree(
         .iter()
         .map(|pattern| pattern.to_string())
         .collect();
-    let ensured =
-        crate::worktrees::ensure(&OsProcessRunner, project_path, vault, &repo, key, &copy)
-            .map_err(ensure_error)?;
-    let base_sha =
-        crate::worktrees::base_sha(&OsProcessRunner, project_path, &ensured.workspace.path)
-            .map_err(|message| ApiError {
-                status: ApiStatus::Upstream,
-                message,
-            })?;
+    let base = crate::worktrees::ticket_base(store, key);
+    let ensured = crate::worktrees::ensure_based(
+        &OsProcessRunner,
+        project_path,
+        vault,
+        &repo,
+        key,
+        &copy,
+        base.as_deref(),
+    )
+    .map_err(ensure_error)?;
+    let base_sha = crate::worktrees::base_sha_from(
+        &OsProcessRunner,
+        project_path,
+        &ensured.workspace.path,
+        base.as_deref(),
+    )
+    .map_err(|message| ApiError {
+        status: ApiStatus::Upstream,
+        message,
+    })?;
     Ok(WorktreeEnsureResponse {
         path: Some(ensured.workspace.path.display().to_string()),
         base_sha: Some(base_sha),

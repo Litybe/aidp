@@ -62,6 +62,8 @@ fn ticket(
             state: IssueState::Open,
             synced_at: None,
             blocked_by: Vec::new(),
+            base_branch: None,
+            parent: None,
         }),
         route: None,
         flow: None,

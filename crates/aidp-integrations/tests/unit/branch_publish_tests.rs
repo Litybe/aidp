@@ -285,7 +285,7 @@ fn publish_with(tools: &FakeTools, expected: Option<&str>) -> anyhow::Result<Flo
         workspace: workspace.path(),
         scratch: workspace.path(),
     };
-    publish(&context, expected)
+    publish(&context, expected, None)
 }
 
 fn is_conflict(error: &anyhow::Error) -> bool {

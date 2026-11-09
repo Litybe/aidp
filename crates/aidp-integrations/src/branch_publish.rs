@@ -31,6 +31,7 @@ pub fn publish_in(
     runner: &dyn ProcessRunner,
     workspace: &Path,
     expected_branch: Option<&str>,
+    base: Option<&str>,
 ) -> anyhow::Result<FlowPushReport> {
     let scratch = tempfile::tempdir()?;
     let context = PublishContext {
@@ -38,14 +39,17 @@ pub fn publish_in(
         workspace,
         scratch: scratch.path(),
     };
-    publish(&context, expected_branch)
+    publish(&context, expected_branch, base)
 }
 
 /// Publishes the committed state of the worktree's branch and lands the worktree on the result.
 /// Refuses a detached HEAD, another branch than `expected_branch`, and the default branch.
+/// A new branch starts where it leaves `base` (the default branch when `None`): a bug ticket's
+/// branch leaves its parent's branch.
 pub fn publish(
     context: &PublishContext<'_>,
     expected_branch: Option<&str>,
+    base: Option<&str>,
 ) -> anyhow::Result<FlowPushReport> {
     let branch = current_branch(context)?;
     if let Some(expected) = expected_branch.filter(|expected| *expected != branch) {
@@ -62,7 +66,10 @@ pub fn publish(
     let expected_head = match &remote_head {
         Some(head) => head.clone(),
         None => {
-            let default_ref = format!("{REMOTE_REF_PREFIX}{default_branch}");
+            let base_branch = base
+                .filter(|name| !name.trim().is_empty())
+                .unwrap_or(&default_branch);
+            let default_ref = format!("{REMOTE_REF_PREFIX}{base_branch}");
             git_text(context, &[MERGE_BASE, HEAD, &default_ref])?
         }
     };

@@ -81,3 +81,24 @@ pub const GATE_REASON_PREFIX: &str = "github:";
 
 /// Most dependency reads in flight at once.
 pub const DEPENDENCY_THREADS: usize = 6;
+
+/// Opening of the marker a bug ticket carries in its body: `<!-- aidp:bug parent=272 base=feat/GH-272 -->`.
+pub const BUG_MARKER_PATTERN: &str = r"<!--\s*aidp:bug\s+([^>]*?)\s*-->";
+
+/// Key of the parent issue number inside the bug marker.
+pub const BUG_MARKER_PARENT_KEY: &str = "parent";
+
+/// Key of the base branch inside the bug marker.
+pub const BUG_MARKER_BASE_KEY: &str = "base";
+
+/// Most bug tickets one parent issue may spawn; the next failed test blocks the parent.
+pub const MAX_BUGS_PER_PARENT: usize = 3;
+
+/// Most characters of the summary in the title of a bug issue.
+pub const BUG_SUMMARY_MAX_CHARS: usize = 100;
+
+/// Summary used when the failed test gave none.
+pub const BUG_DEFAULT_SUMMARY: &str = "test en échec";
+
+/// Label family that tells the routing which route a bug takes: `bug:code`, `bug:art`, `bug:map`.
+pub const BUG_ROUTE_LABEL_PREFIX: &str = "bug:";

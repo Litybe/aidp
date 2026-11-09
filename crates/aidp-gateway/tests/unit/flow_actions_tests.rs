@@ -433,3 +433,74 @@ fn unity_refresh_skipped_when_the_verb_says_so() {
         matches!(outcome, ActionOutcome::Skipped { reason } if reason == "unity-editor-closed")
     );
 }
+
+#[test]
+fn bug_create_sends_the_report_as_a_file_and_the_summary_whole() {
+    let runner = RecordingRunner::new(EXIT_OK, "{\"bug\":\"GH-300\",\"capped\":false}");
+    let action = registered(BuiltinAction::BugCreate);
+    let with = BTreeMap::from([
+        (WITH_REPORT.to_string(), json!("Le sprite {hero} manque")),
+        (WITH_SUMMARY.to_string(), json!("  sprite {hero} absent ")),
+    ]);
+    let outcome = run_with(action.as_ref(), &runner, TICKET, with);
+    let ActionOutcome::Ok(outputs) = outcome else {
+        panic!("{outcome:?}");
+    };
+    assert_eq!(outputs["bug"], json!("GH-300"));
+    let args = runner.spawned_args();
+    let at = |name: &str| args.iter().position(|arg| arg == name).unwrap();
+    assert_eq!(args[at(VERB_FLOW_BUG_CREATE) + 1], TICKET);
+    let report_file = &args[at(FLAG_REPORT_FILE) + 1];
+    assert!(report_file.contains("aidp-bug-report"), "{report_file}");
+    // Braces in the texts are not placeholders; the summary is trimmed and sent as one argument.
+    assert!(args.contains(&format!("{FLAG_SUMMARY_PREFIX}sprite {{hero}} absent")));
+    // The temporary report file is gone once the verb returned.
+    assert!(!std::path::Path::new(report_file).exists());
+}
+
+#[test]
+fn bug_create_leaves_out_an_empty_summary_and_an_absent_report() {
+    let runner = RecordingRunner::new(EXIT_OK, "{}");
+    let action = registered(BuiltinAction::BugCreate);
+    let with = BTreeMap::from([(WITH_SUMMARY.to_string(), json!("  "))]);
+    run_with(action.as_ref(), &runner, TICKET, with);
+    let args = runner.spawned_args();
+    assert!(!args.iter().any(|arg| arg.starts_with(FLAG_SUMMARY_PREFIX)));
+    assert!(!args.iter().any(|arg| arg == FLAG_REPORT_FILE));
+}
+
+#[test]
+fn bug_create_finds_a_report_named_without_a_path_under_the_run_folder() {
+    let run_dir = tempfile::tempdir().unwrap();
+    let stage = run_dir.path().join("stages").join("test");
+    std::fs::create_dir_all(&stage).unwrap();
+    let report = stage.join("test-report.md");
+    std::fs::write(&report, "## Échec\nCA-1 ko").unwrap();
+    let runner = RecordingRunner::new(EXIT_OK, "{}");
+    let action = registered(BuiltinAction::BugCreate);
+    let with = BTreeMap::from([
+        (WITH_REPORT.to_string(), json!("test-report.md")),
+        (
+            WITH_RUN_DIR.to_string(),
+            json!(run_dir.path().to_string_lossy()),
+        ),
+    ]);
+    run_with(action.as_ref(), &runner, TICKET, with);
+    let args = runner.spawned_args();
+    let at = args.iter().position(|arg| arg == FLAG_REPORT_FILE).unwrap();
+    assert_eq!(std::path::Path::new(&args[at + 1]), report.as_path());
+    assert!(report.exists(), "the real report is never deleted");
+}
+
+#[test]
+fn issue_close_closes_the_issue_of_the_ticket() {
+    let runner = RecordingRunner::new(EXIT_OK, "{\"changed\":true}");
+    let action = registered(BuiltinAction::GhIssueClose);
+    assert!(!action.writes());
+    let outcome = run_with(action.as_ref(), &runner, TICKET, BTreeMap::new());
+    assert!(matches!(outcome, ActionOutcome::Ok(_)));
+    assert_eq!(
+        runner.spawned_args()[..3],
+        strings(&[VERB_TICKET, VERB_TICKET_CLOSE, TICKET])[..]
+    );
+}

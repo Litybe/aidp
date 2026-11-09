@@ -186,6 +186,7 @@ fn run_local(ctx: &Ctx, loc: &TicketLoc, op: Op) -> anyhow::Result<CommandOutput
             },
         ),
         Op::Label { key, state } => super::ticket_github::label(&store, &key, &state),
+        Op::Close { key } => super::ticket_github::close(&store, &key),
         Op::Comment {
             key,
             body_file,

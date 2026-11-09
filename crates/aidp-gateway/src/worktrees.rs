@@ -479,6 +479,29 @@ pub fn ensure(
     ensure_with_sleeper(runner, &std::thread::sleep, project, vault, repo, key, copy)
 }
 
+/// [`ensure`] for a ticket that starts from `base` (a branch of `origin`) instead of the default branch.
+/// The base only matters while the ticket branch exists neither locally nor on `origin`.
+pub fn ensure_based(
+    runner: &dyn ProcessRunner,
+    project: &Path,
+    vault: &Path,
+    repo: &str,
+    key: &str,
+    copy: &[String],
+    base: Option<&str>,
+) -> Result<Ensured, EnsureError> {
+    ensure_with_sleeper_based(
+        runner,
+        &std::thread::sleep,
+        project,
+        vault,
+        repo,
+        key,
+        copy,
+        base,
+    )
+}
+
 /// [`ensure`] with the pause between lock retries supplied by the caller.
 pub fn ensure_with_sleeper(
     runner: &dyn ProcessRunner,
@@ -489,12 +512,28 @@ pub fn ensure_with_sleeper(
     key: &str,
     copy: &[String],
 ) -> Result<Ensured, EnsureError> {
+    ensure_with_sleeper_based(runner, sleeper, project, vault, repo, key, copy, None)
+}
+
+/// [`ensure_based`] with the pause between lock retries supplied by the caller.
+#[allow(clippy::too_many_arguments)]
+pub fn ensure_with_sleeper_based(
+    runner: &dyn ProcessRunner,
+    sleeper: &dyn Fn(Duration),
+    project: &Path,
+    vault: &Path,
+    repo: &str,
+    key: &str,
+    copy: &[String],
+    base: Option<&str>,
+) -> Result<Ensured, EnsureError> {
     safe_name::check(KEY_FIELD, key).map_err(|error| EnsureError::InvalidKey(error.to_string()))?;
     let lock = project_lock(project);
     let _guard = lock.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-    ensure_locked(runner, sleeper, project, vault, repo, key, copy)
+    ensure_locked(runner, sleeper, project, vault, repo, key, copy, base)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn ensure_locked(
     runner: &dyn ProcessRunner,
     sleeper: &dyn Fn(Duration),
@@ -503,6 +542,7 @@ fn ensure_locked(
     repo: &str,
     key: &str,
     copy: &[String],
+    base: Option<&str>,
 ) -> Result<Ensured, EnsureError> {
     let path = worktree_path(vault, repo, key);
     let branch = branch_for(key);
@@ -550,6 +590,14 @@ fn ensure_locked(
         // The dev flow's cleanup deletes the local branch: a later flow resumes what it pushed.
         let base = if ref_exists(runner, project, &format!("{REMOTES_ORIGIN_PREFIX}{branch}")) {
             format!("{ORIGIN_REMOTE}/{branch}")
+        } else if let Some(own) = base.map(str::trim).filter(|own| !own.is_empty()) {
+            let own_ref = format!("{REMOTES_ORIGIN_PREFIX}{own}");
+            if !ref_exists(runner, project, &own_ref) {
+                return Err(EnsureError::Git(format!(
+                    "base branch `{own}` of {key} is not on origin"
+                )));
+            }
+            format!("{ORIGIN_REMOTE}/{own}")
         } else {
             resolve_base(runner, project).map_err(EnsureError::Git)?
         };
@@ -659,6 +707,28 @@ pub fn remove_pr_worktree(
     let salvaged_ref = salvage(runner, project, path, &key)?;
     delete_worktree(runner, sleeper, project, path, None)?;
     Ok(Removed { salvaged_ref })
+}
+
+/// The branch ticket `key` starts from when it is not the default one (a bug ticket), read from its note.
+pub fn ticket_base(store: &aidp_tickets::store::TicketStore, key: &str) -> Option<String> {
+    let (ticket, _, _) = store.get(key).ok()?;
+    ticket.github?.base_branch
+}
+
+/// [`base_sha`] for a ticket that starts from `base` (a branch of `origin`).
+pub fn base_sha_from(
+    runner: &dyn ProcessRunner,
+    project: &Path,
+    path: &Path,
+    base: Option<&str>,
+) -> Result<String, String> {
+    let Some(own) = base.map(str::trim).filter(|own| !own.is_empty()) else {
+        return base_sha(runner, project, path);
+    };
+    let reference = format!("{ORIGIN_REMOTE}/{own}");
+    let output = git_checked(runner, path, &[GIT_MERGE_BASE, REV_HEAD, &reference])
+        .or_else(|_| git_checked(runner, path, &[GIT_REV_PARSE, REV_HEAD]))?;
+    Ok(output.stdout.trim().to_string())
 }
 
 /// Commit the worktree branched from: the merge base with the default branch, else its HEAD.

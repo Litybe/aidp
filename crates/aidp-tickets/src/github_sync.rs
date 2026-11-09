@@ -228,6 +228,7 @@ fn pull_repo(
     report: &mut Report,
 ) {
     let open: HashSet<u64> = issues.iter().map(|issue| issue.number).collect();
+    let children = crate::bug_ticket::open_children(issues);
     let native = if cfg.native_dependencies {
         native_dependencies(port, &repo.repo, issues, report)
     } else {
@@ -243,6 +244,7 @@ fn pull_repo(
             repo,
             open: &open,
             complete,
+            children: &children,
         };
         let blocked_by = lookup.resolve(issue, native.get(&issue.number));
         if let Err(e) = apply_issue(store, cfg, repo, issue, blocked_by, opts, now, report) {
@@ -251,7 +253,7 @@ fn pull_repo(
                 .push(format!("{}: {e:#}", repo.key_of(issue.number)));
         }
     }
-    settle_absent(store, port, cfg, repo, &open, opts, now, report);
+    settle_absent(store, port, cfg, repo, &open, &children, opts, now, report);
 }
 
 /// The native `blocked_by` dependencies of every issue, read on a few threads at once.
@@ -300,6 +302,8 @@ struct BlockerLookup<'a> {
     repo: &'a GithubRepo,
     open: &'a HashSet<u64>,
     complete: bool,
+    /// Open bug issues by parent number, from the markers of the open listing.
+    children: &'a HashMap<u64, Vec<u64>>,
 }
 
 impl BlockerLookup<'_> {
@@ -320,6 +324,15 @@ impl BlockerLookup<'_> {
             if let Some(link) = self.body_link(issue.number, &reference) {
                 push(link, &mut links);
             }
+        }
+        for child in self.children.get(&issue.number).into_iter().flatten() {
+            push(
+                BlockerLink {
+                    key: self.repo.key_of(*child),
+                    state: IssueState::Open,
+                },
+                &mut links,
+            );
         }
         for dependency in native.into_iter().flatten() {
             let Some(target) = self.target_repo(&dependency.repo) else {
@@ -617,6 +630,7 @@ fn apply_issue(
     };
     let label = state_labels::current(&issue.labels, cfg);
     let intent = state_labels::intent(label.as_deref(), cfg);
+    let marker = crate::bug_ticket::parse_marker(&issue.body);
     let meta = GithubMeta {
         repo: repo.repo.clone(),
         number: issue.number,
@@ -624,6 +638,8 @@ fn apply_issue(
         state: issue.state,
         synced_at: Some(now),
         blocked_by,
+        base_branch: marker.base,
+        parent: marker.parent,
     };
     let fresh_body = build_body(&key, issue);
 
@@ -753,6 +769,7 @@ fn settle_absent(
     cfg: &GithubConfig,
     repo: &GithubRepo,
     open: &HashSet<u64>,
+    children: &HashMap<u64, Vec<u64>>,
     opts: &SyncOptions,
     now: DateTime<Utc>,
     report: &mut Report,
@@ -782,6 +799,7 @@ fn settle_absent(
                     repo,
                     open,
                     complete: false,
+                    children,
                 };
                 let blocked_by = lookup.resolve(&issue, None);
                 if let Err(e) = apply_issue(store, cfg, repo, &issue, blocked_by, opts, now, report)
@@ -905,7 +923,7 @@ fn write_labels(
 }
 
 /// The GitHub coordinates of a mirror, refused for a local ticket.
-fn github_of(store: &TicketStore, key: &str) -> anyhow::Result<(Ticket, GithubMeta)> {
+pub(crate) fn github_of(store: &TicketStore, key: &str) -> anyhow::Result<(Ticket, GithubMeta)> {
     let (ticket, _, _) = store.get(key)?;
     let meta = ticket.github.clone().ok_or_else(|| {
         crate::ticket_error::TicketError::Conflict(format!(

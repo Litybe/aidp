@@ -169,3 +169,20 @@ fn a_flow_with_a_publish_block_tells_its_runs_the_host_publishes() {
     let published = build(&state, None, None, &BTreeMap::new());
     assert_eq!(published[INPUT_PUBLISH], json!(PUBLISH_BY_HOST));
 }
+
+#[test]
+fn a_bug_ticket_hands_its_base_branch_to_the_pipelines() {
+    let mut state = state(Source::Github, None);
+    state.ticket["github"] = json!({ "number": 300, "base_branch": "feat/GH-272" });
+    let inputs = build(&state, None, None, &BTreeMap::new());
+    assert_eq!(inputs["base_branch"], json!("feat/GH-272"));
+}
+
+#[test]
+fn a_ticket_without_a_base_branch_hands_none() {
+    let mut state = state(Source::Github, None);
+    state.ticket["github"] = json!({ "number": 7 });
+    assert!(!build(&state, None, None, &BTreeMap::new()).contains_key("base_branch"));
+    state.ticket["github"] = json!({ "number": 7, "base_branch": "  " });
+    assert!(!build(&state, None, None, &BTreeMap::new()).contains_key("base_branch"));
+}

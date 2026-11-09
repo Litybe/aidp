@@ -10,6 +10,7 @@
 pub mod blockers;
 pub mod budget;
 pub mod budget_ticket;
+pub mod bug_ticket;
 pub mod cli;
 pub mod config;
 pub mod dispatcher_state;

@@ -3,9 +3,9 @@
 
 use super::registry::with_as_object;
 use crate::models::constants::flow_inputs::{
-    GITHUB_NUMBER, INPUT_FEATURE, INPUT_ISSUE, INPUT_PROMPT, INPUT_PUBLISH, INPUT_ROUTE,
-    INPUT_TRACK, PROMPT_SEPARATOR, PUBLISH_BY_HOST, TICKET_GITHUB, TICKET_SOURCE, TICKET_SUMMARY,
-    TICKET_TRACK, WITH_REPORT_FROM,
+    GITHUB_BASE_BRANCH, GITHUB_NUMBER, INPUT_BASE_BRANCH, INPUT_FEATURE, INPUT_ISSUE, INPUT_PROMPT,
+    INPUT_PUBLISH, INPUT_ROUTE, INPUT_TRACK, PROMPT_SEPARATOR, PUBLISH_BY_HOST, TICKET_GITHUB,
+    TICKET_SOURCE, TICKET_SUMMARY, TICKET_TRACK, WITH_REPORT_FROM,
 };
 use aidp_flows::model::PUBLISH_BLOCK;
 use aidp_flows::{FlowState, OUTPUT_REPORT};
@@ -67,6 +67,15 @@ pub fn build(
     }
     if let Some(route) = aidp_tickets::ticket_route::route_of_value(&state.ticket) {
         inputs.insert(INPUT_ROUTE.to_string(), json!(route.as_str()));
+    }
+    if let Some(base) = state
+        .ticket
+        .get(TICKET_GITHUB)
+        .and_then(|github| github.get(GITHUB_BASE_BRANCH))
+        .and_then(Value::as_str)
+        .filter(|base| !base.trim().is_empty())
+    {
+        inputs.insert(INPUT_BASE_BRANCH.to_string(), json!(base));
     }
     if state.def.blocks.contains_key(PUBLISH_BLOCK) {
         inputs.insert(INPUT_PUBLISH.to_string(), json!(PUBLISH_BY_HOST));
