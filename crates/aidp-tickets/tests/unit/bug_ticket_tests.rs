@@ -4,6 +4,7 @@
 use super::*;
 use crate::github_sync::{has_acceptance_criteria, sync, SyncOptions};
 use crate::model::{Status, Ticket};
+use crate::models::constants::github::EXTRA_BUGS_AFTER_CAP;
 use crate::models::created_issue::{CreatedIssue, SubIssue};
 use crate::models::github_issue::IssueDependency;
 use aidp_testkit::TempWorkspace;
@@ -237,6 +238,7 @@ fn raise(workspace: &TempWorkspace, fake: &FakeGithub) -> BugOutcome {
         PARENT_KEY,
         PARENT_BRANCH,
         "le héros ne s'affiche pas",
+        "",
         "## Test\n- CA-1 ko : sprite absent",
     )
     .unwrap()
@@ -416,4 +418,205 @@ fn closing_the_bug_frees_the_parent() {
     assert!(blockers_of(&mirror(&workspace, PARENT_KEY)).is_empty());
     // Closing twice changes nothing.
     assert!(!close(&store, &fake, "GH-301").unwrap().changed);
+}
+
+fn raise_allowing(workspace: &TempWorkspace, fake: &FakeGithub, extra: usize) -> BugOutcome {
+    let store = TicketStore::open(workspace.path()).unwrap();
+    create_allowing(
+        &store,
+        fake,
+        PARENT_KEY,
+        PARENT_BRANCH,
+        "le spawner n'instancie pas le héros",
+        "",
+        "## Test\n- CA-2 ko",
+        extra,
+    )
+    .unwrap()
+}
+
+fn rearm_at(workspace: &TempWorkspace, fake: &FakeGithub, at: &str) -> RearmOutcome {
+    let store = TicketStore::open(workspace.path()).unwrap();
+    rearm(
+        &store,
+        fake,
+        PARENT_KEY,
+        DateTime::parse_from_rfc3339(at)
+            .unwrap()
+            .with_timezone(&Utc),
+    )
+    .unwrap()
+}
+
+const MORNING: &str = "2026-11-10T08:00:00Z";
+const SAME_DAY: &str = "2026-11-10T20:00:00Z";
+const NEXT_DAY: &str = "2026-11-11T09:00:00Z";
+
+fn capped_parent(name: &str) -> (FakeGithub, TempWorkspace) {
+    let fake = FakeGithub::default();
+    for number in [281, 282, 283] {
+        fake.old_bug(number, IssueState::Closed);
+    }
+    let workspace = vault_with_parent(name, &fake);
+    (fake, workspace)
+}
+
+#[test]
+fn one_more_bug_is_allowed_past_the_cap_and_only_one() {
+    let (fake, workspace) = capped_parent("bug-extra");
+
+    let extra = raise_allowing(&workspace, &fake, EXTRA_BUGS_AFTER_CAP);
+    assert!(extra.changed && !extra.capped, "{extra:?}");
+    assert_eq!(extra.count, 4);
+
+    fake.close(extra.number);
+    let again = raise_allowing(&workspace, &fake, EXTRA_BUGS_AFTER_CAP);
+    assert!(again.capped && !again.changed, "{again:?}");
+    assert_eq!(fake.created.lock().unwrap().len(), 1);
+}
+
+#[test]
+fn without_the_allowance_the_cap_holds() {
+    let (fake, workspace) = capped_parent("bug-no-extra");
+    assert!(raise_allowing(&workspace, &fake, 0).capped);
+}
+
+#[test]
+fn re_arming_forgives_the_closed_bugs_so_the_parent_may_raise_three_more() {
+    let (fake, workspace) = capped_parent("bug-rearm");
+    assert!(raise(&workspace, &fake).capped);
+
+    let outcome = rearm_at(&workspace, &fake, MORNING);
+    assert!(outcome.rearmed, "{outcome:?}");
+    assert_eq!(outcome.forgiven, 3);
+
+    let first = raise(&workspace, &fake);
+    assert!(first.changed && !first.capped, "{first:?}");
+    assert_eq!(first.count, 1);
+    fake.close(first.number);
+    for _ in 0..2 {
+        let next = raise(&workspace, &fake);
+        assert!(next.changed, "{next:?}");
+        fake.close(next.number);
+    }
+    assert!(raise(&workspace, &fake).capped);
+}
+
+#[test]
+fn the_cap_is_re_armed_once_over_24_hours() {
+    let (fake, workspace) = capped_parent("bug-rearm-once");
+    assert!(rearm_at(&workspace, &fake, MORNING).rearmed);
+
+    let second = rearm_at(&workspace, &fake, SAME_DAY);
+    assert!(!second.rearmed, "{second:?}");
+    assert!(second.message.contains("once per 24 h"));
+
+    let first = raise(&workspace, &fake);
+    fake.close(first.number);
+    let third = rearm_at(&workspace, &fake, NEXT_DAY);
+    assert!(third.rearmed, "{third:?}");
+    assert_eq!(third.forgiven, 1);
+}
+
+#[test]
+fn a_bug_still_open_when_the_cap_is_re_armed_keeps_counting_and_is_reused() {
+    let fake = FakeGithub::default();
+    fake.old_bug(281, IssueState::Closed);
+    fake.old_bug(282, IssueState::Open);
+    let workspace = vault_with_parent("bug-rearm-open", &fake);
+
+    let outcome = rearm_at(&workspace, &fake, MORNING);
+    assert_eq!(outcome.forgiven, 1);
+    let reused = raise(&workspace, &fake);
+    assert_eq!(reused.number, 282);
+    assert!(!reused.changed);
+}
+
+const WRITTEN: &str = "## Issue de base\n\nObjectif.\n\n## Description du bug\n\nCA-1 ko.\n\n## Plan à adopter\n\n1. Corriger.\n\n## Critères d'acceptation\n\n- CA-1 : le test passe.";
+
+#[test]
+fn a_written_body_keeps_the_marker_first_and_folds_the_raw_report_last() {
+    let body = compose_body(
+        "GH-272",
+        272,
+        "feat/GH-272",
+        WRITTEN,
+        "## Test\nsprite absent",
+    );
+    assert!(
+        body.starts_with("<!-- aidp:bug parent=272 base=feat/GH-272 -->\n## Issue de base"),
+        "{body}"
+    );
+    let position = |needle: &str| {
+        body.find(needle)
+            .unwrap_or_else(|| panic!("{needle}: {body}"))
+    };
+    assert!(position("## Issue de base") < position("## Description du bug"));
+    assert!(position("## Description du bug") < position("## Plan à adopter"));
+    assert!(position("## Plan à adopter") < position("## Critères d'acceptation"));
+    assert!(position("## Critères d'acceptation") < position("<details>"));
+    assert!(position("<details>") < position("sprite absent"));
+    assert!(body.trim_end().ends_with("</details>"));
+    assert_eq!(body.matches("aidp:bug").count(), 1);
+    assert_eq!(
+        parse_marker(&body),
+        BugMarker {
+            parent: Some(272),
+            base: Some("feat/GH-272".to_string()),
+        }
+    );
+}
+
+#[test]
+fn a_marker_inside_the_written_body_is_replaced_by_the_daemon_one() {
+    let written = format!("<!-- aidp:bug parent=1 base=autre -->\n{WRITTEN}");
+    let body = compose_body("GH-272", 272, "feat/GH-272", &written, "rapport");
+    assert_eq!(body.matches("aidp:bug").count(), 1, "{body}");
+    assert_eq!(parse_marker(&body).parent, Some(272));
+}
+
+#[test]
+fn a_closing_tag_in_the_report_cannot_end_the_folded_block_early() {
+    let body = compose_body("GH-272", 272, "feat/GH-272", WRITTEN, "a </details> b");
+    assert_eq!(body.matches("</details>").count(), 1, "{body}");
+}
+
+#[test]
+fn an_empty_report_is_said_inside_the_folded_block() {
+    let body = compose_body("GH-272", 272, "feat/GH-272", WRITTEN, "  ");
+    assert!(body.contains("Aucun rapport fourni par le test."), "{body}");
+}
+
+#[test]
+fn without_a_written_body_the_body_is_the_one_from_before() {
+    for written in ["", "  \n ", "<!-- aidp:bug parent=1 base=x -->"] {
+        assert_eq!(
+            compose_body("GH-272", 272, "feat/GH-272", written, "rapport"),
+            bug_body("GH-272", 272, "feat/GH-272", "rapport"),
+            "{written:?}"
+        );
+    }
+}
+
+#[test]
+fn raising_a_bug_with_a_written_body_creates_the_issue_with_it() {
+    let fake = FakeGithub::default();
+    let workspace = vault_with_parent("bug-written-body", &fake);
+    let store = TicketStore::open(workspace.path()).unwrap();
+    create(
+        &store,
+        &fake,
+        PARENT_KEY,
+        PARENT_BRANCH,
+        "le héros ne s'affiche pas",
+        WRITTEN,
+        "## Test\n- CA-1 ko",
+    )
+    .unwrap();
+    let created = fake.created.lock().unwrap();
+    let (_, body, _) = &created[0];
+    assert!(
+        body.contains("## Plan à adopter") && body.contains("<details>"),
+        "{body}"
+    );
 }

@@ -1,5 +1,10 @@
 /// Ordered schema migrations; `PRAGMA user_version` holds how many ran.
-pub const MIGRATIONS: &[&str] = &[include_str!("../../../migrations/0001_initial.sql")];
+pub const MIGRATIONS: &[&str] = &[
+    include_str!("../../../migrations/0001_initial.sql"),
+    include_str!("../../../migrations/0002_note_hash.sql"),
+];
+/// Project key of the memories that apply to every project.
+pub const GLOBAL_PROJECT: &str = "_global";
 /// Tokenizer of every full-text table.
 pub const FTS_TOKENIZER: &str = "unicode61 remove_diacritics 2";
 /// BM25 column weights of `chunks_fts`: title, text, identifiers, path.

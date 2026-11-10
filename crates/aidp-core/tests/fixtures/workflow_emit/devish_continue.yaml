@@ -1,0 +1,43 @@
+version: 5
+id: devish
+inputs:
+  track: { required: true, kind: enum, values: [quick, standard, deep], default: standard }
+settings: { max_correction_iterations: 2 }
+stages:
+  - name: discover
+    agent: analyzer
+    model: sonnet
+    outputs: [context.md]
+  - name: study
+    agent: analyzer
+    needs: [discover]
+    when: "{{ inputs.track in ['standard','deep'] }}"
+    outputs: [study.md]
+  - name: plan
+    agent: planner
+    model: opus
+    needs: [discover]
+    gate: "{{ inputs.track == 'deep' }}"
+    outputs: [plan.md]
+  - name: code
+    agent: executor
+    needs: [plan]
+    scope: { mode: production }
+    outputs: [changed-files.json]
+  - name: review
+    agent: reviewer
+    needs: [code]
+    outputs: [findings.json]
+  - name: correction_loop
+    type: loop
+    when: "{{ stages.review.outputs.findings.has_blocking_findings }}"
+    max_iterations: "{{ settings.max_correction_iterations }}"
+    on_exhausted: continue
+    body:
+      - { name: refix, agent: executor, scope: { mode: production }, needs: [review] }
+      - { name: rereview, agent: reviewer, needs: [refix], outputs: [findings.json] }
+  - name: pr
+    agent: executor
+    needs: [review]
+    gate: true
+    outputs: [pr.json]

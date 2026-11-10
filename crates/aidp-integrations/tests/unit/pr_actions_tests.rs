@@ -35,6 +35,11 @@ const NEEDLE_READY: &str = "pr ready";
 const NEEDLE_MERGE: &str = "pr merge";
 const NEEDLE_DELETE: &str = "DELETE";
 const NEEDLE_REPO: &str = "api repos/o/r";
+const MERGEABLE_VALUE: &str = "\"MERGEABLE\"";
+const CONFLICTING_VALUE: &str = "\"CONFLICTING\"";
+const REBASE_FLAG: &str = "--rebase";
+const UPDATE_CONFLICT_ERROR: &str =
+    "GraphQL: merge conflict between base and head (updatePullRequestBranch)";
 
 #[cfg(windows)]
 const SCRIPT_NAME: &str = "gh.cmd";
@@ -386,7 +391,7 @@ fn waiting_for_the_rebase_reports_a_conflict_without_polling_further() {
         reads += 1;
         Ok((head(REBASED_SHA), Mergeable::Conflicting))
     });
-    assert!(matches!(result, Err(IntegrationError::Conflict(_))));
+    assert!(matches!(result, Err(IntegrationError::BaseConflict(_))));
     assert_eq!(reads, 1);
 }
 
@@ -491,4 +496,86 @@ fn thread_resolve_records_a_failure_and_still_runs_the_rest() {
         assert!(call.contains(id), "{call}");
         assert!(call.contains("resolveReviewThread"), "{call}");
     }
+}
+
+#[test]
+fn a_gate_closed_by_a_conflict_alone_is_a_base_conflict() {
+    let fake = FakeGh::install(&merge_rules(
+        mergeable_graphql().replace(MERGEABLE_VALUE, CONFLICTING_VALUE),
+        REPO_ALLOWS_SQUASH,
+        0,
+        answer(NEEDLE_MERGE, ""),
+        answer(NEEDLE_DELETE, ""),
+    ));
+    let error = pr_merge(PR_NUMBER, Some(REPO), HEAD_SHA, false).unwrap_err();
+    assert!(
+        matches!(error, IntegrationError::BaseConflict(_)),
+        "{error:?}"
+    );
+    assert!(!fake.called(NEEDLE_MERGE));
+}
+
+#[test]
+fn a_gate_closed_by_a_conflict_and_red_checks_stays_a_plain_conflict() {
+    let fake = FakeGh::install(&merge_rules(
+        pending_graphql().replace(MERGEABLE_VALUE, CONFLICTING_VALUE),
+        REPO_ALLOWS_SQUASH,
+        0,
+        answer(NEEDLE_MERGE, ""),
+        answer(NEEDLE_DELETE, ""),
+    ));
+    let error = pr_merge(PR_NUMBER, Some(REPO), HEAD_SHA, false).unwrap_err();
+    assert!(matches!(error, IntegrationError::Conflict(_)), "{error:?}");
+    assert!(!fake.called(NEEDLE_MERGE));
+}
+
+#[test]
+fn reporting_merge_turns_a_base_conflict_into_an_unmerged_outcome() {
+    let fake = FakeGh::install(&merge_rules(
+        mergeable_graphql().replace(MERGEABLE_VALUE, CONFLICTING_VALUE),
+        REPO_ALLOWS_SQUASH,
+        0,
+        answer(NEEDLE_MERGE, ""),
+        answer(NEEDLE_DELETE, ""),
+    ));
+    let outcome = pr_merge_reporting_conflict(PR_NUMBER, Some(REPO), HEAD_SHA, false).unwrap();
+    assert!(!outcome.merged);
+    assert!(outcome.conflict);
+    assert_eq!(outcome.detail.len(), 1, "{outcome:?}");
+    assert!(!fake.called(NEEDLE_MERGE));
+}
+
+#[test]
+fn reporting_merge_keeps_other_refusals_as_errors() {
+    let _fake = FakeGh::install(&merge_rules(
+        pending_graphql(),
+        REPO_ALLOWS_SQUASH,
+        0,
+        answer(NEEDLE_MERGE, ""),
+        answer(NEEDLE_DELETE, ""),
+    ));
+    let error = pr_merge_reporting_conflict(PR_NUMBER, Some(REPO), HEAD_SHA, false).unwrap_err();
+    assert!(matches!(error, IntegrationError::Conflict(_)), "{error:?}");
+}
+
+#[test]
+fn a_behind_branch_whose_update_conflicts_is_a_base_conflict() {
+    let mut rules = vec![
+        failure(REBASE_FLAG, UPDATE_CONFLICT_ERROR),
+        failure(NEEDLE_UPDATE, UPDATE_CONFLICT_ERROR),
+    ];
+    rules.extend(merge_rules(
+        mergeable_graphql(),
+        REPO_ALLOWS_SQUASH,
+        2,
+        answer(NEEDLE_MERGE, ""),
+        answer(NEEDLE_DELETE, ""),
+    ));
+    let fake = FakeGh::install(&rules);
+    let error = pr_merge(PR_NUMBER, Some(REPO), HEAD_SHA, false).unwrap_err();
+    assert!(
+        matches!(error, IntegrationError::BaseConflict(_)),
+        "{error:?}"
+    );
+    assert!(!fake.called(NEEDLE_MERGE));
 }

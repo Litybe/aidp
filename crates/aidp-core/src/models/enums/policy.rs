@@ -27,6 +27,17 @@ pub enum HarnessGapPolicy {
     Continue,
 }
 
+/// What a correction loop does when its last iteration still leaves the `when:` signal set.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LoopExhaustedPolicy {
+    /// Halt the run for a human (default).
+    #[default]
+    Pause,
+    /// Log the leftover and run the next stage; the findings stay open.
+    Continue,
+}
+
 /// Where a stage's sub-agent runs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

@@ -674,6 +674,7 @@ impl RunExec {
                     signal,
                     body_producer,
                     max,
+                    continue_when_exhausted,
                     body,
                 } => self.exec_loop(
                     container,
@@ -682,6 +683,7 @@ impl RunExec {
                     signal.as_deref(),
                     body_producer.as_deref(),
                     *max,
+                    *continue_when_exhausted,
                     body,
                 )?,
                 Step::Fanout {
@@ -961,6 +963,7 @@ impl RunExec {
         signal: Option<&str>,
         body_producer: Option<&str>,
         max: u32,
+        continue_when_exhausted: bool,
         body: &[Step],
     ) -> anyhow::Result<NativeRunStatus> {
         if self.store.row_status(container) == Some(NativeStageStatus::Done) {
@@ -995,7 +998,10 @@ impl RunExec {
             let reason = format!(
                 "`{container}` did not converge after {iteration} iteration(s); blocking findings remain"
             );
-            return self.halt(NativeRunStatus::Paused, reason);
+            if !continue_when_exhausted {
+                return self.halt(NativeRunStatus::Paused, reason);
+            }
+            warn!("{reason}; `on_exhausted: continue`, the run goes on");
         }
         self.store.complete_container(container)?;
         Ok(NativeRunStatus::Running)

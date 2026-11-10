@@ -102,3 +102,12 @@ pub const BUG_DEFAULT_SUMMARY: &str = "test en échec";
 
 /// Label family that tells the routing which route a bug takes: `bug:code`, `bug:art`, `bug:map`.
 pub const BUG_ROUTE_LABEL_PREFIX: &str = "bug:";
+
+/// Bugs one parent may get past the cap when the doctor proved a new cause: one, never more.
+pub const EXTRA_BUGS_AFTER_CAP: usize = 1;
+
+/// Hours during which a parent's cap is re-armed at most once.
+pub const BUG_REARM_WINDOW_HOURS: i64 = 24;
+
+/// Key of the parent's note frontmatter holding the [`crate::models::bug_rearm::BugRearm`].
+pub const BUG_REARM_KEY: &str = "bug_rearm";

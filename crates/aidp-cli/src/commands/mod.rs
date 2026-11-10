@@ -11,6 +11,7 @@ pub mod gh;
 pub mod git;
 pub mod knowledge;
 pub mod memory;
+pub mod memory_hook;
 pub mod mock;
 pub mod pipeline;
 pub mod progress;

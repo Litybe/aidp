@@ -214,6 +214,7 @@ fn render_step(ctx: &EmitCtx, step: &Step, indent: &str, out: &mut EmitOut) -> a
             signal,
             body_producer,
             max,
+            continue_when_exhausted,
             body,
             ..
         } => {
@@ -223,6 +224,7 @@ fn render_step(ctx: &EmitCtx, step: &Step, indent: &str, out: &mut EmitOut) -> a
                 source,
                 body_producer: body_producer.as_deref(),
                 max: *max,
+                continue_when_exhausted: *continue_when_exhausted,
                 body,
             };
             render_loop(ctx, &looped, out)?;
@@ -880,17 +882,25 @@ fn render_loop(ctx: &EmitCtx, looped: &LoopRequest, out: &mut EmitOut) -> anyhow
             "  if ({cond}) {{
 "
         ));
-        out.body.push_str(&format!(
-            "    log({lit} + \" did not converge after \" + {itvar} + \" iteration(s) — pausing on the remaining blocking findings\");
+        if looped.continue_when_exhausted {
+            out.body.push_str(&format!(
+                "    log({lit} + \" did not converge after \" + {itvar} + \" iteration(s) — continuing with the remaining findings open\");
 ",
-            lit = js_str(container)
-        ));
-        out.body.push_str(&format!(
-            "    return pauseInfo({n}, results[{s}]);
+                lit = js_str(container)
+            ));
+        } else {
+            out.body.push_str(&format!(
+                "    log({lit} + \" did not converge after \" + {itvar} + \" iteration(s) — pausing on the remaining blocking findings\");
 ",
-            n = js_str(container),
-            s = js_str(source)
-        ));
+                lit = js_str(container)
+            ));
+            out.body.push_str(&format!(
+                "    return pauseInfo({n}, results[{s}]);
+",
+                n = js_str(container),
+                s = js_str(source)
+            ));
+        }
         out.body.push_str(
             "  }
 ",

@@ -52,9 +52,20 @@ pub enum Op {
         /// File holding the failure report.
         #[arg(long = "report-file", value_name = "PATH")]
         report_file: Option<PathBuf>,
+        /// File holding the body the `bug-write` stage wrote. Missing, unreadable or empty: the body is the report alone.
+        #[arg(long = "body-file", value_name = "PATH")]
+        body_file: Option<PathBuf>,
         /// One-line summary of the failure (title of the bug).
         #[arg(long)]
         summary: Option<String>,
+        /// Allow one bug past the cap of 3: the doctor proved a cause the earlier bugs did not fix.
+        #[arg(long = "allow-extra")]
+        allow_extra: bool,
+    },
+    /// Re-arm the bug cap of the ticket `KEY`: its closed bugs stop counting. Once per 24 h per ticket; reports `rearmed: false` inside that window.
+    BugRearm {
+        #[arg(value_name = "KEY")]
+        key: String,
     },
     /// Open the pull request of a ticket branch, or reuse the open one, and write its `pr.json`.
     PrCreate {

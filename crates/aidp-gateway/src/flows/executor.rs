@@ -15,6 +15,7 @@ use super::registry::{
 use super::store::{is_active, FlowStore, InboxItem, JournalLine, Runtime, WaitRecord};
 use super::FlowEngineError;
 use crate::models::action_job::ID_SEPARATOR;
+use crate::models::constants::flow_actions::{OUTPUT_CONFLICT, OUTPUT_MERGED};
 use crate::models::constants::flow_facts::LIVE_STATUS_TIMEOUT;
 use crate::models::constants::flow_manual::WORKSPACE_BUSY;
 use crate::models::constants::ticket_flow::{STEP_MERGE, STEP_READY, TICKETS_DIR};
@@ -110,9 +111,13 @@ pub(crate) fn ticket_status_of(state: &FlowState) -> Option<Status> {
             .get(id)
             .is_some_and(|step| step.status == StepStatus::Done)
     };
+    let merged = state.steps.get(STEP_MERGE).is_some_and(|step| {
+        step.status == StepStatus::Done
+            && step.outputs.get(OUTPUT_CONFLICT).and_then(Value::as_bool) != Some(true)
+    });
     match state.status {
         FlowStatus::Aborted => None,
-        _ if step_done(STEP_MERGE) => Some(Status::Done),
+        _ if merged => Some(Status::Done),
         FlowStatus::Escalated | FlowStatus::Failed => Some(Status::Blocked),
         _ if step_done(STEP_READY) => Some(Status::InReview),
         _ => Some(Status::InProgress),
@@ -530,9 +535,9 @@ impl Executor {
                 outcome
             }
         };
-        if job.name == crate::models::constants::flow_actions::ACTION_GH_MERGE
-            && matches!(outcome, ActionOutcome::Ok(_))
-        {
+        let merged = matches!(&outcome, ActionOutcome::Ok(outputs)
+            if outputs.get(OUTPUT_MERGED).and_then(Value::as_bool) == Some(true));
+        if job.name == crate::models::constants::flow_actions::ACTION_GH_MERGE && merged {
             self.ports.bus.emit(
                 crate::memory_ingest::EVENT_FLOW_MERGED,
                 serde_json::json!({ "key": job.key, "repo": job.repo }),

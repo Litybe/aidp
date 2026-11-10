@@ -252,10 +252,10 @@ An action's placeholders the step's `with` leaves out are filled from the run it
 | `git.push` | `flow git-push --branch BRANCH` | `branch`, `sha`, `changed` | holds the workspace; one signed commit through the GitHub API, never `git push`; refusals are escalated, see [Host publishing](#host-publishing) |
 | `gh.pr_create` | `flow pr-create KEY --branch BRANCH --body-file PATH --draft` | `pr`, `number`, `url`, `branch`, `changed` | reuses the open PR of the branch; writes `pr.json` next to the body file |
 | `gh.pr_ready` | `gh pr-ready N` | `changed` | |
-| `gh.merge` | `gh pr-merge N --sha SHA` | `merged` | behind the human gate; red gate or moved head is escalated |
+| `gh.merge` | `gh pr-merge N --sha SHA --report-conflict` | `merged`, `conflict` | behind the human gate; red gate or moved head is escalated. A PR whose gate is closed by a conflict with its base alone (or whose update onto the base conflicts) ends the step `done` with `merged: false`, `conflict: true`: the flow resolves the conflict and merges again, see [Merge conflict fallback](#merge-conflict-fallback). The ticket moves to `done` only when `merged` is true |
 | `gh.issue_label` | `ticket label KEY STATE` | `key`, `label`, `changed`, `removed` | `with: { state }` (`in-progress`, `review`, `fixing`, `testing`, `awaiting-merge`, `done`...): replaces the single `aidp:*` state label of the ticket's issue; a no-op when it already shows it |
 | `gh.issue_comment` | `ticket comment KEY --body-file PATH [--cost-footer]` | `key`, `url`, `costFooter` | `with: { body }` (the report file of a step); `with: { cost_footer: true }` appends the ticket's cost line (contract C7) when the usage source is wired, see below |
-| `bug.create` | `flow bug-create KEY [--report-file PATH] [--summary=TEXT]` | `bug`, `number`, `url`, `count`, `capped`, `changed`, `linked` | `with: { report, summary, run_dir }`; `report` is text or a file name resolved under `run_dir`. Creates the bug issue (label `bug` and `bug:<route>`, title `fix(GH-n): summary`, body with the marker `<!-- aidp:bug parent=n base=feat/GH-n -->`), attaches it as a GitHub sub-issue, comments the parent. Reuses an open bug of the parent. At most 3 bugs per parent: the 4th answers `capped: true` and creates nothing |
+| `bug.create` | `flow bug-create KEY [--report-file PATH] [--body-file PATH] [--summary=TEXT] [--allow-extra]` | `bug`, `number`, `url`, `count`, `capped`, `changed`, `linked` | `with: { report, summary, body, body_dir, run_dir }`; `report` is text or a file name resolved under `run_dir`; `body` is the description written by the `bug-write` pipeline (a file name such as `bug.md` resolved under `body_dir`, else `run_dir`, or a path, or the text itself). Creates the bug issue (label `bug` and `bug:<route>`, title `fix(GH-n): summary`, body: the marker `<!-- aidp:bug parent=n base=feat/GH-n -->` first, then `body` (sections Issue de base, Description du bug, Plan à adopter, Critères d'acceptation), then the raw report in a folded `<details>` block; a marker inside `body` is dropped. `body` empty, unreadable or not found: the body is the one from before, marker, link to the parent, raw report and two generic criteria, and the ticket is created anyway), attaches it as a GitHub sub-issue, comments the parent. Reuses an open bug of the parent. At most 3 bugs per parent: the 4th answers `capped: true` and creates nothing (`allow_extra: true`, flag `--allow-extra`, lets one more bug through past the cap, for the doctor's `real_defect`). `flow bug-rearm KEY` forgives the bugs closed so far, once per 24 h: `rearmed`, `message` |
 | `gh.issue_close` | `ticket close KEY` | `key`, `number`, `changed` | closes the issue; GitHub closes by itself only when a PR reaches the default branch, so a bug merged into its parent branch needs this |
 | `worktree.remove` | gateway worktree verb | `removed`, `salvaged_ref` | |
 | `unity.refresh` | `flow unity-refresh` | `ok`, `errors`, `warnings`, `duration_ms`, `request_id`, `blocked`, `message`, `heartbeat` | runs in the project checkout right after `git.checkout`: one compile gate (C1) through the playtest package's file bridge, so the editor's reimport of the new branch ends before the test stage. Skipped (`not-a-unity-project`, `unity-editor-closed`) when there is nothing to refresh; `blocked: true` when the editor never answers (600 s) or its heartbeat `.aidp/editor/heartbeat.json` is stale (30 s, 180 s during a domain reload). Compile errors are outputs, not a failure |
@@ -400,6 +400,36 @@ stuck `running` or waiting external too long opens an incident of the daemon's d
 `flow-doctor` investigation, may retry the step or requeue the ticket, and comments on the issue.
 Its lines are journaled as actor `doctor`. See [doctor.md](doctor.md).
 
+## Merge conflict fallback
+
+`gh.merge` no longer fails on a conflict with the base: it answers `conflict: true` (`merged: false`,
+the reason in `detail`) when the only thing between the PR and its merge is that conflict, either
+GitHub's `mergeable: CONFLICTING` with every other gate item open, or an update of a behind branch
+that neither the rebase nor the merge of the base could apply. A red gate for any other reason, a
+moved head or a disabled squash still fail the step as before.
+
+The game flows of the skill wrap the merge in a loop that turns this into a fallback:
+
+```yaml
+- id: merge_loop
+  kind: loop
+  phase: Merge
+  max: 2
+  until: "steps.merge.outputs.merged == true || !(steps.merge_loop.iteration < settings.max_merge_rounds)"
+  body:
+    - { id: merge_fix, kind: pipeline, use: merge-conflict, pushes: true, when: "steps.merge.outputs.conflict == true" }
+    - { id: merge, kind: action, use: gh.merge }
+- { id: merge_blocked, kind: action, use: gh.issue_label, with: { state: blocked }, when: "steps.merge.outputs.merged != true" }
+- { id: merge_escalate, kind: action, use: fail, with: { kind: business, message: "..." }, when: "steps.merge.outputs.merged != true" }
+```
+
+The `merge-conflict` pipeline (one stage on Sonnet at low effort) merges the base into the PR branch
+in its own temporary worktree, resolves the conflicted files, pushes, and never touches the flow's
+checkout. The next `gh.merge` pins the new live head. A conflict still standing after
+`max_merge_rounds` labels the issue `blocked` and ends the run `escalated`, as a failed merge did.
+The step id stays `merge`, so the ticket status and the `flow.merged` event follow it; both ignore a
+`merge` step that ended on a conflict.
+
 ## See also
 
 - [gateway-api.md](gateway-api.md) for routes
@@ -440,6 +470,7 @@ These rules also apply to frozen definitions and expanded block step IDs. A `ko`
 `game-test-code`, `game-test-art` and `game-test-map` (version 2) no longer loop on a fix. When `steps.test.outputs.passed == false`, `bug.create` opens a bug issue under the ticket and `ticket.to_test` leaves the ticket in the `to-test` phase. The run ends `done`, not failed.
 
 - The sync reads the marker in the bug body: the bug mirror gets `github.parent` and `github.base_branch`, and the parent gets the open bug as a blocker. The test lane plan skips a `to-test` ticket with an open blocker (`waiting_on`). The native GitHub dependency is not created.
+- The flows run the read-only pipeline `bug-write` (`on_error: warn`) before `bug.create`: it reads the parent issue, its PR, the test report and the project memory, then writes `bug.md` and the one-line title. If it fails, `bug.create` still raises the bug with the report alone. The bug flows (`game-bug-*`) read these sections, and their CA-n are the criteria of the review.
 - The bug takes the route of the parent through the label `bug:code|art|map` (`routing.yaml`, flows `game-bug-code|art|map`). Its branch `fix/GH-<bug>` starts from `origin/feat/GH-<parent>`; the pipelines receive the input `base_branch`, and `flow git-branch`, `git-push` and `pr-create` use it. The PR targets the parent branch, never `main`.
 - The bug flows merge on their own once the review verdict is `done` (`gh.pr_ready`, `gh.merge`, `gh.issue_close`). Without a `done` verdict the bug is labelled `blocked` and nothing is merged.
 - When the bug closes, the sync (or `ticket close`, which also marks the blocker closed on the parent mirror) frees the parent, and the dispatcher starts the test flow again.

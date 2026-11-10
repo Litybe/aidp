@@ -6,5 +6,6 @@ pub(crate) struct LoopRequest<'a> {
     pub(crate) source: Option<(&'a str, &'a str)>,
     pub(crate) body_producer: Option<&'a str>,
     pub(crate) max: u32,
+    pub(crate) continue_when_exhausted: bool,
     pub(crate) body: &'a [Step],
 }

@@ -7,5 +7,6 @@ string_enum!(
         Gotcha => "gotcha",
         Preference => "preference",
         Fact => "fact",
+        Incident => "incident",
     }
 );

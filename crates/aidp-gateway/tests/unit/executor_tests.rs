@@ -67,6 +67,10 @@ const PR_AS_TEXT_NUMBER: u64 = 41;
 const PR_AS_NUMBER: u64 = 42;
 const STEP_HOLDER: &str = "holder-step";
 const EXECUTION_KEY: &str = "TEST-91-run-a";
+const STEP_MERGE_ID: &str = "merge";
+const MERGE_TICKET: &str = "LOC-77";
+const MERGE_OUTPUT_MERGED: &str = "merged";
+const MERGE_OUTPUT_CONFLICT: &str = "conflict";
 const SIBLING_EXECUTION_KEY: &str = "TEST-91-run-b";
 const BUSINESS_TICKET_KEY: &str = "TEST-91";
 const EXECUTION_FLOW: &str = "test-flow";
@@ -1732,4 +1736,31 @@ fn it_a_failed_action_reports_a_truncated_stderr_not_the_generic_message() {
         panic!("technical error expected");
     };
     assert_eq!(message, "exit 1: fatal: Unable to create index.lock");
+}
+
+fn run_with_merge_outputs(merged: bool, conflict: bool) -> FlowState {
+    let mut state = FlowState::new(MERGE_TICKET, FlowDef::default());
+    let merge = aidp_flows::StepState {
+        status: StepStatus::Done,
+        outputs: BTreeMap::from([
+            (MERGE_OUTPUT_MERGED.to_string(), json!(merged)),
+            (MERGE_OUTPUT_CONFLICT.to_string(), json!(conflict)),
+        ]),
+        ..aidp_flows::StepState::default()
+    };
+    state.steps.insert(STEP_MERGE_ID.to_string(), merge);
+    state
+}
+
+/// A merge step ended on a base conflict does not make the ticket done: the flow resolves it.
+#[test]
+fn a_merge_step_ended_on_a_conflict_keeps_the_ticket_open() {
+    assert_eq!(
+        ticket_status_of(&run_with_merge_outputs(false, true)),
+        Some(aidp_tickets::model::Status::InProgress)
+    );
+    assert_eq!(
+        ticket_status_of(&run_with_merge_outputs(true, false)),
+        Some(aidp_tickets::model::Status::Done)
+    );
 }

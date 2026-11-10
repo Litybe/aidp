@@ -56,6 +56,10 @@ pub enum Op {
         /// Keep the head branch after the merge.
         #[arg(long)]
         keep_branch: bool,
+        /// Report a conflict with the base as `{merged: false, conflict: true}` (exit 0)
+        /// instead of failing.
+        #[arg(long)]
+        report_conflict: bool,
     },
     /// Migrate a repository's labels to the aidp vocabulary: create the missing
     /// labels, `aidp:need-fix` to `aidp:fixing`, `aidp:done` with an open PR to

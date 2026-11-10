@@ -9,15 +9,17 @@
 use crate::github_sync::github_of;
 use crate::model::Source;
 use crate::models::blocker_link::BlockerLink;
+use crate::models::bug_rearm::BugRearm;
 use crate::models::constants::github::{
     BUG_DEFAULT_SUMMARY, BUG_LABEL, BUG_MARKER_BASE_KEY, BUG_MARKER_PARENT_KEY, BUG_MARKER_PATTERN,
-    BUG_ROUTE_LABEL_PREFIX, BUG_SUMMARY_MAX_CHARS, DEFAULT_KEY_PREFIX, MAX_BUGS_PER_PARENT,
-    VALID_REGEX,
+    BUG_REARM_KEY, BUG_REARM_WINDOW_HOURS, BUG_ROUTE_LABEL_PREFIX, BUG_SUMMARY_MAX_CHARS,
+    DEFAULT_KEY_PREFIX, MAX_BUGS_PER_PARENT, VALID_REGEX,
 };
 use crate::models::enums::issue_state::IssueState;
 use crate::models::github_issue::GithubIssue;
 use crate::models::github_port::GithubPort;
 use crate::store::{ListFilter, TicketStore};
+use chrono::{DateTime, Duration, Utc};
 use regex::Regex;
 use serde::Serialize;
 use std::collections::HashMap;
@@ -102,6 +104,41 @@ pub fn bug_body(parent_key: &str, parent_number: u64, base: &str, report: &str) 
     )
 }
 
+/// Title of the folded block that closes a written bug body.
+const RAW_REPORT_SUMMARY: &str = "Rapport d'échec brut";
+/// What stands in the folded block when the test left no report.
+const NO_REPORT_TEXT: &str = "Aucun rapport fourni par le test.";
+
+/// The body of a bug issue whose description the `bug-write` stage wrote (`written`): the marker
+/// first, the written sections (base issue, bug description, plan, acceptance criteria), then the raw
+/// failure report in a folded `<details>` block. A marker inside `written` is dropped, the daemon's
+/// own stays the only one. An empty `written` gives [`bug_body`], the body before the stage existed.
+pub fn compose_body(
+    parent_key: &str,
+    parent_number: u64,
+    base: &str,
+    written: &str,
+    report: &str,
+) -> String {
+    let marker = Regex::new(BUG_MARKER_PATTERN).expect(VALID_REGEX);
+    let written = marker.replace_all(written, "");
+    let written = written.trim();
+    if written.is_empty() {
+        return bug_body(parent_key, parent_number, base, report);
+    }
+    let report = report.trim();
+    let report = if report.is_empty() {
+        NO_REPORT_TEXT.to_string()
+    } else {
+        // A closing tag inside the report would end the folded block early.
+        report.replace("</details>", "&lt;/details&gt;")
+    };
+    format!(
+        "{marker}\n{written}\n\n<details>\n<summary>{RAW_REPORT_SUMMARY}</summary>\n\n{report}\n\n</details>\n",
+        marker = marker_line(parent_number, base),
+    )
+}
+
 /// What `bug-create` did.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 pub struct BugOutcome {
@@ -139,14 +176,39 @@ fn is_bug(labels: &[String]) -> bool {
 /// Creates the bug issue of a failed test of ticket `parent_key`, or says the cap is reached.
 ///
 /// `base` is the branch of the parent: the bug starts from it and its PR targets it.
-/// An open bug of the parent is reused instead of creating a second one.
+/// `written` is the description the `bug-write` stage wrote (empty: the body falls back to the report
+/// alone, see [`compose_body`]). An open bug of the parent is reused instead of creating a second one.
 pub fn create(
     store: &TicketStore,
     port: &dyn GithubPort,
     parent_key: &str,
     base: &str,
     summary: &str,
+    written: &str,
     report: &str,
+) -> anyhow::Result<BugOutcome> {
+    create_allowing(store, port, parent_key, base, summary, written, report, 0)
+}
+
+/// The re-arm recorded in the frontmatter extras of a parent's note, if any.
+fn rearm_of(extra: &serde_yaml::Mapping) -> Option<BugRearm> {
+    extra
+        .get(BUG_REARM_KEY)
+        .and_then(|value| serde_yaml::from_value(value.clone()).ok())
+}
+
+/// [`create`] with `extra_bugs` bugs allowed past the cap: the doctor's one more bug for a cause it
+/// proved. Bugs forgiven by a re-arm do not count.
+#[allow(clippy::too_many_arguments)]
+pub fn create_allowing(
+    store: &TicketStore,
+    port: &dyn GithubPort,
+    parent_key: &str,
+    base: &str,
+    summary: &str,
+    written: &str,
+    report: &str,
+    extra_bugs: usize,
 ) -> anyhow::Result<BugOutcome> {
     let (parent, meta) = github_of(store, parent_key)?;
     let cfg = &store.config().github;
@@ -175,6 +237,21 @@ pub fn create(
             numbers.push(local.number);
         }
     }
+    let forgiven = store
+        .get(parent_key)
+        .ok()
+        .and_then(|(_, _, frontmatter)| rearm_of(&frontmatter))
+        .map(|rearm| rearm.forgiven)
+        .unwrap_or_default();
+    let still_open = |number: &u64| {
+        remote_bugs
+            .iter()
+            .any(|sub| sub.number == *number && sub.state == IssueState::Open)
+            || local_children
+                .iter()
+                .any(|local| local.number == *number && local.state == IssueState::Open)
+    };
+    numbers.retain(|number| !forgiven.contains(number) || still_open(number));
     let count = numbers.len();
 
     let open_remote = remote_bugs
@@ -201,7 +278,7 @@ pub fn create(
             ..BugOutcome::default()
         });
     }
-    if count >= MAX_BUGS_PER_PARENT {
+    if count >= MAX_BUGS_PER_PARENT + extra_bugs {
         return Ok(BugOutcome {
             parent: parent_key.to_string(),
             base: base.to_string(),
@@ -223,7 +300,7 @@ pub fn create(
     let created = port.create_issue(
         &meta.repo,
         &bug_title(parent_key, summary),
-        &bug_body(parent_key, meta.number, base, report),
+        &compose_body(parent_key, meta.number, base, written, report),
         &labels,
     )?;
     let linked = port
@@ -259,6 +336,81 @@ pub fn create(
         changed: true,
         linked,
         message: String::new(),
+    })
+}
+
+/// What `rearm` did.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+pub struct RearmOutcome {
+    pub parent: String,
+    /// True when the closed bugs no longer count; false when the guard window refused it.
+    pub rearmed: bool,
+    /// Bugs forgiven by this call.
+    pub forgiven: usize,
+    pub message: String,
+}
+
+/// Re-arms the cap of `parent_key` at `now`: the bugs closed so far stop counting. A parent is
+/// re-armed once per [`BUG_REARM_WINDOW_HOURS`]; a second call inside the window changes nothing.
+pub fn rearm(
+    store: &TicketStore,
+    port: &dyn GithubPort,
+    parent_key: &str,
+    now: DateTime<Utc>,
+) -> anyhow::Result<RearmOutcome> {
+    let (_, meta) = github_of(store, parent_key)?;
+    let (mut parent, body, mut frontmatter) = store.get(parent_key)?;
+    let previous = rearm_of(&frontmatter);
+    if let Some(last) = previous
+        .as_ref()
+        .filter(|last| now - last.at < Duration::hours(BUG_REARM_WINDOW_HOURS))
+    {
+        return Ok(RearmOutcome {
+            parent: parent_key.to_string(),
+            message: format!(
+                "{parent_key} was re-armed at {}: once per {BUG_REARM_WINDOW_HOURS} h",
+                last.at.to_rfc3339()
+            ),
+            ..RearmOutcome::default()
+        });
+    }
+    let mut forgiven: Vec<u64> = previous.map(|last| last.forgiven).unwrap_or_default();
+    let before = forgiven.len();
+    let remote = port.sub_issues(&meta.repo, meta.number).unwrap_or_default();
+    let closed_remote = remote
+        .iter()
+        .filter(|sub| is_bug(&sub.labels) && sub.state == IssueState::Closed)
+        .map(|sub| sub.number);
+    let closed_local = store
+        .list(&ListFilter {
+            source: Some(Source::Github),
+            ..ListFilter::default()
+        })
+        .into_iter()
+        .filter_map(|ticket| ticket.github)
+        .filter(|github| {
+            github.repo.eq_ignore_ascii_case(&meta.repo)
+                && github.parent == Some(meta.number)
+                && github.state == IssueState::Closed
+        })
+        .map(|github| github.number);
+    for number in closed_remote.chain(closed_local) {
+        if !forgiven.contains(&number) {
+            forgiven.push(number);
+        }
+    }
+    let added = forgiven.len() - before;
+    let record = BugRearm { at: now, forgiven };
+    frontmatter.insert(
+        serde_yaml::Value::String(BUG_REARM_KEY.to_string()),
+        serde_yaml::to_value(&record)?,
+    );
+    store.save(&mut parent, &body, &frontmatter)?;
+    Ok(RearmOutcome {
+        parent: parent_key.to_string(),
+        rearmed: true,
+        forgiven: added,
+        message: format!("{parent_key}: {added} closed bugs no longer count toward the cap"),
     })
 }
 

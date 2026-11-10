@@ -23,11 +23,30 @@ pub struct DoctorIncident {
     pub bundle: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub diagnosis: Option<DoctorDiagnosis>,
+    /// The latest action of the incident.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub outcome: Option<DoctorActionOutcome>,
+    /// Every action of the incident, in order: three at most.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub actions: Vec<DoctorActionOutcome>,
+    /// Epoch milliseconds before which a transient incident is not resumed again.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_attempt_ms: Option<i64>,
+    /// Pull request opened for the harness patch of this incident, once.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pr_url: Option<String>,
     /// Why no action ran, or what went wrong.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
     #[serde(default)]
     pub commented: bool,
+    /// Key of the shared pattern this incident covers for every ticket it touches.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shared_pattern: Option<String>,
+    /// Tickets a shared failure touches: one incident for all of them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub affected: Vec<String>,
+    /// Epoch milliseconds the bug cap of the ticket was re-armed by this incident.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rearmed_ms: Option<i64>,
 }

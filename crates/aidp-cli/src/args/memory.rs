@@ -1,5 +1,6 @@
 //! The `aidp rag` and `aidp memory` subcommand trees.
 
+use crate::models::enums::memory_hook_event::MemoryHookEvent;
 use clap::Subcommand;
 use std::path::PathBuf;
 
@@ -46,6 +47,24 @@ pub enum RagOp {
         #[arg(long, default_value_t = 1500)]
         budget: usize,
     },
+    /// Measure the search on cases with known answers: recall at k and mean reciprocal rank.
+    Eval {
+        /// YAML list of `{ query, expect: [path prefix], sources }`.
+        #[arg(long, value_name = "PATH")]
+        cases: PathBuf,
+        /// Project to search.
+        #[command(flatten)]
+        project: ProjectArg,
+        /// Hits that count as an answer.
+        #[arg(long, default_value_t = 5)]
+        k: usize,
+    },
+    /// Delete the index of an orphan key: never a registered project, never a key with memories.
+    Purge {
+        /// Exact key in the index, such as a leftover folder name.
+        #[arg(long, value_name = "KEY")]
+        key: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -68,12 +87,27 @@ pub enum MemoryOp {
         #[arg(long, default_value_t = 2000)]
         budget: usize,
     },
+    /// Answer a question from the memories and the corpus, project and global, under a budget.
+    Recall {
+        /// The question or keywords.
+        #[arg(value_name = "QUERY")]
+        query: String,
+        /// Project of the memories.
+        #[command(flatten)]
+        project: ProjectArg,
+        /// Kind of work: code, art, map, doc or tooling.
+        #[arg(long)]
+        route: Option<String>,
+        /// Token budget of the answer.
+        #[arg(long, default_value_t = 1500)]
+        budget: usize,
+    },
     /// Add a memory (proposed unless `--status active`).
     Add {
         /// Project of the memory.
         #[command(flatten)]
         project: ProjectArg,
-        /// decision, convention, lesson, gotcha, preference or fact.
+        /// decision, convention, lesson, gotcha, preference, fact or incident.
         #[arg(long)]
         kind: String,
         /// Short title, 120 characters at most.
@@ -82,7 +116,7 @@ pub enum MemoryOp {
         /// Actionable text, 600 characters at most.
         #[arg(long)]
         text: String,
-        /// Route the memory applies to: code, art, map or doc.
+        /// Route the memory applies to: code, art, map, doc or tooling.
         #[arg(long)]
         route: Option<String>,
         /// Path glob the memory applies to; repeatable.
@@ -190,6 +224,30 @@ pub enum MemoryOp {
     },
     /// Mark stale the active memories unused for 60 days.
     Gc {
+        /// Project of the memories.
+        #[command(flatten)]
+        project: ProjectArg,
+    },
+    /// Answer a Claude Code hook: context in, session journal out. Reads the hook JSON on stdin.
+    Hook {
+        /// The event being answered.
+        #[arg(value_enum)]
+        event: MemoryHookEvent,
+    },
+    /// Extract the durable memories of a session journal with a small model.
+    Distill {
+        /// The session journal note.
+        #[arg(long, value_name = "PATH")]
+        journal: PathBuf,
+        /// The Claude Code session id.
+        #[arg(long, value_name = "ID")]
+        session: String,
+        /// Project of the memories.
+        #[command(flatten)]
+        project: ProjectArg,
+    },
+    /// Synchronise the memories with their Markdown notes in the vault.
+    Sync {
         /// Project of the memories.
         #[command(flatten)]
         project: ProjectArg,

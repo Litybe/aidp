@@ -50,13 +50,18 @@ pub fn run(ctx: &Ctx, op: Op) -> anyhow::Result<CommandOutput> {
         Op::BugCreate {
             key,
             report_file,
+            body_file,
             summary,
+            allow_extra,
         } => bug::bug_create(
             ctx,
             &key,
             report_file.as_deref(),
+            body_file.as_deref(),
             summary.as_deref().unwrap_or_default(),
+            allow_extra,
         ),
+        Op::BugRearm { key } => bug::bug_rearm(ctx, &key),
         Op::PrCreate {
             key,
             branch,

@@ -5,7 +5,8 @@ use crate::graph::CodeGraph;
 use crate::mmr;
 use crate::models::constants::limits::{
     CANDIDATE_FACTOR, FILTERED_CANDIDATES, GRAPH_DAMPING, GRAPH_MAX_ADDED,
-    GRAPH_NEIGHBOURS_PER_SEED, GRAPH_SEED_HITS, MIN_CANDIDATES, MMR_LAMBDA,
+    GRAPH_NEIGHBOURS_PER_SEED, GRAPH_SEED_HITS, JOURNAL_SEGMENT, JOURNAL_WEIGHT, MIN_CANDIDATES,
+    MMR_LAMBDA, SOURCE_WEIGHTS,
 };
 use crate::models::enums::Source;
 use crate::models::hit::Hit;
@@ -77,7 +78,7 @@ impl<'a> Bm25Retriever<'a> {
                 rusqlite::params![expression, query.project, limit as i64],
                 |row| {
                     let mut hit = hit_from_row(row, VIA_BM25)?;
-                    hit.score = -row.get::<_, f64>(7)?;
+                    hit.score = -row.get::<_, f64>(7)? * source_weight(&hit);
                     Ok(hit)
                 },
             )?;
@@ -192,6 +193,19 @@ impl Retriever for Bm25Retriever<'_> {
         }
         hits.sort_by(|left, right| right.score.total_cmp(&left.score));
         Ok(mmr::select(hits, query.k, MMR_LAMBDA))
+    }
+}
+
+/// How much a hit of this source and path counts against the others.
+fn source_weight(hit: &Hit) -> f64 {
+    let weight = SOURCE_WEIGHTS
+        .iter()
+        .find(|(source, _)| *source == hit.source)
+        .map_or(1.0, |(_, weight)| *weight);
+    if hit.path.contains(JOURNAL_SEGMENT) {
+        weight * JOURNAL_WEIGHT
+    } else {
+        weight
     }
 }
 

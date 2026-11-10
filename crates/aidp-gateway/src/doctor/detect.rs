@@ -1,10 +1,12 @@
 //! Detection of broken flows and runs. Pure: it reads snapshots and takes no lock, so it
 //! never runs inside the reconcile path and never blocks it.
 
+use crate::doctor::transient::{classify, is_art_template};
 use crate::flows::executor::step_at_cursor;
 use crate::flows::pipeline_inputs::ticket_key;
 use crate::models::constants::doctor::{
-    DOCTOR_TEMPLATE, EFFECT_SEPARATOR, INCIDENT_SEPARATOR, RUN_CAUSE_PREFIX, START_PIPELINE_SUFFIX,
+    BUG_CAPPED_STEP, CAP_INCIDENT_SEPARATOR, DOCTOR_TEMPLATE, EFFECT_SEPARATOR, FRESH_RUN_HOURS,
+    INCIDENT_SEPARATOR, RUN_CAUSE_PREFIX, RUN_ENDED_GRACE_MINUTES, START_PIPELINE_SUFFIX,
     WAITING_EXTERNAL_MINUTES,
 };
 use crate::models::enums::native_run_status::NativeRunStatus;
@@ -15,6 +17,7 @@ use aidp_flows::{effect_id, FlowStatus, StepKind, StepReason, StepState, StepSta
 use std::collections::BTreeSet;
 
 const MILLIS_PER_MINUTE: i64 = 60_000;
+const MILLIS_PER_HOUR: i64 = 60 * MILLIS_PER_MINUTE;
 
 /// Escalation reasons a human or the product chose: not a pipeline failure.
 const HUMAN_OR_PRODUCT_REASONS: [StepReason; 5] = [
@@ -33,6 +36,12 @@ pub struct DetectInput<'a> {
     pub live: &'a dyn Fn(&str) -> DoctorLiveRun,
     pub now_ms: i64,
     pub stuck_minutes: u32,
+    /// Epoch milliseconds the condition of incident `id` was first seen: the doctor remembers
+    /// it between passes, so a transient state is never an incident at its first sight.
+    pub first_seen: &'a dyn Fn(&str) -> i64,
+    /// Text of a run's pause reason and stage replies, read to tell a passing fault from the
+    /// art pipeline's own findings.
+    pub run_text: &'a dyn Fn(&NativeRunView) -> String,
 }
 
 /// Id of the incident of step `step` at `iteration` of run `key`.
@@ -52,7 +61,9 @@ pub fn millis_of(at: &str) -> Option<i64> {
         .map(|time| time.timestamp_millis())
 }
 
-/// Every broken flow and run, one candidate per ticket and cause, flow triggers first.
+/// Every broken flow and run that is still live, one candidate per ticket and cause. Flows
+/// that are going come first, the most recent first; a run that was replaced, a flow that
+/// ended and a run too old are not incidents.
 pub fn detect(input: &DetectInput<'_>) -> Vec<DoctorCandidate> {
     let mut found: Vec<DoctorCandidate> = input
         .flows
@@ -61,11 +72,18 @@ pub fn detect(input: &DetectInput<'_>) -> Vec<DoctorCandidate> {
         .collect();
     let mut seen: BTreeSet<String> = found.iter().map(|candidate| candidate.id.clone()).collect();
     for run in input.runs.iter().filter(|run| is_broken_run(run)) {
-        let candidate = run_candidate(input.flows, run);
+        let Some(candidate) = run_candidate(input, run) else {
+            continue;
+        };
         if seen.insert(candidate.id.clone()) {
             found.push(candidate);
         }
     }
+    found.sort_by(|a, b| {
+        b.live
+            .cmp(&a.live)
+            .then_with(|| b.activity_ms.cmp(&a.activity_ms))
+    });
     found
 }
 
@@ -90,21 +108,81 @@ fn flow_candidate(
         }
     };
     let (step, row) = failing_step(state)?;
-    if chosen_by_human_or_product(row) {
+    let detail = format!(
+        "{step} {} ({}): {}",
+        state.status.as_wire(),
+        row.reason.as_deref().unwrap_or("-"),
+        row.detail.as_deref().unwrap_or("-")
+    );
+    if step == BUG_CAPPED_STEP {
+        return Some(bug_cap_candidate(snapshot, step, row, detail));
+    }
+    if chosen_by_human_or_product(row) || art_findings(input, snapshot, step, row) {
         return None;
     }
-    Some(candidate(
+    Some(candidate(snapshot, trigger, step, row, detail))
+}
+
+/// The incident of a ticket whose test still fails after its bugs reached the cap. Its id carries
+/// the start time of the flow, so a later cap of the same ticket is a new incident.
+fn bug_cap_candidate(
+    snapshot: &DoctorFlowSnapshot,
+    step: &str,
+    row: &StepState,
+    detail: String,
+) -> DoctorCandidate {
+    let mut found = candidate(
         snapshot,
-        trigger,
+        DoctorTrigger::BugsNotConverging,
         step,
         row,
-        format!(
-            "{step} {} ({}): {}",
-            state.status.as_wire(),
-            row.reason.as_deref().unwrap_or("-"),
-            row.detail.as_deref().unwrap_or("-")
-        ),
-    ))
+        detail,
+    );
+    let started = snapshot
+        .state
+        .started_at
+        .as_deref()
+        .and_then(millis_of)
+        .unwrap_or(0);
+    found.id = format!("{}{CAP_INCIDENT_SEPARATOR}{started}", found.id);
+    found
+}
+
+/// True when the failing step ran an art pipeline that stopped on art findings: the art
+/// pipeline's own work, not an incident. A passing fault of an art run still is one.
+fn art_findings(
+    input: &DetectInput<'_>,
+    snapshot: &DoctorFlowSnapshot,
+    step: &str,
+    row: &StepState,
+) -> bool {
+    let effect = effect_id(step, row.iteration, START_PIPELINE_SUFFIX);
+    let run = snapshot
+        .sessions
+        .get(&effect)
+        .and_then(|id| input.runs.iter().find(|run| run.run_id == *id));
+    let template = run.map(|run| run.template_id.clone()).or_else(|| {
+        snapshot
+            .state
+            .def
+            .steps
+            .iter()
+            .find(|definition| definition.id == step)
+            .and_then(|definition| definition.use_.clone())
+    });
+    if !template.as_deref().is_some_and(is_art_template) {
+        return false;
+    }
+    let mut text = format!(
+        "{} {}",
+        row.reason.as_deref().unwrap_or_default(),
+        row.detail.as_deref().unwrap_or_default()
+    );
+    if let Some(run) = run {
+        text.push(' ');
+        text.push_str(&(input.run_text)(run));
+    }
+    classify(&text).is_none()
 }
 
 /// The current step when it failed or escalated, else the last one that did.
@@ -130,6 +208,17 @@ fn chosen_by_human_or_product(row: &StepState) -> bool {
             .any(|reason| row.reason.as_deref() == Some(reason.as_str()))
 }
 
+/// Milliseconds the doctor itself has seen step `step` stuck.
+fn seen_for(
+    input: &DetectInput<'_>,
+    snapshot: &DoctorFlowSnapshot,
+    step: &str,
+    row: &StepState,
+) -> i64 {
+    let id = step_incident_id(&snapshot.state.key, step, row.iteration);
+    input.now_ms - (input.first_seen)(&id)
+}
+
 /// A running step whose run is over or gone, or a step waiting for something external too long.
 fn live_step_candidate(
     input: &DetectInput<'_>,
@@ -150,13 +239,29 @@ fn live_step_candidate(
         (StepStatus::Running, StepKind::Pipeline) => {
             let effect = effect_id(step, row.iteration, START_PIPELINE_SUFFIX);
             let session = snapshot.sessions.get(&effect);
-            let (since, seen) = match session.map(|id| (input.live)(id)) {
+            let grace = RUN_ENDED_GRACE_MINUTES * MILLIS_PER_MINUTE;
+            let (waited, limit, seen) = match session.map(|id| (input.live)(id)) {
                 Some(DoctorLiveRun::Running) => return None,
-                Some(DoctorLiveRun::Ended(at)) => (at.or_else(|| row.started_at.clone()), "ended"),
-                Some(DoctorLiveRun::Gone) => (row.started_at.clone(), "gone"),
-                None => (row.started_at.clone(), "never started"),
+                // The run ended: the engine reconciles within a few ticks. Not before the grace
+                // since the end, nor before the doctor itself saw it for that long.
+                Some(DoctorLiveRun::Ended(at)) => (
+                    elapsed(at.as_deref().or(row.started_at.as_deref()))
+                        .min(seen_for(input, snapshot, step, row)),
+                    grace,
+                    "ended",
+                ),
+                Some(DoctorLiveRun::Gone) => (
+                    elapsed(row.started_at.as_deref()).min(seen_for(input, snapshot, step, row)),
+                    stuck_ms,
+                    "gone",
+                ),
+                None => (
+                    elapsed(row.started_at.as_deref()).min(seen_for(input, snapshot, step, row)),
+                    stuck_ms,
+                    "never started",
+                ),
             };
-            (elapsed(since.as_deref()) > stuck_ms).then(|| {
+            (waited > limit).then(|| {
                 candidate(
                     snapshot,
                     DoctorTrigger::StepStuck,
@@ -216,37 +321,79 @@ fn candidate(
         run_id: snapshot.sessions.get(&effect).cloned(),
         project_id: None,
         detail,
+        live: is_going(state.status),
+        activity_ms: [
+            row.finished_at.as_deref(),
+            row.started_at.as_deref(),
+            state.started_at.as_deref(),
+        ]
+        .into_iter()
+        .flatten()
+        .find_map(millis_of)
+        .unwrap_or(0),
     }
 }
 
-/// A paused run, filed under the flow step that launched it when there is one.
-fn run_candidate(flows: &[DoctorFlowSnapshot], run: &NativeRunView) -> DoctorCandidate {
+fn is_going(status: FlowStatus) -> bool {
+    matches!(
+        status,
+        FlowStatus::Running | FlowStatus::WaitingExternal | FlowStatus::WaitingHuman
+    )
+}
+
+/// A paused run that is still live, filed under the flow step that launched it when there is
+/// one. Live means: the run of the current step of a flow that is not over, or, outside any
+/// flow, a run of the last 24 hours that no newer run of the same ticket and template replaced.
+/// A run of the art pipeline is an incident only when a passing fault stopped it.
+fn run_candidate(input: &DetectInput<'_>, run: &NativeRunView) -> Option<DoctorCandidate> {
+    if is_art_template(&run.template_id) && classify(&(input.run_text)(run)).is_none() {
+        return None;
+    }
     let detail = format!(
         "run {} ({}) paused: {}",
         run.run_id,
         run.template_id,
         run.reason.as_deref().unwrap_or("-")
     );
-    for snapshot in flows {
+    let at = run
+        .ended_at
+        .as_deref()
+        .and_then(millis_of)
+        .or_else(|| millis_of(&run.started_at))
+        .unwrap_or(0);
+    let mut owned = false;
+    for snapshot in input.flows {
         let owner = snapshot
             .sessions
             .iter()
             .find(|(_, id)| **id == run.run_id)
             .and_then(|(effect, _)| step_of_effect(effect));
-        if let Some((step, iteration)) = owner {
-            let state = &snapshot.state;
-            return DoctorCandidate {
-                id: step_incident_id(&state.key, &step, iteration),
-                key: state.key.clone(),
-                ticket: ticket_key(state).to_string(),
-                trigger: DoctorTrigger::RunPaused,
-                step: Some(step),
-                iteration: Some(iteration),
-                run_id: Some(run.run_id.clone()),
-                project_id: None,
-                detail,
-            };
+        let Some((step, iteration)) = owner else {
+            continue;
+        };
+        owned = true;
+        let state = &snapshot.state;
+        let is_current = state.current.as_deref() == Some(step.as_str())
+            && state.steps.get(&step).map(|row| row.iteration) == Some(iteration);
+        if !is_going(state.status) || !is_current {
+            continue;
         }
+        return Some(DoctorCandidate {
+            id: step_incident_id(&state.key, &step, iteration),
+            key: state.key.clone(),
+            ticket: ticket_key(state).to_string(),
+            trigger: DoctorTrigger::RunPaused,
+            step: Some(step),
+            iteration: Some(iteration),
+            run_id: Some(run.run_id.clone()),
+            project_id: None,
+            detail,
+            live: true,
+            activity_ms: at,
+        });
+    }
+    if owned || input.now_ms - at > FRESH_RUN_HOURS * MILLIS_PER_HOUR || replaced(input, run) {
+        return None;
     }
     let key = run
         .request
@@ -254,7 +401,7 @@ fn run_candidate(flows: &[DoctorFlowSnapshot], run: &NativeRunView) -> DoctorCan
         .clone()
         .or_else(|| run.request.target.clone())
         .unwrap_or_else(|| run.run_id.clone());
-    DoctorCandidate {
+    Some(DoctorCandidate {
         id: run_incident_id(&key, &run.run_id),
         ticket: key.clone(),
         key,
@@ -264,7 +411,27 @@ fn run_candidate(flows: &[DoctorFlowSnapshot], run: &NativeRunView) -> DoctorCan
         run_id: Some(run.run_id.clone()),
         project_id: Some(run.request.project_id.clone()),
         detail,
-    }
+        live: false,
+        activity_ms: at,
+    })
+}
+
+/// True when a newer run of the same ticket (or target) and template exists.
+fn replaced(input: &DetectInput<'_>, run: &NativeRunView) -> bool {
+    let subject = |other: &NativeRunView| {
+        other
+            .request
+            .ticket
+            .clone()
+            .or_else(|| other.request.target.clone())
+    };
+    let started = millis_of(&run.started_at).unwrap_or(0);
+    input.runs.iter().any(|other| {
+        other.run_id != run.run_id
+            && other.template_id == run.template_id
+            && subject(other) == subject(run)
+            && millis_of(&other.started_at).unwrap_or(0) > started
+    })
 }
 
 /// `(step, iteration)` of a `<step>:<iteration>:start_pipeline` effect id.

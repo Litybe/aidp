@@ -6,6 +6,8 @@ const PROPOSALS: &str = r#"{ "proposals": [
   { "kind": "lesson", "title": "Rigidbody in FixedUpdate", "text": "Set velocity in FixedUpdate.",
     "refs": [ { "type": "issue", "id": "GH-1" } ], "confidence": 0.7 } ] }"#;
 
+const LEGACY_PROPOSALS: &str = r#"{ "proposals": [ { "type": "feedback", "title": "Meta copie", "body": "Verifier le nom." } ] }"#;
+
 fn hub(state: &TempWorkspace) -> Arc<MemoryHub> {
     MemoryHub::new(state.path(), Path::new(""), Arc::new(Bus::new()))
 }
@@ -73,7 +75,7 @@ fn ingestion_completes_refs_and_is_idempotent() {
 }
 
 #[test]
-fn a_refused_file_is_reported_not_raised_and_not_retried() {
+fn a_refused_file_is_reported_not_raised_and_retried() {
     let state = TempWorkspace::new("mem-state");
     let run = TempWorkspace::new("mem-run");
     write_proposals(&run, "a", "{ not json");
@@ -84,12 +86,27 @@ fn a_refused_file_is_reported_not_raised_and_not_retried() {
         (report.files, report.created, report.rejected.len()),
         (2, 1, 1)
     );
+    let retry = hub.ingest_run(&project(), &facts(run.path())).unwrap();
     assert_eq!(
-        hub.ingest_run(&project(), &facts(run.path()))
-            .unwrap()
-            .files,
-        0
+        (retry.files, retry.created, retry.rejected.len()),
+        (1, 0, 1)
     );
+}
+
+#[test]
+fn an_undocumented_shape_reaches_the_store_with_the_run_refs() {
+    let state = TempWorkspace::new("mem-state");
+    let run = TempWorkspace::new("mem-run");
+    write_proposals(&run, "a", LEGACY_PROPOSALS);
+    let hub = hub(&state);
+    let report = hub.ingest_run(&project(), &facts(run.path())).unwrap();
+    assert_eq!((report.created, report.rejected.len()), (1, 0));
+    let store = hub.store().unwrap();
+    let memory = MemoryManager::new(&store)
+        .list("demo", &Default::default())
+        .unwrap()
+        .remove(0);
+    assert_eq!(memory.refs.len(), 3);
 }
 
 #[test]

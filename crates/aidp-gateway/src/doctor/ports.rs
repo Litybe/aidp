@@ -12,6 +12,8 @@ pub trait DoctorRuns: Send + Sync {
     fn list(&self) -> Vec<NativeRunView>;
     fn get(&self, run_id: &str) -> Option<NativeRunView>;
     fn start(&self, request: StartNativeRun) -> anyhow::Result<String>;
+    /// Resumes a paused run: its failed stages run again, the finished ones are kept.
+    fn resume(&self, run_id: &str) -> anyhow::Result<()>;
 }
 
 /// The daemon's native run executor.
@@ -29,6 +31,10 @@ impl DoctorRuns for NativeDoctorRuns {
     fn start(&self, request: StartNativeRun) -> anyhow::Result<String> {
         self.0.start(request)
     }
+
+    fn resume(&self, run_id: &str) -> anyhow::Result<()> {
+        self.0.retry_failed(run_id)
+    }
 }
 
 /// The body of `GET /api/unity/status` for a project id.
@@ -36,3 +42,6 @@ pub type UnityProbe = Arc<dyn Fn(&str) -> Option<Value> + Send + Sync>;
 
 /// The `doctor:` section of `TODO/config.yaml`, read at every pass.
 pub type DoctorSettings = Arc<dyn Fn() -> DoctorConfig + Send + Sync>;
+
+/// Local clone of a harness repository (`owner/name`), where a patch is cut from `origin/main`.
+pub type HarnessRepos = Arc<dyn Fn(&str) -> Option<std::path::PathBuf> + Send + Sync>;

@@ -337,6 +337,9 @@ pub struct DoctorConfig {
     /// Investigations one ticket may get over a sliding 24 hours.
     #[serde(default = "DoctorConfig::default_max_attempts_per_ticket")]
     pub max_attempts_per_ticket: u32,
+    /// Key of the dedicated harness issue (for example `GH-1`): bugs of a failure shared by several tickets are raised under it, never under a game ticket. Unset: the doctor asks a human.
+    #[serde(default)]
+    pub harness_ticket: Option<String>,
 }
 
 impl DoctorConfig {
@@ -357,6 +360,7 @@ impl Default for DoctorConfig {
             enabled: Self::default_enabled(),
             stuck_minutes: Self::default_stuck_minutes(),
             max_attempts_per_ticket: Self::default_max_attempts_per_ticket(),
+            harness_ticket: None,
         }
     }
 }
@@ -689,6 +693,7 @@ doctor:                          # investigates a failed, escalated or stuck flo
   enabled: true
   stuck_minutes: 10              # a running step with no live run for this long is stuck
   max_attempts_per_ticket: 2     # investigations per ticket over 24 h
+  # harness_ticket: GH-1          # issue under which bugs shared by several tickets are raised
 
 # Model policy, applied when a pipeline is compiled (CLI override, then this, then the template).
 # models:

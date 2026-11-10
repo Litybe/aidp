@@ -274,12 +274,20 @@ pub fn run(ctx: &Ctx, op: Op) -> anyhow::Result<CommandOutput> {
             expected_head_sha,
             repo,
             keep_branch,
-        } => compact(serde_json::to_value(pr_actions::pr_merge(
-            pr,
-            repo.as_deref(),
-            &expected_head_sha,
-            keep_branch,
-        )?)?),
+            report_conflict,
+        } => {
+            let merge = if report_conflict {
+                pr_actions::pr_merge_reporting_conflict
+            } else {
+                pr_actions::pr_merge
+            };
+            compact(serde_json::to_value(merge(
+                pr,
+                repo.as_deref(),
+                &expected_head_sha,
+                keep_branch,
+            )?)?)
+        }
         Op::LabelsMigrate {
             repo,
             apply,

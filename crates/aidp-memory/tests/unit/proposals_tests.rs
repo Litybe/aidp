@@ -1,4 +1,7 @@
 use super::*;
+use crate::models::constants::limits::{TEXT_MAX_CHARS, TITLE_MAX_CHARS};
+use crate::models::constants::proposal_fields::TRUNCATION_MARK;
+use crate::models::enums::Route;
 use crate::store::MemoryStore;
 
 const PROJECT: &str = "pixelhood";
@@ -45,7 +48,7 @@ fn proposal_json(count: usize) -> String {
 }
 
 #[test]
-fn valid_file_creates_proposed_memories() {
+fn confident_proposals_are_active_at_once() {
     let dir = tempfile::tempdir().unwrap();
     let file = dir.path().join("memory-proposals.json");
     std::fs::write(&file, proposal_json(3)).unwrap();
@@ -53,12 +56,29 @@ fn valid_file_creates_proposed_memories() {
     let manager = MemoryManager::new(&store);
     let report = manager.ingest(PROJECT, &file).unwrap();
     assert_eq!(
-        (report.files, report.created, report.deduplicated),
-        (1, 3, 0)
+        (
+            report.files,
+            report.created,
+            report.deduplicated,
+            report.activated
+        ),
+        (1, 3, 0, 3)
     );
     assert!(report.rejected.is_empty());
     let all = manager.list(PROJECT, &Default::default()).unwrap();
-    assert!(all.iter().all(|m| m.status == MemoryStatus::Proposed));
+    assert!(all.iter().all(|m| m.status == MemoryStatus::Active));
+}
+
+#[test]
+fn an_unsure_proposal_stays_proposed() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("memory-proposals.json");
+    std::fs::write(&file, proposal_json(1).replace("0.8", "0.5")).unwrap();
+    let store = MemoryStore::open_in_memory().unwrap();
+    let manager = MemoryManager::new(&store);
+    assert_eq!(manager.ingest(PROJECT, &file).unwrap().activated, 0);
+    let all = manager.list(PROJECT, &Default::default()).unwrap();
+    assert_eq!(all[0].status, MemoryStatus::Proposed);
 }
 
 #[test]
@@ -104,6 +124,155 @@ fn unknown_fields_bad_kind_and_oversized_text_are_refused() {
         assert_eq!(report.rejected.len(), 1, "case {index}");
         assert_eq!(report.created, 0, "case {index}");
     }
+}
+
+const RUN_RELATIVE: &str = "GH-321/20261109-173201-7a10/test";
+const ISSUE_ID: &str = "GH-321";
+const RUN_ID: &str = "20261109-173201-7a10";
+const FEEDBACK_SHAPE: &str = r#"{"proposals":[{"type":"feedback","name":"slug-name","description":"Verifier le meta genere","body":"Le meta copie garde le nom du modele."}]}"#;
+const LESSON_SHAPE: &str = r#"{"proposals":[{"title":"Using Is","lesson":"Alias Is obligatoire.","evidence":"AttackTokenTests.cs:262"}]}"#;
+const FACT_SHAPE: &str = r#"{"proposals":[{"type":"project","title":"Meta caches","fact":"Attribut Hidden sous Windows.","why":"Ecriture refusee.","how_to_apply":"Retirer l attribut."}]}"#;
+const RECIPE_SHAPE: &str =
+    r#"{"proposals":[{"type":"recipe","title":"Lire un meta","body":"Lire par regex."}]}"#;
+const NO_TEXT_SHAPE: &str = r#"{"proposals":[{"type":"feedback","title":"Sans contenu"}]}"#;
+const SECOND_INVALID: &str = r#"{"proposals":[{"kind":"lesson","title":"Premier","text":"Valide."},{"kind":"lesson","title":"Second","text":"Hors bornes.","confidence":3.0}]}"#;
+
+fn ingest_one(manager: &MemoryManager<'_>, root: &Path, content: &str) -> IngestReport {
+    let folder = root.join(RUN_RELATIVE);
+    std::fs::create_dir_all(&folder).unwrap();
+    let file = folder.join(PROPOSALS_FILE);
+    std::fs::write(&file, content).unwrap();
+    manager.ingest(PROJECT, &file).unwrap()
+}
+
+#[test]
+fn undocumented_shapes_are_folded_into_the_documented_one() {
+    let cases = [
+        (
+            FEEDBACK_SHAPE,
+            MemoryKind::Lesson,
+            "Verifier le meta genere",
+            "Le meta copie garde le nom du modele.",
+        ),
+        (
+            LESSON_SHAPE,
+            MemoryKind::Lesson,
+            "Using Is",
+            "Alias Is obligatoire.\nEvidence: AttackTokenTests.cs:262",
+        ),
+        (
+            FACT_SHAPE,
+            MemoryKind::Fact,
+            "Meta caches",
+            "Attribut Hidden sous Windows.\nWhy: Ecriture refusee.\nHow: Retirer l attribut.",
+        ),
+        (
+            RECIPE_SHAPE,
+            MemoryKind::Lesson,
+            "Lire un meta",
+            "Lire par regex.",
+        ),
+    ];
+    for (content, kind, title, text) in cases {
+        let dir = tempfile::tempdir().unwrap();
+        let store = MemoryStore::open_in_memory().unwrap();
+        let manager = MemoryManager::new(&store);
+        let report = ingest_one(&manager, dir.path(), content);
+        assert_eq!((report.created, report.rejected.len()), (1, 0), "{title}");
+        let memory = manager
+            .list(PROJECT, &Default::default())
+            .unwrap()
+            .remove(0);
+        assert_eq!(
+            (memory.kind, memory.title.as_str(), memory.text.as_str()),
+            (kind, title, text)
+        );
+    }
+}
+
+#[test]
+fn an_undocumented_shape_is_shortened_to_the_limits() {
+    let content = format!(
+        r#"{{"proposals":[{{"type":"feedback","description":"{}","body":"{}"}}]}}"#,
+        "t".repeat(200),
+        "b".repeat(900)
+    );
+    let dir = tempfile::tempdir().unwrap();
+    let store = MemoryStore::open_in_memory().unwrap();
+    let manager = MemoryManager::new(&store);
+    assert_eq!(ingest_one(&manager, dir.path(), &content).created, 1);
+    let memory = manager
+        .list(PROJECT, &Default::default())
+        .unwrap()
+        .remove(0);
+    assert_eq!(memory.title.chars().count(), TITLE_MAX_CHARS);
+    assert_eq!(memory.text.chars().count(), TEXT_MAX_CHARS);
+    assert!(memory.text.ends_with(TRUNCATION_MARK));
+}
+
+#[test]
+fn an_undocumented_shape_without_text_is_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = MemoryStore::open_in_memory().unwrap();
+    let manager = MemoryManager::new(&store);
+    let report = ingest_one(&manager, dir.path(), NO_TEXT_SHAPE);
+    assert_eq!((report.created, report.rejected.len()), (0, 1));
+}
+
+#[test]
+fn a_file_with_one_invalid_proposal_creates_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = MemoryStore::open_in_memory().unwrap();
+    let manager = MemoryManager::new(&store);
+    let report = ingest_one(&manager, dir.path(), SECOND_INVALID);
+    assert_eq!((report.created, report.rejected.len()), (0, 1));
+    assert!(manager
+        .list(PROJECT, &Default::default())
+        .unwrap()
+        .is_empty());
+}
+
+#[test]
+fn a_proposal_without_route_takes_the_route_of_its_issue() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = MemoryStore::open_in_memory().unwrap();
+    let manager = MemoryManager::new(&store);
+    let folder = dir.path().join(RUN_RELATIVE);
+    std::fs::create_dir_all(&folder).unwrap();
+    let file = folder.join(PROPOSALS_FILE);
+    std::fs::write(&file, LESSON_SHAPE).unwrap();
+    let route_of = |issue: &str| (issue == ISSUE_ID).then_some(Route::Art);
+    manager.ingest_routed(PROJECT, &file, &route_of).unwrap();
+    let memory = manager
+        .list(PROJECT, &Default::default())
+        .unwrap()
+        .remove(0);
+    assert_eq!(memory.scope.route, Some(Route::Art));
+}
+
+#[test]
+fn issue_and_run_are_read_from_the_vault_path() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = MemoryStore::open_in_memory().unwrap();
+    let manager = MemoryManager::new(&store);
+    ingest_one(&manager, dir.path(), LESSON_SHAPE);
+    let memory = manager
+        .list(PROJECT, &Default::default())
+        .unwrap()
+        .remove(0);
+    assert_eq!(
+        memory.refs,
+        vec![
+            MemoryRef {
+                ref_type: RefType::Issue,
+                id: ISSUE_ID.to_string()
+            },
+            MemoryRef {
+                ref_type: RefType::Run,
+                id: RUN_ID.to_string()
+            },
+        ]
+    );
 }
 
 #[test]

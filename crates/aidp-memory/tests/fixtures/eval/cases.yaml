@@ -1,0 +1,9 @@
+- query: double saut
+  expect: [".claude/BIBLE/03_heroine/capacites.md"]
+- query: PlayerMovement Jump
+  expect: ["Assets/Scripts/PlayerMovement.cs"]
+  sources: code
+- query: gardien de la foret
+  expect: ["Docs/GameDesign/boss.md"]
+- query: tresor introuvable inexistant
+  expect: ["Docs/Absent.md"]

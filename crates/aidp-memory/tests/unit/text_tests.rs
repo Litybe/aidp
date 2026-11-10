@@ -56,3 +56,17 @@ fn truncate_respects_char_boundaries() {
     assert_eq!(truncate_chars("éàü", 2), "éà");
     assert_eq!(truncate_chars("ab", 5), "ab");
 }
+
+#[test]
+fn a_long_query_keeps_its_first_line_identifiers_and_frequent_words() {
+    let filler: Vec<String> = (0..40).map(|n| format!("mot{n}x")).collect();
+    let query = format!(
+        "Buste de Macaire\n{} PlayerMotor dash dash dash",
+        filler.join(" ")
+    );
+    let terms = query_terms(&query);
+    assert_eq!(terms.len(), MAX_QUERY_TERMS);
+    for wanted in ["buste", "macaire", "playermotor", "dash"] {
+        assert!(terms.iter().any(|term| term == wanted), "{wanted}");
+    }
+}

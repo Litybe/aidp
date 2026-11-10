@@ -230,6 +230,11 @@
           "additionalProperties": false
         },
         "max_iterations": { "type": ["string", "integer"] },
+        "on_exhausted": {
+          "type": "string",
+          "enum": ["pause", "continue"],
+          "description": "Loop containers only: what happens when the last iteration still leaves the `when:` signal set. `pause` (default) halts the run for a human. `continue` logs the leftover and runs the next stage; the findings stay open."
+        },
         "knowledge": {
           "oneOf": [
             { "type": "boolean" },

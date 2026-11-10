@@ -3,8 +3,9 @@
 use crate::error::{MemoryError, Result};
 use crate::models::add_outcome::AddOutcome;
 use crate::models::constants::limits::{
-    AUTO_ACTIVATE_CONFIDENCE, AUTO_ACTIVATE_EVIDENCE, AUTO_ACTIVATE_ISSUES, DEDUP_CANDIDATES,
-    DEDUP_SIMILARITY, STALE_AFTER_DAYS, TEXT_MAX_CHARS, TITLE_MAX_CHARS,
+    AUTO_ACTIVATE_CONFIDENCE, AUTO_ACTIVATE_EVIDENCE, AUTO_ACTIVATE_ISSUES,
+    AUTO_SOURCE_ACTIVATE_CONFIDENCE, DEDUP_CANDIDATES, DEDUP_SIMILARITY, STALE_AFTER_DAYS,
+    TEXT_MAX_CHARS, TITLE_MAX_CHARS,
 };
 use crate::models::constants::schema::{
     MEMORY_CHUNK_PREFIX, MEMORY_ID_PREFIX, MEMORY_PATH_PREFIX, MEMORY_WEIGHTS,
@@ -70,7 +71,8 @@ impl<'a> MemoryManager<'a> {
                     existing.confidence = existing.confidence.max(new.confidence);
                     merge_refs(&mut existing.refs, &new.refs);
                     existing.updated_at = now.clone();
-                    let activated = maybe_activate(connection, &mut existing)?;
+                    let activated =
+                        maybe_activate(connection, &mut existing, new.auto_activate)?;
                     save(connection, &existing)?;
                     sync_chunks(connection, &existing.project)?;
                     return Ok(AddOutcome {
@@ -99,8 +101,11 @@ impl<'a> MemoryManager<'a> {
                 ],
             )?;
             let number = connection.last_insert_rowid();
-            let memory = load(connection, &new.project, number)?;
+            let mut memory = load(connection, &new.project, number)?;
             index_fts(connection, &memory)?;
+            if new.auto_activate && maybe_activate(connection, &mut memory, true)? {
+                save(connection, &memory)?;
+            }
             if memory.status == MemoryStatus::Active {
                 supersede_previous(connection, &memory, &now)?;
             }
@@ -259,7 +264,7 @@ impl<'a> MemoryManager<'a> {
             target.updated_at = now.clone();
             source.status = MemoryStatus::Superseded;
             source.updated_at = now.clone();
-            maybe_activate(connection, &mut target)?;
+            maybe_activate(connection, &mut target, false)?;
             save(connection, &source)?;
             save(connection, &target)?;
             sync_chunks(connection, project)?;
@@ -319,7 +324,7 @@ pub(crate) fn parse_id(raw: &str) -> Result<i64> {
     })
 }
 
-fn validate_text(title: &str, text: &str, confidence: f64) -> Result<()> {
+pub(crate) fn validate_text(title: &str, text: &str, confidence: f64) -> Result<()> {
     if title.trim().is_empty() || text.trim().is_empty() {
         return Err(MemoryError::Invalid(
             "title and text are required".to_string(),
@@ -463,7 +468,11 @@ fn find_duplicate(connection: &Connection, new: &NewMemory) -> Result<Option<Mem
     Ok(best.map(|(_, memory)| memory))
 }
 
-fn maybe_activate(connection: &Connection, memory: &mut Memory) -> Result<bool> {
+fn maybe_activate(
+    connection: &Connection,
+    memory: &mut Memory,
+    automatic_source: bool,
+) -> Result<bool> {
     if memory.status != MemoryStatus::Proposed {
         return Ok(false);
     }
@@ -475,10 +484,10 @@ fn maybe_activate(connection: &Connection, memory: &mut Memory) -> Result<bool> 
         .collect();
     issues.sort_unstable();
     issues.dedup();
-    if memory.evidence >= AUTO_ACTIVATE_EVIDENCE
+    let confirmed = memory.evidence >= AUTO_ACTIVATE_EVIDENCE
         && issues.len() >= AUTO_ACTIVATE_ISSUES
-        && memory.confidence >= AUTO_ACTIVATE_CONFIDENCE
-    {
+        && memory.confidence >= AUTO_ACTIVATE_CONFIDENCE;
+    if confirmed || (automatic_source && memory.confidence >= AUTO_SOURCE_ACTIVATE_CONFIDENCE) {
         memory.status = MemoryStatus::Active;
         let now = memory.updated_at.clone();
         supersede_previous(connection, memory, &now)?;
@@ -487,7 +496,11 @@ fn maybe_activate(connection: &Connection, memory: &mut Memory) -> Result<bool> 
     Ok(false)
 }
 
-fn supersede_previous(connection: &Connection, memory: &Memory, now: &str) -> Result<()> {
+pub(crate) fn supersede_previous(
+    connection: &Connection,
+    memory: &Memory,
+    now: &str,
+) -> Result<()> {
     let Some(previous) = &memory.supersedes else {
         return Ok(());
     };
@@ -503,7 +516,7 @@ fn supersede_previous(connection: &Connection, memory: &Memory, now: &str) -> Re
     Ok(())
 }
 
-fn merge_refs(target: &mut Vec<MemoryRef>, extra: &[MemoryRef]) {
+pub(crate) fn merge_refs(target: &mut Vec<MemoryRef>, extra: &[MemoryRef]) {
     for reference in extra {
         if !target.contains(reference) {
             target.push(reference.clone());

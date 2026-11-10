@@ -6,6 +6,7 @@ mod common_scripted;
 mod concurrency;
 mod crypto_template_primitives;
 mod dispatcher_pause;
+mod doctor_converge;
 mod doctor_flow;
 mod flow_shutdown;
 mod game_code_flow;

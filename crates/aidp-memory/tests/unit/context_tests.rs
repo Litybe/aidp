@@ -68,6 +68,27 @@ fn context_filters_by_route_and_path_and_marks_use() {
 }
 
 #[test]
+fn context_includes_the_global_memories() {
+    let dir = tempfile::tempdir().unwrap();
+    let (store, project) = indexed_store(dir.path());
+    let manager = MemoryManager::new(&store);
+    let mut global = NewMemory::proposal(
+        GLOBAL_PROJECT,
+        MemoryKind::Preference,
+        "Reponses en francais",
+        "Toujours repondre en francais.",
+    );
+    global.status = MemoryStatus::Active;
+    manager.add(global).unwrap();
+    let retriever = Bm25Retriever::new(&store, Some(project.root));
+    let block = manager
+        .context(&ContextRequest::new(PROJECT), &retriever)
+        .unwrap();
+    let ids: Vec<&str> = block.memories.iter().map(|m| m.project.as_str()).collect();
+    assert_eq!(ids, [GLOBAL_PROJECT]);
+}
+
+#[test]
 fn context_respects_the_budget() {
     let dir = tempfile::tempdir().unwrap();
     let (store, project) = indexed_store(dir.path());
@@ -100,4 +121,89 @@ fn empty_context_without_memories_or_issue() {
         .context(&ContextRequest::new(PROJECT), &retriever)
         .unwrap();
     assert!(block.markdown.is_empty());
+}
+
+#[test]
+fn the_ticket_route_is_read_from_the_frontmatter() {
+    assert_eq!(
+        ticket_route("---\nkey: GH-1\nroute: art\n---\nCorps route: map\n"),
+        Some(Route::Art)
+    );
+    assert_eq!(ticket_route("---\nroute: null\n---\n"), None);
+    assert_eq!(ticket_route("sans frontmatter"), None);
+}
+
+#[test]
+fn a_tooling_memory_applies_to_every_route() {
+    let dir = tempfile::tempdir().unwrap();
+    let (store, project) = indexed_store(dir.path());
+    let manager = MemoryManager::new(&store);
+    active(
+        &manager,
+        "Outil MCP",
+        "Verifier le MCP avant.",
+        Some(Route::Tooling),
+        &[],
+    );
+    let retriever = Bm25Retriever::new(&store, Some(project.root));
+    let mut request = ContextRequest::new(PROJECT);
+    request.route = Some(Route::Art);
+    request.record_use = false;
+    let block = manager.context(&request, &retriever).unwrap();
+    assert_eq!(block.memories.len(), 1);
+    assert_eq!(manager.get(PROJECT, "M-1").unwrap().uses, 0);
+}
+
+#[test]
+fn the_ticket_frontmatter_is_dropped_and_the_summary_leads() {
+    let mirror = "---\naidp: ticket\nkey: GH-1\nsummary: 'feat(art): buste de Macaire'\nroute: art\n---\n\n## Description\nUn buste.\n";
+    assert_eq!(
+        issue_query_text(mirror),
+        "feat(art): buste de Macaire\n## Description\nUn buste."
+    );
+}
+
+#[test]
+fn a_memory_sharing_no_word_with_the_query_is_left_out() {
+    let dir = tempfile::tempdir().unwrap();
+    let (store, project) = indexed_store(dir.path());
+    let manager = MemoryManager::new(&store);
+    active(
+        &manager,
+        "Branches",
+        "Nommer les branches Feature/PXH-n.",
+        None,
+        &[],
+    );
+    active(
+        &manager,
+        "Meta des sprites",
+        "Le meta garde le nom du modele.",
+        None,
+        &[],
+    );
+    let retriever = Bm25Retriever::new(&store, Some(project.root));
+    let mut request = ContextRequest::new(PROJECT);
+    request.issue_text = Some("le meta du sprite".into());
+    request.record_use = false;
+    let block = manager.context(&request, &retriever).unwrap();
+    let titles: Vec<&str> = block.memories.iter().map(|m| m.title.as_str()).collect();
+    assert_eq!(titles, ["Meta des sprites"]);
+}
+
+#[test]
+fn the_best_memory_is_shortened_rather_than_skipped() {
+    let dir = tempfile::tempdir().unwrap();
+    let (store, project) = indexed_store(dir.path());
+    let manager = MemoryManager::new(&store);
+    let long_text = format!("Le meta garde le nom du modele. {}", "detail ".repeat(80));
+    active(&manager, "Meta des sprites", &long_text, None, &[]);
+    let retriever = Bm25Retriever::new(&store, Some(project.root));
+    let mut request = ContextRequest::new(PROJECT);
+    request.issue_text = Some("meta modele".into());
+    request.budget_tokens = 100;
+    request.record_use = false;
+    let block = manager.context(&request, &retriever).unwrap();
+    assert_eq!(block.memories.len(), 1);
+    assert!(block.memories[0].text.len() < long_text.len());
 }

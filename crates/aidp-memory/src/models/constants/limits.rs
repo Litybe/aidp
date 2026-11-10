@@ -1,3 +1,5 @@
+use crate::models::enums::Source;
+
 /// Largest Markdown or plain-text chunk, in characters.
 pub const MARKDOWN_MAX_CHARS: usize = 1200;
 /// Characters repeated at the start of the next Markdown chunk of one section.
@@ -48,6 +50,8 @@ pub const AUTO_ACTIVATE_EVIDENCE: u32 = 2;
 pub const AUTO_ACTIVATE_ISSUES: usize = 2;
 /// Confidence needed for the automatic activation.
 pub const AUTO_ACTIVATE_CONFIDENCE: f64 = 0.8;
+/// Confidence from which a memory written by an automatic source is active at once.
+pub const AUTO_SOURCE_ACTIVATE_CONFIDENCE: f64 = 0.7;
 /// Days without use after which an active memory goes stale.
 pub const STALE_AFTER_DAYS: i64 = 60;
 /// Confidence given to a memory added without one.
@@ -66,3 +70,17 @@ pub const PLURAL_MIN_CHARS: usize = 5;
 pub const INGEST_MAX_DEPTH: usize = 6;
 /// Busy timeout of the database, in milliseconds.
 pub const BUSY_TIMEOUT_MS: u64 = 5000;
+/// Score multiplier per source: memories and the canon first, run artefacts last.
+pub const SOURCE_WEIGHTS: [(Source, f64); 7] = [
+    (Source::Memory, 1.5),
+    (Source::Bible, 1.2),
+    (Source::Doc, 1.0),
+    (Source::Code, 1.0),
+    (Source::Knowledge, 0.9),
+    (Source::Ticket, 0.7),
+    (Source::Run, 0.4),
+];
+/// Path segment of the session journals.
+pub const JOURNAL_SEGMENT: &str = "/_journal/";
+/// Extra multiplier of a session journal.
+pub const JOURNAL_WEIGHT: f64 = 0.5;

@@ -236,9 +236,39 @@ fn merge_pins_the_head_sha() {
     assert!(matches!(outcome, ActionOutcome::Ok(_)));
     let args = runner.spawned_args();
     assert_eq!(
-        args[..5],
-        strings(&[VERB_GH, VERB_GH_PR_MERGE, "42", FLAG_EXPECTED_HEAD_SHA, SHA])[..]
+        args[..6],
+        strings(&[
+            VERB_GH,
+            VERB_GH_PR_MERGE,
+            "42",
+            FLAG_EXPECTED_HEAD_SHA,
+            SHA,
+            FLAG_REPORT_CONFLICT
+        ])[..]
     );
+}
+
+#[test]
+fn merge_blocked_by_a_base_conflict_ends_the_step_with_the_conflict_output() {
+    let runner = RecordingRunner::new(
+        EXIT_OK,
+        r#"{"merged":false,"conflict":true,"detail":["this PR has merge conflicts"]}"#,
+    );
+    let with = BTreeMap::from([
+        (WITH_PR.to_string(), json!(PR_NUMBER)),
+        (WITH_SHA.to_string(), json!(SHA)),
+    ]);
+    let outcome = run_with(
+        registered(BuiltinAction::GhMerge).as_ref(),
+        &runner,
+        TICKET,
+        with,
+    );
+    let ActionOutcome::Ok(outputs) = outcome else {
+        panic!("expected a done step, got {outcome:?}");
+    };
+    assert_eq!(outputs.get(OUTPUT_CONFLICT), Some(&json!(true)));
+    assert_eq!(outputs.get(OUTPUT_MERGED), Some(&json!(false)));
 }
 
 #[test]
@@ -490,6 +520,68 @@ fn bug_create_finds_a_report_named_without_a_path_under_the_run_folder() {
     let at = args.iter().position(|arg| arg == FLAG_REPORT_FILE).unwrap();
     assert_eq!(std::path::Path::new(&args[at + 1]), report.as_path());
     assert!(report.exists(), "the real report is never deleted");
+}
+
+#[test]
+fn bug_create_sends_the_written_body_found_under_its_own_run_folder() {
+    let test_dir = tempfile::tempdir().unwrap();
+    let write_dir = tempfile::tempdir().unwrap();
+    let stage = write_dir.path().join("stages").join("write");
+    std::fs::create_dir_all(&stage).unwrap();
+    let body = stage.join("bug.md");
+    std::fs::write(&body, "## Issue de base\nrésumé").unwrap();
+    let runner = RecordingRunner::new(EXIT_OK, "{}");
+    let action = registered(BuiltinAction::BugCreate);
+    let with = BTreeMap::from([
+        (WITH_BODY.to_string(), json!("bug.md")),
+        (
+            WITH_BODY_DIR.to_string(),
+            json!(write_dir.path().to_string_lossy()),
+        ),
+        (
+            WITH_RUN_DIR.to_string(),
+            json!(test_dir.path().to_string_lossy()),
+        ),
+    ]);
+    run_with(action.as_ref(), &runner, TICKET, with);
+    let args = runner.spawned_args();
+    let at = args.iter().position(|arg| arg == FLAG_BODY_FILE).unwrap();
+    assert_eq!(std::path::Path::new(&args[at + 1]), body.as_path());
+    assert!(body.exists(), "the real body is never deleted");
+}
+
+#[test]
+fn bug_create_falls_back_when_the_written_body_is_absent() {
+    let run_dir = tempfile::tempdir().unwrap();
+    for body in ["bug.md", "   ", ""] {
+        let runner = RecordingRunner::new(EXIT_OK, "{}");
+        let action = registered(BuiltinAction::BugCreate);
+        let with = BTreeMap::from([
+            (WITH_BODY.to_string(), json!(body)),
+            (
+                WITH_RUN_DIR.to_string(),
+                json!(run_dir.path().to_string_lossy()),
+            ),
+        ]);
+        run_with(action.as_ref(), &runner, TICKET, with);
+        let args = runner.spawned_args();
+        assert!(
+            !args.iter().any(|arg| arg == FLAG_BODY_FILE),
+            "{body:?}: {args:?}"
+        );
+    }
+}
+
+#[test]
+fn bug_create_sends_a_written_body_given_as_text_through_a_temporary_file() {
+    let runner = RecordingRunner::new(EXIT_OK, "{}");
+    let action = registered(BuiltinAction::BugCreate);
+    let with = BTreeMap::from([(WITH_BODY.to_string(), json!("## Bug\nligne {x}"))]);
+    run_with(action.as_ref(), &runner, TICKET, with);
+    let args = runner.spawned_args();
+    let at = args.iter().position(|arg| arg == FLAG_BODY_FILE).unwrap();
+    assert!(args[at + 1].contains("aidp-bug-body"), "{args:?}");
+    assert!(!std::path::Path::new(&args[at + 1]).exists());
 }
 
 #[test]

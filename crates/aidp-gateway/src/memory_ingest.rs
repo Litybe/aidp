@@ -7,7 +7,7 @@ use crate::native_runs::{NativeRunManager, EVENT_RUN_ENDED};
 use crate::projects::{Project, Projects};
 use crate::sync::lock;
 use aidp_memory::models::constants::limits::INGEST_MAX_DEPTH;
-use aidp_memory::models::constants::paths::PROPOSALS_FILE;
+use aidp_memory::models::constants::paths::{NOTES_DIR, PROPOSALS_FILE};
 use aidp_memory::models::ingest_report::IngestReport;
 use aidp_memory::{
     IndexOptions, IndexReport, IndexRoot, Indexer, Memory, MemoryError, MemoryManager, MemoryStore,
@@ -37,6 +37,7 @@ const ISSUE_PREFIX: &str = "GH-";
 const PIPELINES_PREFIX: &str = "Pipelines";
 const TICKETS_DIR: &str = "TODO";
 const KNOWLEDGE_PREFIX: &str = "Knowledge";
+const TICKET_EXTENSION: &str = "md";
 /// Sources a merge refreshes: the ones a merged change can alter.
 pub const MERGE_SOURCES: [Source; 3] = [Source::Code, Source::Doc, Source::Bible];
 
@@ -163,6 +164,29 @@ impl MemoryHub {
         ]
     }
 
+    /// Brings the vault notes of a project in step with the database; failures are logged.
+    pub fn sync_notes(&self, project: &ProjectRef) {
+        if self.vault_root.as_os_str().is_empty() {
+            return;
+        }
+        let dir = self
+            .vault_root
+            .join(KNOWLEDGE_PREFIX)
+            .join(aidp_core::vault::repo_segment(&project.root))
+            .join(NOTES_DIR);
+        let outcome = self
+            .store()
+            .and_then(|store| MemoryManager::new(&store).sync_vault(&project.key, &dir));
+        match outcome {
+            Ok(report) => {
+                for rejection in &report.rejected {
+                    tracing::warn!(file = %rejection.file, "memory note refused: {}", rejection.reason);
+                }
+            }
+            Err(error) => tracing::warn!(%error, "memory notes not synchronised"),
+        }
+    }
+
     /// True while a re-index runs or waits.
     pub fn reindexing(&self) -> bool {
         let queue = lock(&self.queue);
@@ -245,8 +269,11 @@ impl MemoryHub {
             if self.already_ingested(&signature) {
                 continue;
             }
-            let report = self.ingest_file(&manager, &project.key, &bytes, facts)?;
-            self.mark_ingested(&signature);
+            let repo = aidp_core::vault::repo_segment(&project.root);
+            let report = self.ingest_file(&manager, &repo, &project.key, &bytes, facts)?;
+            if report.rejected.is_empty() {
+                self.mark_ingested(&signature);
+            }
             total.files += report.files;
             total.created += report.created;
             total.deduplicated += report.deduplicated;
@@ -254,6 +281,7 @@ impl MemoryHub {
             total.rejected.extend(report.rejected);
         }
         if total.files > 0 {
+            self.sync_notes(project);
             for rejection in &total.rejected {
                 tracing::warn!(file = %rejection.file, "memory proposals refused: {}", rejection.reason);
             }
@@ -275,9 +303,24 @@ impl MemoryHub {
         Ok(total)
     }
 
+    fn ticket_route(&self, repo: &str, issue: &str) -> Option<aidp_memory::Route> {
+        if self.vault_root.as_os_str().is_empty() {
+            return None;
+        }
+        let mirror = std::fs::read_to_string(
+            self.vault_root
+                .join(TICKETS_DIR)
+                .join(repo)
+                .join(format!("{issue}.{TICKET_EXTENSION}")),
+        )
+        .ok()?;
+        aidp_memory::context::ticket_route(&mirror)
+    }
+
     fn ingest_file(
         &self,
         manager: &MemoryManager<'_>,
+        repo: &str,
         project: &str,
         bytes: &[u8],
         facts: &RunFacts,
@@ -290,7 +333,8 @@ impl MemoryHub {
         std::fs::create_dir_all(&scratch)?;
         let target = scratch.join(PROPOSALS_FILE);
         std::fs::write(&target, complete_refs(bytes, facts))?;
-        let report = manager.ingest(project, &target);
+        let route_of = |issue: &str| self.ticket_route(repo, issue);
+        let report = manager.ingest_routed(project, &target, &route_of);
         let _ = std::fs::remove_dir_all(&scratch);
         report
     }
@@ -361,6 +405,14 @@ impl MemoryHub {
         };
         if let Err(error) = self.ingest_run(&project, &facts) {
             tracing::warn!(run = run_id, %error, "memory ingestion failed");
+        }
+        let staled = self
+            .store()
+            .and_then(|store| MemoryManager::new(&store).gc(&project.key));
+        match staled {
+            Ok(stale) if !stale.is_empty() => self.sync_notes(&project),
+            Ok(_) => {}
+            Err(error) => tracing::warn!(%error, "memory gc failed"),
         }
     }
 
@@ -524,12 +576,15 @@ fn project_for_workspace(projects: &Projects, workspace: &Path) -> ProjectRef {
         });
     match found {
         Some(project) => MemoryHub::project_ref(project),
-        None => ProjectRef {
-            key: workspace
-                .file_name()
-                .map_or_else(|| wanted.clone(), |name| name.to_string_lossy().to_string()),
-            root: workspace.to_path_buf(),
-        },
+        None => {
+            let anchor = aidp_core::vault::main_worktree_root(workspace);
+            ProjectRef {
+                key: anchor
+                    .file_name()
+                    .map_or_else(|| wanted.clone(), |name| name.to_string_lossy().to_string()),
+                root: anchor,
+            }
+        }
     }
 }
 

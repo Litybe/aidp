@@ -4,10 +4,12 @@ use crate::models::constants::limits::{
     CHARS_PER_TOKEN, MAX_IDENT_TOKENS, MAX_QUERY_TERMS, PLURAL_MIN_CHARS, PREFIX_MIN_CHARS,
 };
 use crate::models::constants::words::STOPWORDS;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 const TERM_JOINER: &str = " OR ";
 const SHORTEST_WORD: usize = 2;
+const FIRST_LINE_BONUS: f64 = 3.0;
+const IDENTIFIER_BONUS: f64 = 2.0;
 
 /// Estimated tokens of a text: characters divided by four, rounded up.
 pub fn estimate_tokens(text: &str) -> usize {
@@ -115,29 +117,57 @@ pub fn identifier_tokens(text: &str) -> String {
 }
 
 /// Query terms: folded words, camelCase parts included, stopwords dropped.
+///
+/// A long query keeps its most telling terms: frequent ones, identifiers and words of its first line.
 pub fn query_terms(query: &str) -> Vec<String> {
-    let mut seen: HashSet<String> = HashSet::new();
-    let mut terms: Vec<String> = Vec::new();
-    for raw in query
-        .split(|character: char| !character.is_alphanumeric())
-        .filter(|word| !word.is_empty())
-    {
+    let first_line_end = query.find('\n').unwrap_or(query.len());
+    let mut terms: Vec<(String, f64, usize)> = Vec::new();
+    let mut positions: HashMap<String, usize> = HashMap::new();
+    let mut offset = 0;
+    for raw in query.split(|character: char| !character.is_alphanumeric()) {
+        let start = offset;
+        offset += raw.len() + 1;
+        if raw.is_empty() {
+            continue;
+        }
+        let bonus = if start < first_line_end {
+            FIRST_LINE_BONUS
+        } else {
+            0.0
+        } + if is_identifier(raw) {
+            IDENTIFIER_BONUS
+        } else {
+            0.0
+        };
         let mut candidates = vec![fold(raw)];
         let parts = split_identifier(raw);
         if parts.len() > 1 {
             candidates.extend(parts);
         }
         for candidate in candidates {
-            if candidate.chars().count() >= SHORTEST_WORD
-                && !is_stopword(&candidate)
-                && seen.insert(candidate.clone())
-            {
-                terms.push(candidate);
+            if candidate.chars().count() < SHORTEST_WORD || is_stopword(&candidate) {
+                continue;
+            }
+            match positions.get(&candidate) {
+                Some(&index) => terms[index].1 += 1.0,
+                None => {
+                    positions.insert(candidate.clone(), terms.len());
+                    terms.push((candidate, 1.0 + bonus, terms.len()));
+                }
             }
         }
     }
-    terms.truncate(MAX_QUERY_TERMS);
-    terms
+    if terms.len() > MAX_QUERY_TERMS {
+        terms.sort_by(|left, right| right.1.total_cmp(&left.1).then(left.2.cmp(&right.2)));
+        terms.truncate(MAX_QUERY_TERMS);
+        terms.sort_by_key(|term| term.2);
+    }
+    terms.into_iter().map(|(term, _, _)| term).collect()
+}
+
+/// A word written as code: inner capital, underscore or digit after a letter.
+fn is_identifier(raw: &str) -> bool {
+    raw.chars().skip(1).any(char::is_uppercase) || raw.contains('_')
 }
 
 /// Drops a trailing plural mark from a long word.

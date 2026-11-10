@@ -20,6 +20,8 @@ fn incident() -> DoctorIncident {
             run_id: None,
             project_id: None,
             detail: "implement failed".to_string(),
+            live: false,
+            activity_ms: 0,
         },
         status: DoctorIncidentStatus::Fixed,
         detected_at: AT.to_string(),
@@ -34,13 +36,19 @@ fn incident() -> DoctorIncident {
         }),
         outcome: Some(DoctorActionOutcome {
             action: DoctorAction::RetryStep,
-            idempotency_key: store::action_key(ID),
+            idempotency_key: store::action_key(ID, 1),
             ok: true,
             detail: "retried `implement`".to_string(),
             at: AT.to_string(),
         }),
+        actions: Vec::new(),
+        next_attempt_ms: None,
+        pr_url: None,
         note: Some("retry_step : retried `implement`".to_string()),
         commented: false,
+        shared_pattern: None,
+        affected: Vec::new(),
+        rearmed_ms: None,
     }
 }
 
@@ -80,6 +88,19 @@ fn the_diagnosis_is_read_from_a_stage_directory_and_unknown_categories_are_other
     assert_eq!(diagnosis.category, DoctorCategory::Other);
     assert_eq!(diagnosis.action, DoctorAction::RetryStep.as_str());
     assert!(read_diagnosis(&root.child("nothing")).is_err());
+}
+
+#[test]
+fn a_diagnosis_written_with_a_byte_order_mark_is_read() {
+    let root = TempWorkspace::new("doctor-read-diagnosis-bom");
+    let stage = root.child("diagnose");
+    std::fs::create_dir_all(&stage).unwrap();
+    std::fs::write(
+        stage.join(DIAGNOSIS_FILE),
+        "\u{feff}{\"category\":\"other\",\"cause\":\"x\",\"confidence\":0.8,\"action\":\"none\",\"params\":{},\"needs_human\":false,\"evidence\":[],\"summary\":\"s\"}",
+    )
+    .unwrap();
+    assert_eq!(read_diagnosis(root.path()).unwrap().cause, "x");
 }
 
 #[test]

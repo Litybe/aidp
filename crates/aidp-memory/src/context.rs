@@ -2,16 +2,17 @@
 
 use crate::error::Result;
 use crate::manager::{load, parse_id, row_to_memory, save, MemoryManager, MEMORY_COLUMNS};
+use crate::models::constants::limits::CHARS_PER_TOKEN;
 use crate::models::constants::limits::{MAX_CONTEXT_MEMORIES, MEMORY_BUDGET_SHARE};
-use crate::models::constants::schema::MEMORY_WEIGHTS;
+use crate::models::constants::schema::{GLOBAL_PROJECT, MEMORY_WEIGHTS};
 use crate::models::context_block::ContextBlock;
 use crate::models::context_request::ContextRequest;
-use crate::models::enums::{MemoryStatus, Source};
+use crate::models::enums::{MemoryStatus, Route, Source};
 use crate::models::memory::Memory;
 use crate::models::search_query::SearchQuery;
 use crate::pack::{pack, render_markdown};
 use crate::retriever::Retriever;
-use crate::text::{estimate_tokens, match_expression};
+use crate::text::{estimate_tokens, match_expression, truncate_chars};
 use regex::Regex;
 use rusqlite::params;
 use std::collections::HashMap;
@@ -20,6 +21,10 @@ use std::sync::LazyLock;
 const HEADING_MEMORIES: &str = "## Memoire du projet";
 const HEADING_EXCERPTS: &str = "## Extraits pertinents";
 const EXCERPT_K: usize = 12;
+const FRONTMATTER_OPEN: &str = "---\n";
+const FRONTMATTER_CLOSE: &str = "\n---\n";
+const SUMMARY_KEY: &str = "summary:";
+const ROUTE_KEY: &str = "route:";
 const DEFAULT_SOURCES: [Source; 5] = [
     Source::Bible,
     Source::Doc,
@@ -51,15 +56,27 @@ impl MemoryManager<'_> {
         let mut memories = self.relevant_memories(request, &query_text)?;
         let mut used = estimate_tokens(HEADING_MEMORIES);
         let mut kept: Vec<Memory> = Vec::new();
-        for memory in memories.drain(..) {
-            let cost = estimate_tokens(&memory_line(&memory));
+        for mut memory in memories.drain(..) {
+            let mut cost = estimate_tokens(&memory_line(&memory));
             if used + cost > memory_budget {
-                continue;
+                if !kept.is_empty() {
+                    continue;
+                }
+                let room = memory_budget.saturating_sub(
+                    used + estimate_tokens(&memory_line(&Memory {
+                        text: String::new(),
+                        ..memory.clone()
+                    })),
+                );
+                memory.text = truncate_chars(&memory.text, room * CHARS_PER_TOKEN).to_string();
+                cost = estimate_tokens(&memory_line(&memory));
             }
             used += cost;
             kept.push(memory);
         }
-        self.mark_used(&kept)?;
+        if request.record_use {
+            self.mark_used(&kept)?;
+        }
         let mut markdown = String::new();
         if !kept.is_empty() {
             markdown.push_str(&format!("{HEADING_MEMORIES} {}\n\n", request.project));
@@ -107,25 +124,32 @@ impl MemoryManager<'_> {
     }
 
     fn relevant_memories(&self, request: &ContextRequest, query_text: &str) -> Result<Vec<Memory>> {
-        let scores = self.relevance(&request.project, query_text)?;
+        let mut scores = self.relevance(&request.project, query_text)?;
+        scores.extend(self.relevance(GLOBAL_PROJECT, query_text)?);
         let paths: Vec<String> = request
             .issue_text
             .as_deref()
             .map(extract_paths)
             .unwrap_or_default();
-        let active = self.list(
-            &request.project,
-            &crate::models::memory_filter::MemoryFilter {
-                status: Some(MemoryStatus::Active),
-                ..Default::default()
-            },
-        )?;
+        let filter = crate::models::memory_filter::MemoryFilter {
+            status: Some(MemoryStatus::Active),
+            ..Default::default()
+        };
+        let mut active = self.list(&request.project, &filter)?;
+        if request.project != GLOBAL_PROJECT {
+            active.extend(self.list(GLOBAL_PROJECT, &filter)?);
+        }
+        let has_query = request
+            .issue_text
+            .as_deref()
+            .is_some_and(|text| match_expression(text).is_some());
         let mut scored: Vec<(f64, Memory)> = active
             .into_iter()
             .filter_map(|memory| {
                 let score = scores.get(&memory.id).copied().unwrap_or(0.0);
+                let mut path_matched = false;
                 if let (Some(wanted), Some(offered)) = (memory.scope.route, request.route) {
-                    if wanted != offered {
+                    if wanted != offered && wanted != Route::Tooling {
                         return None;
                     }
                 }
@@ -142,6 +166,10 @@ impl MemoryManager<'_> {
                     if !applies {
                         return None;
                     }
+                    path_matched = !paths.is_empty();
+                }
+                if has_query && score <= 0.0 && !path_matched {
+                    return None;
                 }
                 Some((score, memory))
             })
@@ -177,7 +205,7 @@ impl MemoryManager<'_> {
         })
     }
 
-    fn mark_used(&self, memories: &[Memory]) -> Result<()> {
+    pub(crate) fn mark_used(&self, memories: &[Memory]) -> Result<()> {
         if memories.is_empty() {
             return Ok(());
         }
@@ -199,6 +227,35 @@ fn memory_line(memory: &Memory) -> String {
         "- **{}** ({}) {}: {}\n",
         memory.id, memory.kind, memory.title, memory.text
     )
+}
+
+/// The searchable text of a mirrored ticket: its summary first, then its body, without frontmatter.
+pub fn issue_query_text(mirror: &str) -> String {
+    let normalized = mirror.replace("\r\n", "\n");
+    let Some(rest) = normalized.strip_prefix(FRONTMATTER_OPEN) else {
+        return normalized;
+    };
+    let Some((front, body)) = rest.split_once(FRONTMATTER_CLOSE) else {
+        return normalized;
+    };
+    let summary = front
+        .lines()
+        .find_map(|line| line.strip_prefix(SUMMARY_KEY))
+        .map(|value| value.trim().trim_matches(['\'', '"']).to_string())
+        .unwrap_or_default();
+    format!("{summary}\n{}", body.trim())
+}
+
+/// The `route` of a mirrored ticket, read from its frontmatter.
+pub fn ticket_route(mirror: &str) -> Option<Route> {
+    let normalized = mirror.replace("\r\n", "\n");
+    let (front, _) = normalized
+        .strip_prefix(FRONTMATTER_OPEN)?
+        .split_once(FRONTMATTER_CLOSE)?;
+    front
+        .lines()
+        .find_map(|line| line.strip_prefix(ROUTE_KEY))
+        .and_then(|value| Route::parse(value.trim().trim_matches(['\'', '"'])).ok())
 }
 
 /// Project paths (`Assets/...`, `Docs/...`) mentioned in a text.

@@ -583,6 +583,18 @@ fn ac3_loop_stops_at_max_iterations_and_pauses() {
 }
 
 #[test]
+fn exhausted_loop_with_on_exhausted_continue_lets_the_run_finish() {
+    let harness = plain_harness("native-ac3-continue", loop_behaviour(true, false));
+    let run_id = harness.start(&fixture("conditions_loop_continue.yaml"), &[]);
+    let view = harness.finish(&run_id);
+
+    assert_done(&view);
+    assert_eq!(harness.provider.count("refix"), 2);
+    assert_eq!(harness.provider.count("rereview"), 2);
+    assert_eq!(harness.provider.count("report"), 1);
+}
+
+#[test]
 fn ac4_gate_waits_then_resumes_on_approval() {
     let harness = plain_harness("native-ac4-gate", |_| Behaviour::ok());
     let run_id = harness.start(&fixture(GATED_TEMPLATE), &[]);

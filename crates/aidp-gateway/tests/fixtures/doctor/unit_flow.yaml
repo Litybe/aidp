@@ -22,3 +22,7 @@ steps:
     kind: action
     use: gh.merge
     phase: review
+  - id: bug_capped_stop
+    kind: action
+    use: fail
+    phase: bug

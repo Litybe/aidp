@@ -493,6 +493,7 @@
             "signal",
             "body_producer",
             "max",
+            "continue_when_exhausted",
             "body"
           ],
           "properties": {
@@ -520,6 +521,9 @@
             "max": {
               "type": "integer",
               "minimum": 0
+            },
+            "continue_when_exhausted": {
+              "type": "boolean"
             },
             "body": {
               "type": "array",

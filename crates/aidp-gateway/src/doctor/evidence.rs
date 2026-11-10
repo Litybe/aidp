@@ -31,6 +31,8 @@ pub struct EvidenceSource<'a> {
     pub state_dir: &'a Path,
     pub pr_status: Option<Value>,
     pub unity_status: Option<Value>,
+    /// The evidence the daemon computed about bugs that do not converge: file name and content.
+    pub convergence: Vec<(&'static str, Value)>,
 }
 
 /// Writes the bundle under `bundle/evidence/` and returns the list of files written.
@@ -61,6 +63,10 @@ pub fn write_bundle(bundle: &Path, source: &EvidenceSource<'_>) -> anyhow::Resul
         (UNITY_FILE, &source.unity_status),
     ] {
         let text = serde_json::to_string_pretty(value.as_ref().unwrap_or(&Value::Null))?;
+        write_text(&evidence.join(name), &text, &mut files);
+    }
+    for (name, value) in &source.convergence {
+        let text = serde_json::to_string_pretty(value)?;
         write_text(&evidence.join(name), &text, &mut files);
     }
     let index = json!({ INCIDENT_KEY: source.candidate, FILES_KEY: files });

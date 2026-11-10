@@ -597,6 +597,23 @@ fn loop_exemption_survives_composition() {
 // …and the human checkpoint moves to the far side of the loop: exiting it
 // with the signal still set means the corrections never converged.
 #[test]
+fn unconverged_loop_with_on_exhausted_continue_does_not_pause() {
+    const DEVISH_CONTINUE: &str = include_str!("../fixtures/workflow_emit/devish_continue.yaml");
+    let (_ws, st) = init_run_in_workspace(
+        "noconvergecont",
+        DEVISH_CONTINUE,
+        serde_json::json!({"track": "standard"}),
+    );
+    let js = emit(&st).unwrap();
+    assert!(
+        js.contains("continuing with the remaining findings open")
+            && !js.contains("return pauseInfo(\"correction_loop\""),
+        "on_exhausted: continue must not pause after the loop:
+{js}"
+    );
+}
+
+#[test]
 fn unconverged_correction_loop_pauses_after_the_loop() {
     let (_ws, st) = init_run_in_workspace(
         "noconverge",
@@ -903,6 +920,7 @@ fn bare_test_stage(name: &str) -> Stage {
         on_harness_gap: None,
         plan_tasks: None,
         max_iterations: None,
+        on_exhausted: None,
         knowledge: None,
         body: Vec::new(),
     }

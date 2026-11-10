@@ -22,4 +22,10 @@ pub struct DoctorCandidate {
     pub project_id: Option<String>,
     /// What detection saw, in one line.
     pub detail: String,
+    /// The failure belongs to a flow that is still going: investigated before the rest.
+    #[serde(default)]
+    pub live: bool,
+    /// Epoch milliseconds of the latest activity behind the failure: newest first.
+    #[serde(default)]
+    pub activity_ms: i64,
 }

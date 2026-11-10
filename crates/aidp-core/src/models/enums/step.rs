@@ -22,6 +22,8 @@ pub enum Step {
         signal: Option<String>,
         body_producer: Option<String>,
         max: u32,
+        /// `true` (`on_exhausted: continue`): an unconverged loop lets the run go on.
+        continue_when_exhausted: bool,
         body: Vec<Step>,
     },
     Fanout {

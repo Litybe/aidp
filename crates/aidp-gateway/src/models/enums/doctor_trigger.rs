@@ -14,6 +14,8 @@ pub enum DoctorTrigger {
     StepStuck,
     /// A step `waiting_external` for too long.
     WaitingTooLong,
+    /// A ticket reached the cap of bugs and its test still fails (`bug_capped_stop`): not counted in the 24 h cap.
+    BugsNotConverging,
 }
 
 impl DoctorTrigger {
@@ -25,6 +27,7 @@ impl DoctorTrigger {
             Self::RunPaused => "run_paused",
             Self::StepStuck => "step_stuck",
             Self::WaitingTooLong => "waiting_too_long",
+            Self::BugsNotConverging => "bugs_not_converging",
         }
     }
 }

@@ -1,4 +1,5 @@
 use super::*;
+use crate::models::constants::doctor::{BUG_HISTORY_FILE, TEST_INFRA_FILE};
 use crate::models::enums::DoctorTrigger;
 use aidp_testkit::TempWorkspace;
 
@@ -17,6 +18,8 @@ fn candidate() -> DoctorCandidate {
         run_id: Some(RUN_ID.to_string()),
         project_id: None,
         detail: String::new(),
+        live: false,
+        activity_ms: 0,
     }
 }
 
@@ -58,6 +61,10 @@ fn the_bundle_copies_the_flow_files_and_indexes_them() {
             state_dir: root.path(),
             pr_status: Some(json!({ "number": 4 })),
             unity_status: None,
+            convergence: vec![
+                (BUG_HISTORY_FILE, json!([{ "bug": "GH-10" }])),
+                (TEST_INFRA_FILE, json!([])),
+            ],
         },
     )
     .unwrap();
@@ -73,4 +80,14 @@ fn the_bundle_copies_the_flow_files_and_indexes_them() {
     let pr: Value =
         serde_json::from_str(&std::fs::read_to_string(evidence.join(PR_FILE)).unwrap()).unwrap();
     assert_eq!(pr["number"], 4);
+    let history: Value =
+        serde_json::from_str(&std::fs::read_to_string(evidence.join(BUG_HISTORY_FILE)).unwrap())
+            .unwrap();
+    assert_eq!(history[0]["bug"], "GH-10");
+    assert!(evidence.join(TEST_INFRA_FILE).is_file());
+    assert!(index[FILES_KEY]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|file| file.as_str().unwrap().ends_with(BUG_HISTORY_FILE)));
 }

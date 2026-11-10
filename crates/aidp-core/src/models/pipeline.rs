@@ -1,7 +1,8 @@
 //! Pipeline YAML data models.
 
 use crate::models::enums::{
-    EffortLevel, HarnessGapPolicy, Isolation, ItemFailurePolicy, ModelTier, ToolEnforcement,
+    EffortLevel, HarnessGapPolicy, Isolation, ItemFailurePolicy, LoopExhaustedPolicy, ModelTier,
+    ToolEnforcement,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -240,6 +241,10 @@ pub struct Stage {
     pub plan_tasks: Option<PlanTasksSpec>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_iterations: Option<serde_yaml::Value>,
+    /// Loop containers only: what happens when the last iteration still leaves the `when:`
+    /// signal set. `pause` (default) halts the run; `continue` logs it and runs the next stage.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub on_exhausted: Option<LoopExhaustedPolicy>,
     /// Marks this stage as producing durable project knowledge under
     /// `<vault>/Knowledge/<repo>/`: `true`/`all`, `service` or `feature`.
     #[serde(default, skip_serializing_if = "Option::is_none")]

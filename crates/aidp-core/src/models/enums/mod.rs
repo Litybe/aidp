@@ -33,7 +33,9 @@ pub use effort_level::EffortLevel;
 pub use error_kind::{ErrorKind, HasErrorKind};
 pub use exit_status::{ExitStatus, ALL};
 pub use model_tier::ModelTier;
-pub use policy::{HarnessGapPolicy, Isolation, ItemFailurePolicy, ToolEnforcement};
+pub use policy::{
+    HarnessGapPolicy, Isolation, ItemFailurePolicy, LoopExhaustedPolicy, ToolEnforcement,
+};
 pub use review_axis::ReviewAxis;
 pub use skill_compat::SkillCompat;
 pub use stack::Stack;

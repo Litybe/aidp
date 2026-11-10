@@ -2,11 +2,13 @@
 
 use serde::Serialize;
 
-/// `rebased` means the branch was behind and was updated instead of merged.
+/// `rebased` means the branch was behind and was updated first. `conflict` means the PR conflicts
+/// with its base and was not merged (`detail` holds why).
 #[derive(Debug, Clone, Default, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct MergeOutcome {
     pub merged: bool,
+    pub conflict: bool,
     pub rebased: bool,
     pub sha: Option<String>,
     pub branch_deleted: bool,

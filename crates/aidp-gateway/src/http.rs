@@ -1024,8 +1024,25 @@ fn build_doctor(
                 engine.as_ref(),
             ))
         })),
+        harness_repos: harness_repos(skill_root()),
         first_delay: FIRST_TICK_DELAY,
         interval: TICK_INTERVAL,
+    })
+}
+
+/// Local clones of the harness repositories: the skill's root, and the daemon's sources named by
+/// `AIDP_SOURCE_ROOT`. A repository without a clone gets no pull request from the doctor.
+fn harness_repos(skill_root: Option<PathBuf>) -> crate::doctor::ports::HarnessRepos {
+    use crate::models::constants::doctor::HARNESS_REPOS;
+    let source = std::env::var_os("AIDP_SOURCE_ROOT").map(PathBuf::from);
+    Arc::new(move |repo: &str| {
+        if repo == HARNESS_REPOS[0] {
+            source.clone()
+        } else if repo == HARNESS_REPOS[1] {
+            skill_root.clone()
+        } else {
+            None
+        }
     })
 }
 

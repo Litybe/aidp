@@ -24,6 +24,10 @@ pub mod ticket_snapshot;
 #[path = "../../tests/unit/agent_sessions_fake.rs"]
 pub(crate) mod agent_sessions_fake;
 
+#[cfg(test)]
+#[path = "../../tests/unit/lane_slot_tests.rs"]
+mod lane_slot_tests;
+
 use crate::inbox::InboxEntry;
 use crate::models::constants::flow_facts::{VIEW_PR, VIEW_SESSIONS};
 use crate::models::constants::ticket_flow::{FLOW_ROUTE_MISSING, REPLY_CODE_KEY, REPLY_ERROR_KEY};
@@ -381,7 +385,7 @@ impl FlowEngine {
                         .entry(entry.service.clone().unwrap_or_default())
                         .or_insert(0) += 1;
                 }
-            } else {
+            } else if !waits_on_merge(&state) {
                 dev += 1;
             }
         }
@@ -574,4 +578,16 @@ impl FlowEngine {
         }
         entries
     }
+}
+
+/// A flow parked on its merge approval has finished its work: it holds no dev slot.
+pub(crate) fn waits_on_merge(state: &aidp_flows::FlowState) -> bool {
+    use crate::models::constants::plan_slots::MERGE_PHASE;
+    state.status == aidp_flows::FlowStatus::WaitingHuman
+        && state
+            .current
+            .as_ref()
+            .and_then(|step| state.steps.get(step))
+            .and_then(|step| step.phase.as_deref())
+            .is_some_and(|phase| phase.eq_ignore_ascii_case(MERGE_PHASE))
 }

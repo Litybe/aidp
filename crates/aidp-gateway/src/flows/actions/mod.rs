@@ -73,22 +73,23 @@ impl FlowAction for SkippableSubprocessAction {
     }
 }
 
-const OUTPUT_MERGED: &str = "merged";
 const NOT_MERGED_MESSAGE: &str = "gh.merge finished without merging the pull request";
 
-/// A successful merge output must carry `merged: true`; anything else fails the step.
+/// A successful merge output must carry `merged: true` or `conflict: true` (the flow then resolves
+/// the conflict and merges again); anything else fails the step.
 pub fn merged_or_failed(outcome: ActionOutcome) -> ActionOutcome {
     let ActionOutcome::Ok(outputs) = &outcome else {
         return outcome;
     };
-    if outputs.get(OUTPUT_MERGED).and_then(Value::as_bool) == Some(true) {
+    let flagged = |key: &str| outputs.get(key).and_then(Value::as_bool) == Some(true);
+    if flagged(OUTPUT_MERGED) || flagged(OUTPUT_CONFLICT) {
         return outcome;
     }
     let detail = Value::Object(outputs.clone().into_iter().collect());
     ActionOutcome::TechnicalError(format!("{NOT_MERGED_MESSAGE}: {detail}"))
 }
 
-/// `gh.merge`: done only when the PR really is merged.
+/// `gh.merge`: done when the PR really is merged, or when it conflicts with its base (`conflict`).
 pub struct MergeAction {
     inner: SubprocessAction,
 }
@@ -185,7 +186,10 @@ fn materialize_text(
 
 /// `bug.create`: raises the bug issue of a failed test (`aidp flow bug-create KEY`). `with.report`
 /// is the failure report (text, or the path of a report file), `with.summary` the one-line summary
-/// of the title. Outputs `bug`, `number`, `url`, `parent`, `base`, `count`, `capped`, `changed`,
+/// of the title. `with.body` is the description the `bug-write` stage wrote (a file name such as
+/// `bug.md`, looked up under `with.body_dir` or else `with.run_dir`, or a path, or the text itself):
+/// the daemon keeps the marker first and folds the report at the end. A body that is empty or
+/// cannot be found is left out: the ticket is created anyway, with the report alone. Outputs `bug`, `number`, `url`, `parent`, `base`, `count`, `capped`, `changed`,
 /// `linked`: `capped: true` means the parent already holds the most bugs and nothing was created.
 pub struct BugCreateAction;
 
@@ -207,6 +211,14 @@ impl BugCreateAction {
             .is_some_and(|summary| !summary.trim().is_empty());
         if has_summary {
             args.push(format!("{FLAG_SUMMARY_PREFIX}{{{WITH_SUMMARY}}}"));
+        }
+        let allow_extra = with.get(WITH_ALLOW_EXTRA).and_then(Value::as_bool) == Some(true);
+        if allow_extra {
+            args.push(FLAG_ALLOW_EXTRA.to_string());
+        }
+        if with.contains_key(WITH_BODY) {
+            args.push(FLAG_BODY_FILE.to_string());
+            args.push(format!("{{{WITH_BODY}}}"));
         }
         SubprocessAction::new(args)
     }
@@ -236,36 +248,54 @@ fn find_named_file(root: &Path, name: &std::ffi::OsStr, depth: usize) -> Option<
         .find_map(|folder| find_named_file(folder, name, depth - 1))
 }
 
-/// A stage names its report by file name (`test-report.md`): with `with.run_dir` the file is looked
-/// up under the run folder and `with.report` becomes its path. Text and existing paths stay as they are.
-fn locate_report(with: &mut BTreeMap<String, Value>) {
-    let Some(report) = with.get(WITH_REPORT).and_then(Value::as_str) else {
-        return;
+/// A stage names its file by name (`test-report.md`): with a run folder (`with.<dir_key>`, else
+/// `with.run_dir`) the file is looked up under it and `with.<key>` becomes its path. Returns whether
+/// the value was a file name (found or not). Text and existing paths stay as they are.
+fn locate_named(with: &mut BTreeMap<String, Value>, key: &str, dir_key: &str) -> bool {
+    let Some(value) = with.get(key).and_then(Value::as_str) else {
+        return false;
     };
-    let report = report.trim();
-    if report.is_empty()
-        || report.contains('\n')
-        || report.chars().count() > REPORT_NAME_MAX_CHARS
-        || Path::new(report).is_file()
+    let value = value.trim();
+    if value.is_empty()
+        || value.contains('\n')
+        || value.chars().count() > REPORT_NAME_MAX_CHARS
+        || Path::new(value).is_file()
     {
-        return;
+        return false;
     }
-    let Some(name) = Path::new(report).file_name() else {
-        return;
+    let Some(name) = Path::new(value).file_name() else {
+        return true;
     };
-    let Some(run_dir) = with
-        .get(WITH_RUN_DIR)
-        .and_then(Value::as_str)
-        .map(Path::new)
-        .filter(|dir| dir.is_dir())
-    else {
-        return;
-    };
-    if let Some(found) = find_named_file(run_dir, name, REPORT_SEARCH_DEPTH) {
+    let dir = [dir_key, WITH_RUN_DIR].into_iter().find_map(|candidate| {
+        with.get(candidate)
+            .and_then(Value::as_str)
+            .map(Path::new)
+            .filter(|dir| dir.is_dir())
+    });
+    if let Some(found) = dir.and_then(|dir| find_named_file(dir, name, REPORT_SEARCH_DEPTH)) {
         with.insert(
-            WITH_REPORT.to_string(),
+            key.to_string(),
             Value::String(found.to_string_lossy().to_string()),
         );
+    }
+    true
+}
+
+/// The report of the test, named by file name or given as text.
+fn locate_report(with: &mut BTreeMap<String, Value>) {
+    locate_named(with, WITH_REPORT, WITH_RUN_DIR);
+}
+
+/// The written body: a file name that no file answers to is dropped (the fallback body is used),
+/// an empty value too. What remains is a path or the text itself.
+fn locate_body(with: &mut BTreeMap<String, Value>) {
+    let is_name = locate_named(with, WITH_BODY, WITH_BODY_DIR);
+    let missing = match with.get(WITH_BODY).and_then(Value::as_str) {
+        None => false,
+        Some(value) => value.trim().is_empty() || (is_name && !Path::new(value).is_file()),
+    };
+    if missing {
+        with.remove(WITH_BODY);
     }
 }
 
@@ -273,13 +303,17 @@ impl FlowAction for BugCreateAction {
     fn run(&self, context: &ActionContext<'_>, with: &BTreeMap<String, Value>) -> ActionOutcome {
         let mut with = with.clone();
         locate_report(&mut with);
+        locate_body(&mut with);
         if let Some(summary) = with.get(WITH_SUMMARY).and_then(Value::as_str) {
             let trimmed = Value::String(summary.trim().to_string());
             with.insert(WITH_SUMMARY.to_string(), trimmed);
         }
-        let temporary = materialize_text(&mut with, WITH_REPORT, "aidp-bug-report");
+        let temporaries = [
+            materialize_text(&mut with, WITH_REPORT, "aidp-bug-report"),
+            materialize_text(&mut with, WITH_BODY, "aidp-bug-body"),
+        ];
         let outcome = Self::command(&with).run(context, &with);
-        if let Some(path) = temporary {
+        for path in temporaries.into_iter().flatten() {
             let _ = std::fs::remove_file(path);
         }
         outcome
@@ -357,6 +391,7 @@ pub fn register(registry: &mut Registry) {
                 PLACEHOLDER_PR_ARG,
                 FLAG_EXPECTED_HEAD_SHA,
                 PLACEHOLDER_SHA_ARG,
+                FLAG_REPORT_CONFLICT,
             ]),
         }),
     );

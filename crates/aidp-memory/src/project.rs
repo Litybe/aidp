@@ -14,6 +14,18 @@ struct Registered {
     name: String,
     #[serde(default)]
     path: String,
+    #[serde(default, rename = "testCheckout")]
+    test_checkout: Option<String>,
+}
+
+impl Registered {
+    fn owns(&self, comparable_path: &str) -> bool {
+        comparable(&self.path) == comparable_path
+            || self
+                .test_checkout
+                .as_deref()
+                .is_some_and(|checkout| comparable(checkout) == comparable_path)
+    }
 }
 
 fn registry(gateway_dir: Option<&Path>) -> Vec<Registered> {
@@ -31,8 +43,8 @@ fn comparable(path: &str) -> String {
 
 /// Resolves `--project`: a registered id or name, a directory, or the current directory.
 ///
-/// `gateway_dir` holds the daemon `projects.json`; the key of a registered
-/// project is its name, the key of any other directory is its folder name.
+/// `gateway_dir` holds the daemon `projects.json`. A linked worktree counts as its main checkout;
+/// a registered project is keyed by its name, any other directory by its folder name.
 pub fn resolve_project(
     argument: Option<&str>,
     gateway_dir: Option<&Path>,
@@ -67,21 +79,25 @@ pub fn resolve_project(
             argument.unwrap_or_default()
         )));
     }
-    let wanted = comparable(&directory.to_string_lossy());
-    let key = projects
+    let anchor = aidp_core::vault::main_worktree_root(&directory);
+    let wanted = comparable(&anchor.to_string_lossy());
+    if let Some(found) = projects.iter().find(|project| project.owns(&wanted)) {
+        return Ok(ProjectRef {
+            key: found.name.clone(),
+            root: PathBuf::from(&found.path),
+        });
+    }
+    let key = anchor
+        .file_name()
+        .map_or_else(|| wanted.clone(), |name| name.to_string_lossy().to_string());
+    Ok(ProjectRef { key, root: anchor })
+}
+
+/// True when `key` is the name or the id of a project of the daemon registry.
+pub fn is_registered(key: &str, gateway_dir: Option<&Path>) -> bool {
+    registry(gateway_dir)
         .iter()
-        .find(|project| comparable(&project.path) == wanted)
-        .map(|project| project.name.clone())
-        .or_else(|| {
-            directory
-                .file_name()
-                .map(|name| name.to_string_lossy().to_string())
-        })
-        .unwrap_or_else(|| wanted.clone());
-    Ok(ProjectRef {
-        key,
-        root: directory,
-    })
+        .any(|project| project.id == key || project.name == key)
 }
 
 #[cfg(test)]

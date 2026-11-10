@@ -17,6 +17,8 @@ pub struct NewMemory {
     pub status: MemoryStatus,
     /// Id of the memory this one replaces.
     pub supersedes: Option<String>,
+    /// Written by an automatic source: active at once when confident enough.
+    pub auto_activate: bool,
 }
 
 impl NewMemory {
@@ -37,6 +39,7 @@ impl NewMemory {
             confidence: DEFAULT_CONFIDENCE,
             status: MemoryStatus::Proposed,
             supersedes: None,
+            auto_activate: false,
         }
     }
 }

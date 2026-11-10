@@ -1,0 +1,9 @@
+{"type":"queue-operation","operation":"enqueue","timestamp":"2026-11-08T10:00:00.000Z","sessionId":"abcdef1234567890"}
+{"type":"user","isSidechain":false,"message":{"role":"user","content":"Corrige le dash du joueur"},"timestamp":"2026-11-08T10:15:14.000Z","sessionId":"abcdef1234567890","gitBranch":"fix/dash"}
+{"type":"assistant","isSidechain":false,"message":{"role":"assistant","content":[{"type":"thinking","thinking":""},{"type":"text","text":"Je regarde."},{"type":"tool_use","name":"Edit","input":{"file_path":"D:/game/Assets/Player.cs"}},{"type":"tool_use","name":"Edit","input":{"file_path":"D:/game/Assets/Player.cs"}}]},"timestamp":"2026-11-08T10:15:20.000Z","sessionId":"abcdef1234567890","gitBranch":"fix/dash"}
+{"type":"user","isSidechain":false,"message":{"role":"user","content":[{"type":"tool_result","content":"ok"}]},"timestamp":"2026-11-08T10:15:21.000Z","sessionId":"abcdef1234567890"}
+{"type":"user","isSidechain":false,"message":{"role":"user","content":"<system-reminder>ignore</system-reminder>"},"timestamp":"2026-11-08T10:15:22.000Z","sessionId":"abcdef1234567890"}
+{"type":"user","isSidechain":true,"message":{"role":"user","content":"prompt de sous-agent"},"timestamp":"2026-11-08T10:15:23.000Z","sessionId":"abcdef1234567890"}
+{"type":"user","isSidechain":false,"message":{"role":"user","content":[{"type":"text","text":"Oui, committe"}]},"timestamp":"2026-11-08T10:16:00.000Z","sessionId":"abcdef1234567890"}
+{"type":"assistant","isSidechain":false,"message":{"role":"assistant","content":[{"type":"tool_use","name":"Bash","input":{"command":"git add -A && git commit -q -m \"fix(player): dash conserve la vitesse\""}},{"type":"text","text":"Commit fait."}]},"timestamp":"2026-11-08T10:16:10.000Z","sessionId":"abcdef1234567890"}
+not json with "type":"user" inside

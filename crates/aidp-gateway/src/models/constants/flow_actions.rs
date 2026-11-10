@@ -31,6 +31,8 @@ pub const VERB_FLOW_GIT_PUSH: &str = "git-push";
 pub const VERB_FLOW_PR_CREATE: &str = "pr-create";
 pub const VERB_FLOW_UNITY_REFRESH: &str = "unity-refresh";
 pub const VERB_FLOW_BUG_CREATE: &str = "bug-create";
+/// Re-arms the bug cap of a ticket (`aidp flow bug-rearm KEY`).
+pub const VERB_FLOW_BUG_REARM: &str = "bug-rearm";
 pub const VERB_GATEWAY: &str = "gateway";
 pub const VERB_GATEWAY_WORKTREES: &str = "worktrees";
 pub const VERB_WORKTREES_ENSURE: &str = "ensure";
@@ -45,11 +47,14 @@ pub const VERB_GH_PR_MERGE: &str = "pr-merge";
 
 pub const FLAG_BODY_FILE: &str = "--body-file";
 pub const FLAG_EXPECTED_HEAD_SHA: &str = "--expected-head-sha";
+/// `aidp gh pr-merge` reports a conflict with the base as an output instead of failing.
+pub const FLAG_REPORT_CONFLICT: &str = "--report-conflict";
 pub const FLAG_BRANCH: &str = "--branch";
 pub const FLAG_DRAFT: &str = "--draft";
 pub const FLAG_COST_FOOTER: &str = "--cost-footer";
 pub const FLAG_REPORT_FILE: &str = "--report-file";
 pub const FLAG_SUMMARY_PREFIX: &str = "--summary=";
+pub const FLAG_ALLOW_EXTRA: &str = "--allow-extra";
 
 pub const PLACEHOLDER_KEY_ARG: &str = "{key}";
 pub const PLACEHOLDER_PR_ARG: &str = "{pr}";
@@ -66,6 +71,10 @@ pub const WITH_BODY: &str = "body";
 pub const WITH_REPORT: &str = "report";
 pub const WITH_SUMMARY: &str = "summary";
 pub const WITH_RUN_DIR: &str = "run_dir";
+/// `bug.create` key: one bug past the cap.
+pub const WITH_ALLOW_EXTRA: &str = "allow_extra";
+/// Run folder of the stage that wrote `with.body`, when it is not the one of `with.run_dir`.
+pub const WITH_BODY_DIR: &str = "body_dir";
 
 pub const OUTPUT_SKIPPED: &str = "skipped";
 pub const OUTPUT_REASON: &str = "reason";
@@ -76,3 +85,8 @@ pub const GIT_PUSH_TIMEOUT_SECONDS: u64 = 15 * 60;
 pub const UNITY_REFRESH_TIMEOUT_SECONDS: u64 = 11 * 60;
 
 pub const LOCAL_KEY_SEPARATOR: &str = "-";
+
+/// `gh.merge` output: the pull request is merged.
+pub const OUTPUT_MERGED: &str = "merged";
+/// `gh.merge` output: the pull request conflicts with its base and was not merged.
+pub const OUTPUT_CONFLICT: &str = "conflict";

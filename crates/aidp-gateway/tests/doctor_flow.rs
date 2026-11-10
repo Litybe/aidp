@@ -15,7 +15,7 @@ use aidp_core::id::SystemIdGen;
 use aidp_core::process_runner::{OsProcessRunner, ProcessRunner, ProcessSpec, SpawnedChild};
 use aidp_flows::{FlowDef, FlowState, FlowStatus};
 use aidp_gateway::bus::Bus;
-use aidp_gateway::doctor::ports::NativeDoctorRuns;
+use aidp_gateway::doctor::ports::{DoctorRuns, HarnessRepos, NativeDoctorRuns};
 use aidp_gateway::doctor::{Doctor, DoctorDeps};
 use aidp_gateway::flows::executor::Ports;
 use aidp_gateway::flows::lock::SessionLock;
@@ -28,7 +28,9 @@ use aidp_gateway::models::constants::doctor::{
 use aidp_gateway::models::enums::native_run_status::NativeRunStatus;
 use aidp_gateway::models::enums::{DoctorAction, DoctorIncidentStatus, DoctorTrigger};
 use aidp_gateway::models::flow_execution_policy::FlowExecutionPolicy;
-use aidp_gateway::models::{DoctorIncident, LocalLock, TicketFlowRequest};
+use aidp_gateway::models::native_run_start::StartNativeRun;
+use aidp_gateway::models::native_run_view::NativeRunView;
+use aidp_gateway::models::{DoctorCandidate, DoctorIncident, LocalLock, TicketFlowRequest};
 use aidp_gateway::native_runs::{NativeDeps, NativeRunManager};
 use aidp_gateway::projects::Projects;
 use aidp_gateway::sessions::SessionManager;
@@ -39,20 +41,26 @@ use tiny_http::Method;
 
 const FLOW: &str = include_str!("fixtures/doctor/flow.yaml");
 const SKILL_ROOT: &str = "tests/fixtures/doctor/skill";
-const KEY: &str = "GH-1";
+pub(crate) const KEY: &str = "GH-1";
 const IMPLEMENT: &str = "implement";
-const DIAGNOSE: &str = "diagnose";
-const MALFORMED_REPLY: &str = "not json";
-const SESSIONS_OF_A_REJECTED_REPLY: usize = 2;
-const SETTLE: Duration = Duration::from_secs(45);
-const POLL: Duration = Duration::from_millis(20);
+pub(crate) const DIAGNOSE: &str = "diagnose";
+pub(crate) const MALFORMED_REPLY: &str = "not json";
+pub(crate) const SESSIONS_OF_A_REJECTED_REPLY: usize = 2;
+pub(crate) const SETTLE: Duration = Duration::from_secs(45);
+pub(crate) const POLL: Duration = Duration::from_millis(20);
 const CAUSE: &str = "the implement reply was rejected twice by a transient provider fault";
+const MCP_TIMEOUT_REPLY: &str = "MCP server unity-mcp: connection timed out (CONNECT_TIMEOUT)";
+const HARNESS_REPO: &str = "Litybe/aidp";
+const HARNESS_FILE: &str = "crates/demo/lib.txt";
+pub(crate) const PR_URL: &str = "https://github.test/Litybe/aidp/pull/7";
 
 /// The `aidp` verbs the doctor spawns: every call is recorded and answered `{}`.
 #[derive(Default)]
-struct FakeAidp {
-    calls: Mutex<Vec<Vec<String>>>,
-    comments: Mutex<Vec<String>>,
+pub(crate) struct FakeAidp {
+    pub(crate) calls: Mutex<Vec<Vec<String>>>,
+    pub(crate) comments: Mutex<Vec<String>>,
+    /// Every `git` and `gh` command, program first.
+    pub(crate) commands: Mutex<Vec<Vec<String>>>,
 }
 
 struct Finished {
@@ -81,8 +89,24 @@ impl SpawnedChild for Finished {
 }
 
 impl ProcessRunner for FakeAidp {
-    fn output(&self, _: &ProcessSpec) -> std::io::Result<std::process::Output> {
-        Err(std::io::Error::other("unexpected output call"))
+    fn output(&self, spec: &ProcessSpec) -> std::io::Result<std::process::Output> {
+        let mut line = vec![spec.program.clone()];
+        line.extend(spec.args.clone());
+        match spec.program.as_str() {
+            "git" => {
+                self.commands.lock().unwrap().push(line);
+                OsProcessRunner.output(spec)
+            }
+            "gh" => {
+                self.commands.lock().unwrap().push(line);
+                Ok(std::process::Output {
+                    status: success(),
+                    stdout: format!("{PR_URL}\n").into_bytes(),
+                    stderr: Vec::new(),
+                })
+            }
+            _ => Err(std::io::Error::other("unexpected output call")),
+        }
     }
 
     fn spawn(&self, spec: &ProcessSpec) -> std::io::Result<Box<dyn SpawnedChild>> {
@@ -98,26 +122,44 @@ impl ProcessRunner for FakeAidp {
     }
 }
 
+#[cfg(windows)]
+fn success() -> std::process::ExitStatus {
+    std::os::windows::process::ExitStatusExt::from_raw(0)
+}
+
+#[cfg(unix)]
+fn success() -> std::process::ExitStatus {
+    std::os::unix::process::ExitStatusExt::from_raw(0)
+}
+
 /// What the investigation answers.
-enum Investigation {
+pub(crate) enum Investigation {
     Diagnosis(Value),
     /// The diagnose stage replies garbage twice: the investigation run pauses.
     Broken,
 }
 
-struct World {
-    engine: Arc<FlowEngine>,
-    native: Arc<NativeRunManager>,
-    provider: Arc<ScriptedProvider>,
-    doctor: Arc<Doctor>,
-    cli: Arc<FakeAidp>,
-    bus: Arc<Bus>,
-    project_id: String,
-    _root: TempWorkspace,
-    _env: EnvGuard,
+pub(crate) struct World {
+    pub(crate) engine: Arc<FlowEngine>,
+    pub(crate) native: Arc<NativeRunManager>,
+    pub(crate) provider: Arc<ScriptedProvider>,
+    pub(crate) doctor: Arc<Doctor>,
+    pub(crate) cli: Arc<FakeAidp>,
+    pub(crate) bus: Arc<Bus>,
+    pub(crate) project_id: String,
+    pub(crate) harness_origin: PathBuf,
+    pub(crate) workspace: PathBuf,
+    pub(crate) origin: PathBuf,
+    #[allow(dead_code)]
+    pub(crate) config: Arc<Mutex<DoctorConfig>>,
+    #[allow(dead_code)]
+    pub(crate) extra_runs: Arc<Mutex<Vec<NativeRunView>>>,
+    #[allow(dead_code)]
+    pub(crate) root: TempWorkspace,
+    pub(crate) _env: EnvGuard,
 }
 
-fn run_git(directory: &Path, arguments: &[&str]) {
+pub(crate) fn run_git(directory: &Path, arguments: &[&str]) {
     let output = Command::new("git")
         .args(arguments)
         .current_dir(directory)
@@ -134,6 +176,7 @@ fn behaviour(
     call: &Call,
     investigation: &Investigation,
     implement_failures: &AtomicUsize,
+    failure_reply: &str,
 ) -> Behaviour {
     match call.label.as_str() {
         IMPLEMENT => {
@@ -143,7 +186,7 @@ fn behaviour(
                 })
                 .is_ok();
             if failing {
-                Behaviour::raw(MALFORMED_REPLY)
+                Behaviour::raw(failure_reply)
             } else {
                 Behaviour::ok()
             }
@@ -165,6 +208,17 @@ fn world(tag: &str, investigation: Investigation) -> World {
 }
 
 fn world_failing(tag: &str, investigation: Investigation, failures: usize) -> World {
+    world_full(tag, investigation, failures, MALFORMED_REPLY, &[])
+}
+
+/// A world whose rejected replies say `failure_reply`, with `seed` incidents already on disk.
+pub(crate) fn world_full(
+    tag: &str,
+    investigation: Investigation,
+    failures: usize,
+    failure_reply: &'static str,
+    seed: &[DoctorIncident],
+) -> World {
     let root = TempWorkspace::new(tag);
     let vault = root.child("vault");
     let home = root.child("home");
@@ -199,7 +253,7 @@ fn world_failing(tag: &str, investigation: Investigation, failures: usize) -> Wo
     let bus = Arc::new(Bus::new());
     let implement_failures = AtomicUsize::new(failures);
     let provider = ScriptedProvider::new(None, move |call| {
-        behaviour(call, &investigation, &implement_failures)
+        behaviour(call, &investigation, &implement_failures, failure_reply)
     });
     let sessions = SessionManager::load_with_runner(
         &state_dir,
@@ -246,11 +300,48 @@ fn world_failing(tag: &str, investigation: Investigation, failures: usize) -> Wo
         ports,
         FlowEngineConfig::default(),
     );
+    let harness_origin = root.child("harness-origin.git");
+    let harness = root.child("harness");
+    for directory in [&harness_origin, &harness] {
+        std::fs::create_dir_all(directory).unwrap();
+    }
+    std::fs::create_dir_all(harness.join("crates/demo")).unwrap();
+    std::fs::write(harness.join(HARNESS_FILE), "one\n").unwrap();
+    run_git(&harness_origin, &["init", "-q", "--bare", "-b", "main"]);
+    run_git(&harness, &["init", "-q", "-b", "main"]);
+    run_git(&harness, &["config", "user.email", "h@example.test"]);
+    run_git(&harness, &["config", "user.name", "h"]);
+    run_git(&harness, &["add", "."]);
+    run_git(&harness, &["commit", "-q", "-m", "initial"]);
+    run_git(
+        &harness,
+        &["remote", "add", "origin", harness_origin.to_str().unwrap()],
+    );
+    run_git(&harness, &["push", "-q", "-u", "origin", "main"]);
+    let clone = harness.clone();
+    let harness_repos: HarnessRepos =
+        Arc::new(move |repo: &str| (repo == HARNESS_REPO).then(|| clone.clone()));
+    if !seed.is_empty() {
+        let directory = state_dir.join("doctor");
+        std::fs::create_dir_all(&directory).unwrap();
+        std::fs::write(
+            directory.join("incidents.json"),
+            serde_json::to_string(seed).unwrap(),
+        )
+        .unwrap();
+    }
+    let config = Arc::new(Mutex::new(DoctorConfig::default()));
+    let settings_config = config.clone();
+    let extra_runs: Arc<Mutex<Vec<NativeRunView>>> = Arc::new(Mutex::new(Vec::new()));
     let doctor = Doctor::new(DoctorDeps {
         engine: engine.clone(),
-        runs: Arc::new(NativeDoctorRuns(native.clone())),
-        settings: Arc::new(DoctorConfig::default),
+        runs: Arc::new(ExtraRuns {
+            inner: NativeDoctorRuns(native.clone()),
+            extra: extra_runs.clone(),
+        }),
+        settings: Arc::new(move || settings_config.lock().unwrap().clone()),
         state_dir,
+        harness_repos,
         unity: None,
         first_delay: Duration::ZERO,
         interval: Duration::from_secs(3600),
@@ -263,8 +354,45 @@ fn world_failing(tag: &str, investigation: Investigation, failures: usize) -> Wo
         cli,
         bus,
         project_id,
-        _root: root,
+        harness_origin,
+        workspace,
+        origin,
+        config,
+        extra_runs,
+        root,
         _env: env,
+    }
+}
+
+/// The native runs of the daemon plus synthetic ones a test adds, to show the doctor other tickets' reports.
+struct ExtraRuns {
+    inner: NativeDoctorRuns,
+    extra: Arc<Mutex<Vec<NativeRunView>>>,
+}
+
+impl DoctorRuns for ExtraRuns {
+    fn list(&self) -> Vec<NativeRunView> {
+        let mut runs = self.inner.list();
+        runs.extend(self.extra.lock().unwrap().iter().cloned());
+        runs
+    }
+
+    fn get(&self, run_id: &str) -> Option<NativeRunView> {
+        self.extra
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|view| view.run_id == run_id)
+            .cloned()
+            .or_else(|| self.inner.get(run_id))
+    }
+
+    fn start(&self, request: StartNativeRun) -> anyhow::Result<String> {
+        self.inner.start(request)
+    }
+
+    fn resume(&self, run_id: &str) -> anyhow::Result<()> {
+        self.inner.resume(run_id)
     }
 }
 
@@ -282,9 +410,22 @@ fn diagnosis(action: &str, confidence: f64) -> Value {
     })
 }
 
+fn diagnosis_of(category: &str, action: &str, confidence: f64, patch: Option<&str>) -> Value {
+    let mut value = diagnosis(action, confidence);
+    value["category"] = json!(category);
+    value["proposed_patch"] = json!(patch);
+    value["params"] = json!({ "repo": HARNESS_REPO });
+    value
+}
+
 impl World {
-    fn start(&self) {
-        let ticket = json!({ "key": KEY, "service": self.project_id, "summary": "game feature" });
+    pub(crate) fn start(&self) {
+        self.start_def(KEY, FLOW);
+    }
+
+    /// Starts the flow of `yaml` for ticket `key`, in the project of the world.
+    pub(crate) fn start_def(&self, key: &str, yaml: &str) {
+        let ticket = json!({ "key": key, "service": self.project_id, "summary": "game feature" });
         let request = TicketFlowRequest {
             ticket,
             policy: Some(FlowExecutionPolicy {
@@ -295,15 +436,19 @@ impl World {
             ..TicketFlowRequest::default()
         };
         self.engine
-            .start_request_with_def(request, FlowDef::from_yaml(FLOW).unwrap())
+            .start_request_with_def(request, FlowDef::from_yaml(yaml).unwrap())
             .expect("the flow starts");
     }
 
-    fn wait_flow(&self, status: FlowStatus) -> FlowState {
+    pub(crate) fn wait_flow(&self, status: FlowStatus) -> FlowState {
+        self.wait_flow_of(KEY, status)
+    }
+
+    pub(crate) fn wait_flow_of(&self, key: &str, status: FlowStatus) -> FlowState {
         let deadline = Instant::now() + SETTLE;
         loop {
             self.engine.executor().reconcile_all();
-            let state = self.engine.get(KEY).unwrap();
+            let state = self.engine.get(key).unwrap();
             if state.status == status {
                 return state;
             }
@@ -319,15 +464,23 @@ impl World {
     }
 
     /// The newest incident of the ticket.
-    fn incident(&self) -> DoctorIncident {
-        let incidents = self.doctor.incidents_for(KEY);
+    pub(crate) fn incident(&self) -> DoctorIncident {
+        self.incident_of(KEY)
+    }
+
+    pub(crate) fn incident_of(&self, key: &str) -> DoctorIncident {
+        let incidents = self.doctor.incidents_for(key);
         incidents.into_iter().next().expect("an incident")
     }
 
     /// Ticks the doctor until its incident leaves `Investigating`.
-    fn investigate(&self) -> DoctorIncident {
+    pub(crate) fn investigate(&self) -> DoctorIncident {
+        self.investigate_of(KEY)
+    }
+
+    pub(crate) fn investigate_of(&self, key: &str) -> DoctorIncident {
         self.doctor.tick();
-        let started = self.incident();
+        let started = self.incident_of(key);
         assert_eq!(
             started.status,
             DoctorIncidentStatus::Investigating,
@@ -344,10 +497,10 @@ impl World {
             assert!(Instant::now() < deadline, "investigation {view:?}");
         }
         self.doctor.tick();
-        self.incident()
+        self.incident_of(key)
     }
 
-    fn doctor_events(&self) -> Vec<Value> {
+    pub(crate) fn doctor_events(&self) -> Vec<Value> {
         self.bus
             .recent(500, 0)
             .into_iter()
@@ -374,8 +527,9 @@ fn a_failed_flow_is_diagnosed_then_retried_and_reported() {
     assert!(outcome.ok, "{outcome:?}");
     assert_eq!(
         outcome.idempotency_key,
-        format!("{}:action", closed.candidate.id)
+        format!("{}:action:1", closed.candidate.id)
     );
+    assert_eq!(closed.actions.len(), 1);
     assert!(closed.commented);
     let bundle = PathBuf::from(closed.bundle.clone().unwrap());
     assert!(bundle.join("evidence/flow-state.json").is_file());
@@ -531,4 +685,274 @@ fn the_ticket_cap_stops_investigations_after_two_a_day() {
         .filter(|view| view.template_id == DOCTOR_TEMPLATE)
         .count();
     assert_eq!(investigations, 2);
+}
+
+fn stale_incident(key: &str) -> DoctorIncident {
+    DoctorIncident {
+        candidate: DoctorCandidate {
+            id: format!("{key}/produce@1"),
+            key: key.to_string(),
+            ticket: key.to_string(),
+            trigger: DoctorTrigger::RunPaused,
+            step: Some("produce".to_string()),
+            iteration: Some(1),
+            run_id: Some("20261108-old".to_string()),
+            project_id: None,
+            detail: "run 20261108-old (art-produce) paused: needs_review".to_string(),
+            live: false,
+            activity_ms: 0,
+        },
+        status: DoctorIncidentStatus::Detected,
+        detected_at: "2026-11-08T10:00:00Z".to_string(),
+        updated_at: "2026-11-08T10:00:00Z".to_string(),
+        investigation_run_id: None,
+        investigated_ms: None,
+        bundle: None,
+        diagnosis: None,
+        outcome: None,
+        actions: Vec::new(),
+        next_attempt_ms: None,
+        pr_url: None,
+        note: None,
+        commented: false,
+        shared_pattern: None,
+        affected: Vec::new(),
+        rearmed_ms: None,
+    }
+}
+
+fn doctor_runs(world: &World) -> usize {
+    world
+        .native
+        .list()
+        .into_iter()
+        .filter(|view| view.template_id == DOCTOR_TEMPLATE)
+        .count()
+}
+
+#[test]
+fn a_passing_fault_is_resumed_without_a_model_and_does_not_use_an_investigation() {
+    let world = world_full(
+        "doctor-transient",
+        Investigation::Broken,
+        SESSIONS_OF_A_REJECTED_REPLY,
+        MCP_TIMEOUT_REPLY,
+        &[],
+    );
+    world.start();
+    world.wait_flow(FlowStatus::Failed);
+
+    world.doctor.tick();
+    let incident = world.incident();
+    assert_eq!(doctor_runs(&world), 0, "no investigation was started");
+    assert!(incident.investigated_ms.is_none(), "{incident:?}");
+    assert_eq!(incident.actions.len(), 1, "{incident:?}");
+    let action = &incident.actions[0];
+    assert_eq!(action.action, DoctorAction::RetryStep);
+    assert!(action.ok, "{action:?}");
+    assert_eq!(
+        action.idempotency_key,
+        format!("{}:action:1", incident.candidate.id)
+    );
+    assert_eq!(
+        incident.diagnosis.as_ref().map(|d| d.category.as_str()),
+        Some("mcp_connect_timeout")
+    );
+
+    world.wait_flow(FlowStatus::Done);
+    assert_eq!(
+        world.provider.count(IMPLEMENT),
+        SESSIONS_OF_A_REJECTED_REPLY + 1,
+        "the paused run was resumed, not restarted from scratch"
+    );
+    world.doctor.tick();
+    let closed = world.incident();
+    assert_eq!(closed.status, DoctorIncidentStatus::Fixed, "{closed:?}");
+    assert!(closed.note.unwrap().contains("recovered"));
+    assert_eq!(doctor_runs(&world), 0);
+}
+
+#[test]
+fn obsolete_incidents_close_without_investigation_and_do_not_hold_the_live_one() {
+    let world = world_full(
+        "doctor-obsolete",
+        Investigation::Diagnosis(diagnosis(DoctorAction::RetryStep.as_str(), 0.9)),
+        SESSIONS_OF_A_REJECTED_REPLY,
+        MALFORMED_REPLY,
+        &[stale_incident("GH-90"), stale_incident("GH-91")],
+    );
+    world.start();
+    world.wait_flow(FlowStatus::Failed);
+
+    world.doctor.tick();
+    for key in ["GH-90", "GH-91"] {
+        let stale = world.doctor.incidents_for(key).remove(0);
+        assert_eq!(stale.status, DoctorIncidentStatus::NoAction, "{stale:?}");
+        assert!(stale.note.unwrap().starts_with("obsolete"));
+        assert!(stale.investigation_run_id.is_none());
+    }
+    let live = world.incident();
+    assert_eq!(live.status, DoctorIncidentStatus::Investigating, "{live:?}");
+    assert_eq!(
+        doctor_runs(&world),
+        1,
+        "only the live failure is investigated"
+    );
+}
+
+#[test]
+fn a_product_bug_raises_a_bug_ticket_through_bug_create() {
+    let world = world(
+        "doctor-bug-ticket",
+        Investigation::Diagnosis(diagnosis_of(
+            "product_bug",
+            DoctorAction::CreateBugTicket.as_str(),
+            0.8,
+            None,
+        )),
+    );
+    world.start();
+    world.wait_flow(FlowStatus::Failed);
+
+    let closed = world.investigate();
+    assert_eq!(closed.status, DoctorIncidentStatus::Fixed, "{closed:?}");
+    assert_eq!(closed.actions[0].action, DoctorAction::CreateBugTicket);
+    let calls = world.cli.calls.lock().unwrap().clone();
+    let bug = calls
+        .iter()
+        .find(|args| args.iter().any(|argument| argument == "bug-create"))
+        .unwrap_or_else(|| panic!("no bug-create in {calls:?}"));
+    assert!(bug.contains(&KEY.to_string()), "{bug:?}");
+    assert_eq!(
+        world.engine.get(KEY).unwrap().status,
+        FlowStatus::Failed,
+        "nothing else was done"
+    );
+}
+
+#[test]
+fn a_bug_ticket_is_refused_for_something_that_is_not_a_product_bug() {
+    let world = world(
+        "doctor-bug-ticket-refused",
+        Investigation::Diagnosis(diagnosis_of(
+            "other",
+            DoctorAction::CreateBugTicket.as_str(),
+            0.8,
+            None,
+        )),
+    );
+    world.start();
+    world.wait_flow(FlowStatus::Failed);
+    let closed = world.investigate();
+    assert_eq!(closed.status, DoctorIncidentStatus::Refused, "{closed:?}");
+    assert!(world
+        .cli
+        .calls
+        .lock()
+        .unwrap()
+        .iter()
+        .all(|args| !args.iter().any(|argument| argument == "bug-create")));
+}
+
+const GOOD_PATCH: &str =
+    "--- a/crates/demo/lib.txt\n+++ b/crates/demo/lib.txt\n@@ -1 +1 @@\n-one\n+two";
+const BAD_PATCH: &str =
+    "--- a/crates/demo/lib.txt\n+++ b/crates/demo/lib.txt\n@@ -1 +1 @@\n-absent\n+two";
+
+fn branches(origin: &Path) -> String {
+    let output = Command::new("git")
+        .args(["branch", "--list"])
+        .current_dir(origin)
+        .output()
+        .unwrap();
+    String::from_utf8_lossy(&output.stdout).to_string()
+}
+
+#[test]
+fn a_harness_patch_becomes_a_pull_request_never_a_merge() {
+    let world = world(
+        "doctor-harness-pr",
+        Investigation::Diagnosis(diagnosis_of(
+            "harness_defect",
+            DoctorAction::OpenHarnessPr.as_str(),
+            0.8,
+            Some(GOOD_PATCH),
+        )),
+    );
+    world.start();
+    world.wait_flow(FlowStatus::Failed);
+
+    let closed = world.investigate();
+    assert_eq!(closed.status, DoctorIncidentStatus::Fixed, "{closed:?}");
+    assert_eq!(closed.pr_url.as_deref(), Some(PR_URL));
+    let remote = branches(&world.harness_origin);
+    assert!(remote.contains("doctor/GH-1_implement_0"), "{remote}");
+    assert!(!remote.contains("gamedev"), "{remote}");
+    let commands = world.cli.commands.lock().unwrap().clone();
+    let joined: Vec<String> = commands.iter().map(|line| line.join(" ")).collect();
+    assert!(
+        joined
+            .iter()
+            .any(|line| line.contains("worktree add") && line.contains("origin/main")),
+        "{joined:?}"
+    );
+    assert!(joined.iter().any(|line| line.starts_with("gh pr create")));
+    assert!(
+        joined
+            .iter()
+            .filter(|line| line.contains(" push "))
+            .all(|line| {
+                !line.contains("--force") && !line.contains(" -f ") && !line.contains(" +")
+            }),
+        "{joined:?}"
+    );
+    assert!(
+        joined
+            .iter()
+            .all(|line| !line.starts_with("gh pr merge") && !line.starts_with("git merge ")),
+        "{joined:?}"
+    );
+    let main = Command::new("git")
+        .args(["show", "main:crates/demo/lib.txt"])
+        .current_dir(&world.harness_origin)
+        .output()
+        .unwrap();
+    assert_eq!(
+        String::from_utf8_lossy(&main.stdout).trim(),
+        "one",
+        "main is untouched"
+    );
+}
+
+#[test]
+fn a_harness_patch_that_does_not_apply_is_noted_then_a_human() {
+    let world = world(
+        "doctor-harness-bad-patch",
+        Investigation::Diagnosis(diagnosis_of(
+            "harness_defect",
+            DoctorAction::OpenHarnessPr.as_str(),
+            0.8,
+            Some(BAD_PATCH),
+        )),
+    );
+    world.start();
+    world.wait_flow(FlowStatus::Failed);
+
+    let closed = world.investigate();
+    assert_eq!(
+        closed.status,
+        DoctorIncidentStatus::NeedsHuman,
+        "{closed:?}"
+    );
+    assert!(closed.note.unwrap().contains("does not apply"));
+    assert!(closed.pr_url.is_none());
+    assert!(!branches(&world.harness_origin).contains("doctor/"));
+    let commands = world.cli.commands.lock().unwrap().clone();
+    assert!(
+        commands.iter().all(|line| line[0] != "gh"),
+        "no PR was opened"
+    );
+    assert!(commands
+        .iter()
+        .all(|line| !(line[0] == "git" && line.contains(&"push".to_string()))));
 }

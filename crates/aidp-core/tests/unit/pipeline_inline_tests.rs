@@ -284,6 +284,7 @@ mod validate_inputs {
                 on_harness_gap: None,
                 plan_tasks: None,
                 max_iterations: None,
+                on_exhausted: None,
                 knowledge: None,
                 body: vec![],
             }],

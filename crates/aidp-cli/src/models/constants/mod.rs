@@ -12,3 +12,4 @@ pub mod embedded_command;
 pub mod flow_git;
 pub mod flow_pr;
 pub mod flow_unity;
+pub mod memory_hook;

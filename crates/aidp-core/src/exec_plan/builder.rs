@@ -19,7 +19,7 @@ use crate::models::enums::pass_end::PassEnd;
 use crate::models::enums::reply_schema_kind::ReplySchemaKind;
 use crate::models::enums::skip_reason::SkipReason;
 use crate::models::enums::step::Step;
-use crate::models::enums::{AgentRole, HarnessGapPolicy, ReviewAxis};
+use crate::models::enums::{AgentRole, HarnessGapPolicy, LoopExhaustedPolicy, ReviewAxis};
 use crate::models::exec_plan::ExecPlan;
 use crate::models::gate_spec::GateSpec;
 use crate::models::loop_signal::LoopSignal;
@@ -336,6 +336,7 @@ fn compile_loop(ctx: &BuildCtx, container: &Stage, out: &mut BuildOut) -> anyhow
         signal: signal.property,
         body_producer,
         max,
+        continue_when_exhausted: container.on_exhausted == Some(LoopExhaustedPolicy::Continue),
         body,
     });
     Ok(())

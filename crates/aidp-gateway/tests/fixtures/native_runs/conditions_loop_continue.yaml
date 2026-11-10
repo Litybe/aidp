@@ -1,0 +1,50 @@
+version: 5
+id: native-conditions-loop-continue
+kind: pipeline
+description: Conditions and a correction loop, run by the native executor with a scripted provider.
+inputs:
+  feature: { required: false, kind: string, default: native-conditions }
+  mode: { required: false, kind: string, default: quick }
+settings:
+  max_correction_iterations: 2
+stages:
+  - name: scan
+    description: Collect the context.
+    agent: analyzer
+    outputs: [scan.md]
+
+  - name: static_off
+    description: Never runs, its condition is a literal false.
+    agent: analyzer
+    needs: [scan]
+    when: false
+    outputs: [static.md]
+
+  - name: deep_scan
+    description: Runs only in deep mode.
+    agent: analyzer
+    needs: [scan]
+    when: "{{ inputs.mode == 'deep' }}"
+    outputs: [deep.md]
+
+  - name: review
+    description: Review the context.
+    agent: reviewer
+    needs: [scan]
+    outputs: [findings.json, summary.md]
+
+  - name: correction_loop
+    type: loop
+    when: "{{ stages.review.outputs.findings.has_blocking_findings }}"
+    max_iterations: 2
+    on_exhausted: continue
+    body:
+      - { name: refix, description: Fix the findings., agent: executor, scope: { mode: stage_dir_only }, outputs: [fix.md] }
+      - { name: rereview, description: Review the fix again., agent: reviewer, needs: [refix], outputs: [findings.json, summary.md] }
+
+  - name: report
+    description: Runs after the loop even when it did not converge.
+    agent: executor
+    needs: [correction_loop]
+    scope: { mode: stage_dir_only }
+    outputs: [report.md]

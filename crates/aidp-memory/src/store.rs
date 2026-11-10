@@ -4,6 +4,7 @@ use crate::error::{MemoryError, Result};
 use crate::models::constants::limits::BUSY_TIMEOUT_MS;
 use crate::models::constants::paths::{DB_FILE, MEMORY_DIR};
 use crate::models::constants::schema::MIGRATIONS;
+use crate::models::purge_report::PurgeReport;
 use crate::models::store_stats::StoreStats;
 use rusqlite::{params, Connection, Transaction};
 use std::path::{Path, PathBuf};
@@ -11,6 +12,7 @@ use std::sync::{Mutex, MutexGuard};
 use std::time::Duration;
 
 const USER_VERSION: &str = "user_version";
+const VACUUM: &str = "VACUUM";
 
 /// Path of the database under a gateway state directory.
 pub fn db_path(gateway_dir: &Path) -> PathBuf {
@@ -92,6 +94,38 @@ impl MemoryStore {
         let value = work(&transaction)?;
         transaction.commit()?;
         Ok(value)
+    }
+
+    /// Deletes the index of a key that holds no memory, then compacts the database.
+    pub fn purge_index(&self, project: &str) -> Result<PurgeReport> {
+        let (chunks, files) = self.write(|transaction| {
+            let memories: i64 = transaction.query_row(
+                "SELECT COUNT(*) FROM memories WHERE project = ?1",
+                params![project],
+                |row| row.get(0),
+            )?;
+            if memories > 0 {
+                return Err(MemoryError::Conflict(format!(
+                    "`{project}` holds {memories} memories; its index is not purged"
+                )));
+            }
+            let chunks =
+                transaction.execute("DELETE FROM chunks WHERE project = ?1", params![project])?;
+            let files =
+                transaction.execute("DELETE FROM files WHERE project = ?1", params![project])?;
+            Ok((chunks, files))
+        })?;
+        if chunks + files == 0 {
+            return Err(MemoryError::NotFound(format!(
+                "no index for the key `{project}`"
+            )));
+        }
+        let compacted = self.lock().execute_batch(VACUUM).is_ok();
+        Ok(PurgeReport {
+            chunks,
+            files,
+            compacted,
+        })
     }
 
     /// Counts and file size for one project.

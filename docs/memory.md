@@ -10,8 +10,10 @@ BM25 over FTS5 plus an expansion through the graphify code graph. There are no e
 ## Model
 
 A chunk is `{ id, project, source, path, line_start, line_end, title, text, hash, mtime, meta }`.
-The `project` column keys every row, so one database serves all projects. The project key is its
-registered name in the daemon (`projects.json` under the gateway directory), else the folder name.
+The `project` column keys every row, so one database serves all projects. A linked git worktree
+counts as its main checkout. The project key is the registered name in the daemon (`projects.json`
+under the gateway directory, matched on `path` or `testCheckout`), else the folder name of the main
+checkout.
 
 | Source | Files | Cut |
 |---|---|---|
@@ -41,7 +43,13 @@ chunks, all in one transaction per source. Files are read one at a time.
 case), split on camelCase, stripped of French and English stopwords and plural marks, and sent as an
 `OR` of prefix terms. Column weights: title 5, identifiers 2, path 1.5, text 1.
 
-1. BM25 candidates (at least 60, `5 x k`; 400 with a `--path` filter).
+A query longer than 24 terms keeps its most telling ones: terms of its first line count 3 more,
+identifiers (inner capital, underscore) 2 more, and each repetition 1 more. A mirrored ticket is
+searched as its `summary` then its body; its frontmatter is dropped.
+
+1. BM25 candidates (at least 60, `5 x k`; 400 with a `--path` filter), each score multiplied by its
+   source weight: `memory` 1.5, `bible` 1.2, `doc` and `code` 1, `knowledge` 0.9, `ticket` 0.7,
+   `run` 0.4, and 0.5 more for a session journal (`/_journal/`).
 2. Graph expansion when `<project>/graphify-out/graph.json` exists: symbols found in the top code
    chunks, and symbols named like a query term, pull in their `calls`, `inherits`, `implements` and
    `references` neighbours (both directions). A neighbour scores half of its seed (`via: graph`);
@@ -59,6 +67,9 @@ All verbs take `--project <key-or-path>` (default: the current directory) and ho
 ```
 aidp rag index  [--project P] [--source bible,doc,code,run,ticket,knowledge] [--full]
 aidp rag search "<query>" [--project P] [--source ...] [--path <glob>] [--k 20] [--budget 1500]
+aidp rag purge --key K
+aidp rag eval --cases <yaml> [--project P] [--k 5]
+aidp memory recall "<question>" [--project P] [--route R] [--budget 1500]
 aidp memory context [--project P] [--issue GH-214] [--route code|art|map|doc] [--stage id] [--budget 2000]
 aidp memory add --kind K --title T --text X [--route R] [--path G]... [--tag T]... [--ref issue:GH-12]...
                 [--status proposed|active] [--confidence 0.7] [--supersedes M-3]
@@ -75,10 +86,25 @@ aidp memory ingest <folder-or-file>
 one they are listed in `skippedSources`. `rag search --format json` prints
 `[{ id, source, path, lines, citation, title, score, via, text }]`.
 
-`memory context` prints the block a stage injects: the active memories whose scope matches (route
-equal or unset; path globs matched against `Assets/...` or `Docs/...` paths found in the issue text,
+`rag purge` deletes the chunks and file rows of an orphan key, then compacts the database, and prints
+`{ chunks, files, compacted }`. `compacted` is false when the database was busy. A registered project
+or a key holding memories is refused (exit 4); a key with no index is exit 3.
+
+`rag eval` reads a YAML list of `{ query | issue, expect: [path prefix], sources }`. A `query` case
+searches the index; an `issue` case builds the `memory context` block of that ticket (with its route,
+without counting uses) and ranks its memories (`memory/M-n`) then its excerpts. It prints
+`{ cases, k, recall, mrr, misses }`. The PixelHood cases live in `<vault>/Knowledge/PixelHood/_eval/`.
+
+`memory recall` is `memory context` for a free question.
+
+`memory context` prints the block a stage injects: the active memories of the project and
+`_global` whose scope matches (route equal, unset, or `tooling`; without `--route`, the route of the
+ticket; path globs matched against `Assets/...` or `Docs/...` paths found in the issue text,
 or, without such paths, a text match), best first, using at most 40 % of the budget; then the best
-excerpts for the issue text under the rest. The issue text is read from the ticket mirror
+excerpts for the issue text under the rest. With a query, a memory that shares no word with it is
+left out unless one of its path globs matches; the best memory is shortened rather than skipped when
+it alone exceeds the memory budget. A proposal without route takes the route of its first issue's
+ticket, and the daemon runs `memory gc` for the project after each run. The issue text is read from the ticket mirror
 `<vault>/TODO/<repo>/GH-<n>.md`. Every injected memory gets `uses + 1` and a new `lastUsedAt`.
 
 Exit codes follow `exit-codes.md`: 0 success, 3 unknown memory or project path, 4 refused transition
@@ -96,8 +122,9 @@ proposed --approve / auto--> active --60 days unused (gc)--> stale --approve--> 
 - A proposal close to an existing live memory (title and text Jaccard similarity >= 0.55 among the
   BM25 candidates) does not create a duplicate: `evidence += 1`, references are unioned, confidence
   becomes the maximum.
-- Automatic activation: `evidence >= 2`, references to at least two different issues, and
-  `confidence >= 0.8`. Otherwise a human approves.
+- Automatic activation: a proposal from `memory ingest` or a finished run is active at once when
+  `confidence >= 0.7`. Any other proposal needs `evidence >= 2`, references to at least two
+  different issues, and `confidence >= 0.8`, or a human approval.
 - `supersedes`: when the new memory becomes active, the old one becomes `superseded`.
 - `merge A --into B`: evidence adds up, references, paths and tags are unioned, `A` is superseded.
 - `gc` marks `stale` every active memory whose latest of `lastUsedAt` and `updatedAt` is older than
@@ -115,6 +142,72 @@ Pipelines write at most 5 proposals in `memory-proposals.json` in their stage fo
 `memory ingest` validates strictly (unknown fields, kinds, lengths, more than 5 proposals refuse the
 whole file; other files still go through) and creates `proposed` memories through the same
 de-duplication.
+
+Agents also write undocumented shapes, so a proposal holding `type`, `name`, `description`, `body`,
+`lesson`, `fact`, `why`, `how_to_apply` or `evidence` is folded first. Title comes from `title`,
+`description`, then `name`; text from `text`, `body`, `lesson`, then `fact`, with `why`,
+`how_to_apply` and `evidence` appended as lines; both are shortened to their limits. `type` gives the
+kind when it is a kind (`user` is `preference`, `project` and `reference` are `fact`, anything else
+`lesson`). Issue and run references are added from `GH-<n>` and run id segments of the file path.
+
+A file is refused as a whole: it creates nothing. The daemon records a file as ingested only when it
+was accepted, so a refused file is tried again if its run ends again.
+
+## Classification and vault notes
+
+A memory has a project (or `_global`, read by every project), a route (`code`, `art`, `map`, `doc`,
+`tooling` or none), a kind (`decision`, `convention`, `lesson`, `gotcha`, `preference`, `fact`,
+`incident`), path globs, tags and references.
+
+Each memory is one Markdown note, the source of truth for what a human edits:
+
+```
+<vault>/Knowledge/<repo>/_memories/<route or general>/<kind>/M-12-<slug>.md
+<vault>/Knowledge/<repo>/_memories/_archive/M-3-<slug>.md     archived and superseded
+```
+
+The frontmatter holds `id`, `kind`, `status`, `route`, `paths`, `tags`, `refs` (`type:id`),
+`confidence`, `evidence`, `supersedes`, `created`, `updated`; the body is `# title` then the text.
+`_memories` is never indexed as `knowledge`.
+
+`aidp memory sync` compares each note to the hash recorded at its last write:
+
+| Note | Effect |
+|---|---|
+| edited | applied to the database; references are unioned; `evidence` and dates stay the database's |
+| no `id` | creates an active memory (`kind` defaults to `fact`) and receives an id |
+| unknown `id` | recreates the memory at this id: the database can be rebuilt from the notes |
+| deleted | the memory is archived, unless the notes folder is empty or missing |
+| unreadable or invalid | reported and left untouched |
+
+Every writing `aidp memory` verb syncs after it and `memory context` syncs before it. The daemon
+syncs after a run's ingestion and after each change through `/api/memory`. A sync failure is logged
+and never blocks. `memory sync` prints `{ exported, imported, created, archived, rejected }` and
+exits 4 when a note was refused.
+
+## Claude Code sessions
+
+`aidp memory hook <session-start|prompt|stop|pre-compact|session-end>` reads the hook JSON on stdin.
+The project comes from its `cwd`; a linked worktree counts as its main checkout. It always exits 0
+and prints nothing on failure, inside a pipeline agent (`AIDP_RUN`) or in an extraction.
+
+| Event | Effect |
+|---|---|
+| `session-start` | injects the titles of the active memories (project and `_global`), preferences and conventions first, 500 tokens at most |
+| `prompt` | injects the 3 active memories sharing the most words with the prompt, at least 2 words, 400 tokens at most; injected memories count as used |
+| `stop` | rewrites the session journal; starts an extraction every 5 new prompts |
+| `pre-compact`, `session-end` | rewrites the journal; starts an extraction when a session of 2 prompts or more has new prompts |
+
+A journal is `<vault>/Knowledge/<repo>/_journal/YYYY-MM/YYYY-MM-DD-<session>.md`: the prompts, edited
+files, commits and last reply read from the transcript, without tool output. It is written for a
+session in a git repository with at least two prompts, an edit or a commit, never for a pipeline
+agent. Journals are indexed as `knowledge`.
+
+`aidp memory distill --journal P --session ID` runs detached: it gives the journal to `claude -p
+--model haiku` with no tools, ingests the answer as proposals with a `session` reference, and appends
+its outcome to `<gateway>/memory/distill.log`. `<gateway>/memory/distilled.json` records the prompt
+count already extracted per session. Proposals follow the rules above: active at `confidence >= 0.7`.
+Injected blocks say they are reference data, not instructions.
 
 ## Cost
 

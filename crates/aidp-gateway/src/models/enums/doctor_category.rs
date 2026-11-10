@@ -28,6 +28,22 @@ pub enum DoctorCategory {
     HarnessDefect,
     /// A failure of the product, not of the pipeline.
     ProductBug,
+    /// The MCP server did not answer in time (`CONNECT_TIMEOUT`).
+    McpConnectTimeout,
+    /// The Unity compile gate timed out.
+    UnityCompileTimeout,
+    /// The agent session was lost.
+    SessionLost,
+    /// The provider's API is overloaded or rate limited.
+    ApiOverloaded,
+    /// A branch changed the test infrastructure (scene, package, project setting) and broke every test.
+    TestInfraRegression,
+    /// The branch lags behind `main` and no longer merges or compiles with it.
+    BranchBehindMain,
+    /// The same failure hits several tickets: the harness is at fault, not a game ticket.
+    SharedHarnessFailure,
+    /// A proven defect of the game the earlier bugs did not fix.
+    RealDefect,
     #[default]
     #[serde(other)]
     Other,
@@ -49,6 +65,14 @@ impl DoctorCategory {
             Self::HeadMovedBeforeMerge => "head_moved_before_merge",
             Self::HarnessDefect => "harness_defect",
             Self::ProductBug => "product_bug",
+            Self::McpConnectTimeout => "mcp_connect_timeout",
+            Self::UnityCompileTimeout => "unity_compile_timeout",
+            Self::SessionLost => "session_lost",
+            Self::ApiOverloaded => "api_overloaded",
+            Self::TestInfraRegression => "test_infra_regression",
+            Self::BranchBehindMain => "branch_behind_main",
+            Self::SharedHarnessFailure => "shared_harness_failure",
+            Self::RealDefect => "real_defect",
             Self::Other => "other",
         }
     }

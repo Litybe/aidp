@@ -6,7 +6,7 @@ use crate::models::pr_view_fields::PrViewFields;
 use crate::models::ready_outcome::ReadyOutcome;
 use crate::models::thread_result::ThreadResult;
 use crate::models::update_outcome::UpdateOutcome;
-use crate::pr::{pr_status, Mergeable, PrState};
+use crate::pr::{pr_status, Gate, GateItemId, Mergeable, PrState};
 use crate::IntegrationError;
 use serde_json::Value;
 use std::time::{Duration, Instant};
@@ -73,6 +73,24 @@ pub fn pr_ready(pr: u64, repo: Option<&str>, undo: bool) -> Result<ReadyOutcome,
         changed: true,
         draft: undo,
     })
+}
+
+/// Merges like [`pr_merge`], but a conflict with the base is an outcome, not an error:
+/// `merged: false`, `conflict: true`, the reason in `detail`.
+pub fn pr_merge_reporting_conflict(
+    pr: u64,
+    repo: Option<&str>,
+    expected_head_sha: &str,
+    keep_branch: bool,
+) -> Result<MergeOutcome, IntegrationError> {
+    match pr_merge(pr, repo, expected_head_sha, keep_branch) {
+        Err(IntegrationError::BaseConflict(reason)) => Ok(MergeOutcome {
+            conflict: true,
+            detail: vec![reason],
+            ..MergeOutcome::default()
+        }),
+        other => other,
+    }
 }
 
 /// Rebases the PR branch onto its base through GitHub, then re-reads the head. A rebase replays
@@ -144,7 +162,7 @@ pub(crate) fn wait_for_rebased_head(
             match mergeable {
                 Mergeable::Mergeable => return Ok(sha),
                 Mergeable::Conflicting => {
-                    return Err(IntegrationError::Conflict(
+                    return Err(IntegrationError::BaseConflict(
                         CONFLICT_AFTER_REBASE.to_string(),
                     ))
                 }
@@ -163,10 +181,29 @@ pub(crate) fn wait_for_rebased_head(
     }
 }
 
+/// True when the gate is closed by a conflict with the base and by nothing else.
+fn closed_by_conflict_only(gate: &Gate) -> bool {
+    let mut failing = gate.items.iter().filter(|item| !item.ok).peekable();
+    failing.peek().is_some() && failing.all(|item| item.id == GateItemId::NoConflict)
+}
+
+/// An update of the branch that even the merge of the base could not apply is a base conflict.
+fn update_failure(error: IntegrationError) -> IntegrationError {
+    match error {
+        IntegrationError::Upstream(message)
+            if message.to_lowercase().contains(REBASE_CONFLICT_MARKER) =>
+        {
+            IntegrationError::BaseConflict(message)
+        }
+        other => other,
+    }
+}
+
 /// Squash-merges the PR when its gate is open, pinned to `expected_head_sha`.
 /// A branch behind its base is rebased first; the merge then waits (bounded) for
 /// GitHub to recompute `mergeable` and is pinned to the rebased head. `Ok` always
-/// means merged: a merge that cannot happen is an error.
+/// means merged: a merge that cannot happen is an error, [`IntegrationError::BaseConflict`] when
+/// only a conflict with the base stands in the way.
 pub fn pr_merge(
     pr: u64,
     repo: Option<&str>,
@@ -192,6 +229,9 @@ pub fn pr_merge_polling(
     let status = pr_status(repo, Some(pr), None)?;
     if !status.gate.ok {
         let reason = status.gate.reason.clone().unwrap_or_default();
+        if closed_by_conflict_only(&status.gate) {
+            return Err(IntegrationError::BaseConflict(reason));
+        }
         return Err(IntegrationError::Conflict(reason));
     }
     let slug = slug_of(repo)?;
@@ -207,7 +247,7 @@ pub fn pr_merge_polling(
             .sha
             .clone()
             .unwrap_or_else(|| expected_head_sha.clone());
-        pr_update_branch(pr, repo)?;
+        pr_update_branch(pr, repo).map_err(update_failure)?;
         rebased = true;
         expected_head_sha = wait_for_rebased_head(poll, &previous_head, || {
             let head = view_fields(&number, HEAD_VIEW_FIELDS, repo)?.head_ref_oid;

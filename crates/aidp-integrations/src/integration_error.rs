@@ -11,6 +11,9 @@ pub enum IntegrationError {
     NotFound(String),
     #[error("{0}")]
     Conflict(String),
+    /// The pull request conflicts with its base: only a merge of the base resolves it.
+    #[error("{0}")]
+    BaseConflict(String),
     #[error("{0}")]
     Unauthorized(String),
     #[error("environment variable {var} is not set: {remedy}")]
@@ -28,7 +31,9 @@ impl aidp_core::models::enums::HasErrorKind for IntegrationError {
     fn kind(&self) -> aidp_core::models::enums::ErrorKind {
         match self {
             IntegrationError::NotFound(_) => aidp_core::models::enums::ErrorKind::NotFound,
-            IntegrationError::Conflict(_) => aidp_core::models::enums::ErrorKind::Conflict,
+            IntegrationError::Conflict(_) | IntegrationError::BaseConflict(_) => {
+                aidp_core::models::enums::ErrorKind::Conflict
+            }
             IntegrationError::Unauthorized(_) => aidp_core::models::enums::ErrorKind::Unauthorized,
             IntegrationError::Config { .. } => aidp_core::models::enums::ErrorKind::Config,
             IntegrationError::Upstream(_) => aidp_core::models::enums::ErrorKind::Upstream,

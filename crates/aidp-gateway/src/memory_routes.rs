@@ -190,6 +190,7 @@ fn create(scope: &Scope, body: &Value) -> Reply {
     }
     match MemoryManager::new(&scope.store).add(new) {
         Ok(outcome) => {
+            scope.hub.sync_notes(&scope.project);
             if outcome.memory.status == MemoryStatus::Proposed && !outcome.deduplicated {
                 scope.hub.emit_proposed(&outcome.memory);
             } else {
@@ -216,6 +217,7 @@ fn create(scope: &Scope, body: &Value) -> Reply {
 fn changed(scope: &Scope, action: &str, result: aidp_memory::Result<Memory>) -> Reply {
     match result {
         Ok(memory) => {
+            scope.hub.sync_notes(&scope.project);
             scope.hub.emit_changed(&memory, action);
             (STATUS_OK, memory_json(&memory))
         }

@@ -3,6 +3,7 @@
 
 pub mod adopted_pr;
 pub mod blocker_link;
+pub mod bug_rearm;
 pub mod constants;
 pub mod created_issue;
 pub mod enums;

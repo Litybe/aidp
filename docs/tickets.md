@@ -317,6 +317,7 @@ doctor:                          # the pipeline doctor, see doctor.md
   enabled: true
   stuck_minutes: 10              # a running step with no live run for this long is stuck
   max_attempts_per_ticket: 2     # investigations per ticket over 24 h
+  # harness_ticket: GH-1          # issue under which bugs shared by several tickets are raised
 ```
 
 `doctor` is read by the daemon's doctor on every pass ([doctor.md](doctor.md)). `local.*` is read by every verb (key allocation, the archive sweep). `dispatcher` is read by the

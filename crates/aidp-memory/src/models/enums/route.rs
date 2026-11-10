@@ -5,6 +5,7 @@ string_enum!(
         Art => "art",
         Map => "map",
         Doc => "doc",
+        Tooling => "tooling",
     }
 );
 
@@ -17,6 +18,7 @@ impl Route {
             Route::Art => &[Source::Bible, Source::Doc, Source::Knowledge],
             Route::Map => &[Source::Bible, Source::Doc, Source::Knowledge, Source::Code],
             Route::Doc => &[Source::Bible, Source::Doc, Source::Knowledge],
+            Route::Tooling => &[Source::Knowledge, Source::Doc, Source::Run],
         }
     }
 }

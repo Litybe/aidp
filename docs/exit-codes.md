@@ -40,6 +40,8 @@ upstream family shared by the other `aidp gh` verbs.
 - 4 when `pr-merge` is refused: the gate is closed or squash merge is disabled. The gate requires
   an approval only when GitHub reports a review decision, or when a readable branch rule demands
   approving reviews. A repository whose rules cannot be read requires none.
+  With `--report-conflict`, a refusal caused by a conflict with the base alone exits 0 instead and
+  prints `merged: false`, `conflict: true`.
 - 5 on a missing or unauthenticated `gh`, or a failed GitHub call.
 
 ## PR detail verbs

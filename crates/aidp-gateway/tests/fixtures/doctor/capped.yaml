@@ -1,0 +1,14 @@
+id: doctor-capped
+version: 1
+workspace: project
+inputs:
+  ticket: { required: true }
+steps:
+  - id: bug_capped_stop
+    kind: action
+    use: fail
+    phase: bug
+    with:
+      kind: business
+      reason: BusinessError
+      message: "Plafond de 3 bugs atteint : issue bloquée"

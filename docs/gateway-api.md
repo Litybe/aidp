@@ -2622,14 +2622,24 @@ An incident:
   "diagnosis": { "category": "false_failure", "cause": "…", "evidence": [], "confidence": 0.85,
                  "action": "retry_step", "params": {"step": "implement"}, "needs_human": false,
                  "summary": "…" },
-  "outcome": { "action": "retry_step", "idempotencyKey": "GH-214/implement@1:action", "ok": true,
+  "outcome": { "action": "retry_step", "idempotencyKey": "GH-214/implement@1:action:1", "ok": true,
                "detail": "retried `implement`", "at": "…" },
+  "actions": [ { "action": "retry_step", "idempotencyKey": "GH-214/implement@1:action:1", "ok": true,
+                 "detail": "retried `implement`", "at": "…" } ],
+  "live": true, "activityMs": 1794241107819,
   "note": "retry_step : retried `implement`", "commented": true }
 ```
 
-`trigger`: `flow_failed`, `flow_escalated`, `run_paused`, `step_stuck`, `waiting_too_long`.
+`outcome` is the latest action, `actions` all of them (3 at most, one idempotency key per attempt).
+`live` and `activityMs` order the incidents (live flows first, newest first). `nextAttemptMs` is the
+earliest time a passing fault is resumed again; `prUrl` the pull request opened for a harness patch.
+
+`trigger`: `flow_failed`, `flow_escalated`, `run_paused`, `step_stuck`, `waiting_too_long`, `bugs_not_converging`. New incident fields: `sharedPattern`, `affected[]`, `rearmedMs`.
 `status`: `detected`, `investigating`, `fixed`, `action_failed`, `needs_human`, `refused`,
-`no_action`, `investigation_failed`, `capped`. `diagnosis` keeps the snake_case keys of
+`no_action` (also an obsolete incident, note `obsolete: …`), `investigation_failed`, `capped`.
+`diagnosis.action` is one of `retry_step`, `requeue_to_test`, `requeue_dev`,
+`abort_dead_flow_and_requeue`, `update_pr_branch`, `release_unity_lock`, `create_bug_ticket`,
+`open_harness_pr`, `restore_test_infra`, `none`. New categories: `test_infra_regression`, `branch_behind_main`, `shared_harness_failure`, `real_defect`. `diagnosis` keeps the snake_case keys of
 `diagnosis.json`. Optional fields are absent until set.
 
 ### Event `doctor.incident`

@@ -11,6 +11,8 @@ pub struct ContextRequest {
     pub route: Option<Route>,
     pub stage: Option<String>,
     pub budget_tokens: usize,
+    /// Counts the injected memories as used; false for a measurement.
+    pub record_use: bool,
 }
 
 impl ContextRequest {
@@ -23,6 +25,7 @@ impl ContextRequest {
             route: None,
             stage: None,
             budget_tokens: DEFAULT_CONTEXT_BUDGET,
+            record_use: true,
         }
     }
 }

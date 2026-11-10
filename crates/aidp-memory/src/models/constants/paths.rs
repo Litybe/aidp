@@ -28,7 +28,10 @@ pub const EXCLUDED_DIRS: &[&str] = &[
     "graphify-out",
     "UserSettings",
     ".state",
+    NOTES_DIR,
 ];
+/// Folder of the memory notes under `<vault>/Knowledge/<repo>`.
+pub const NOTES_DIR: &str = "_memories";
 /// Extension of C# files.
 pub const CSHARP_EXT: &str = "cs";
 /// Extension of Markdown files.

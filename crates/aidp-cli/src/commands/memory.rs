@@ -3,13 +3,14 @@ use crate::args::memory::{MemoryOp, ProjectArg, RagOp};
 use crate::ctx::Ctx;
 use crate::models::hit_view::HitView;
 use aidp_core::{ExitStatus, Format};
+use aidp_memory::models::constants::paths::NOTES_DIR;
 use aidp_memory::models::memory_filter::MemoryFilter;
 use aidp_memory::models::memory_patch::MemoryPatch;
 use aidp_memory::models::memory_ref::MemoryRef;
 use aidp_memory::{
-    pack, render_markdown, resolve_project, Bm25Retriever, ContextRequest, IndexOptions, IndexRoot,
-    Indexer, Memory, MemoryError, MemoryKind, MemoryManager, MemoryStatus, MemoryStore, NewMemory,
-    ProjectRef, RefType, Retriever, Route, SearchQuery, Source,
+    is_registered, pack, render_markdown, resolve_project, Bm25Retriever, ContextRequest,
+    IndexOptions, IndexRoot, Indexer, Memory, MemoryError, MemoryKind, MemoryManager, MemoryStatus,
+    MemoryStore, NewMemory, ProjectRef, RefType, Retriever, Route, SearchQuery, Source,
 };
 use std::path::PathBuf;
 
@@ -22,10 +23,10 @@ const NO_RESULT: &str = "Aucun resultat.";
 const NO_MEMORY: &str = "Aucune memoire.";
 const ISSUE_NOT_MIRRORED: &str = "issue not found in the ticket mirror; searching without its text";
 
-struct Opened {
-    store: MemoryStore,
-    project: ProjectRef,
-    known_root: bool,
+pub(super) struct Opened {
+    pub(super) store: MemoryStore,
+    pub(super) project: ProjectRef,
+    pub(super) known_root: bool,
 }
 
 /// Runs one `aidp rag` verb.
@@ -75,12 +76,162 @@ pub fn run_rag(ctx: &Ctx, op: RagOp) -> anyhow::Result<CommandOutput> {
             }
             Ok(CommandOutput::text(render_markdown(&packed).trim_end()))
         }
+        RagOp::Eval { cases, project, k } => {
+            let opened = open(ctx, &project, false)?;
+            let content = aidp_core::text::read_text_lenient(ctx.absolute(&cases))?;
+            let mut parsed = aidp_memory::eval::parse_cases(&content)?;
+            for case in &mut parsed {
+                if let Some(text) = case
+                    .issue
+                    .as_deref()
+                    .and_then(|issue| issue_text(ctx, &opened.project, issue))
+                {
+                    case.query = format!("{text} {}", case.query);
+                }
+                case.issue_route = case
+                    .issue
+                    .as_deref()
+                    .and_then(|issue| issue_route(ctx, &opened.project, issue));
+            }
+            let manager = MemoryManager::new(&opened.store);
+            let report = aidp_memory::eval::evaluate(
+                &manager,
+                &retriever(&opened),
+                &opened.project.key,
+                &parsed,
+                k,
+            )?;
+            Ok(CommandOutput::json(
+                ctx.format(),
+                serde_json::to_value(report)?,
+            ))
+        }
+        RagOp::Purge { key } => {
+            let gateway = aidp_gateway::paths::state_dir()?;
+            if is_registered(&key, Some(&gateway)) {
+                return Err(MemoryError::Conflict(format!(
+                    "`{key}` is a registered project; its index is not purged"
+                ))
+                .into());
+            }
+            let report = MemoryStore::open_in(&gateway)?.purge_index(&key)?;
+            Ok(CommandOutput::json(
+                Some(Format::JsonCompact),
+                serde_json::to_value(report)?,
+            ))
+        }
     }
 }
 
-/// Runs one `aidp memory` verb.
+/// Runs one `aidp memory` verb and keeps the vault notes in step with the database.
 pub fn run_memory(ctx: &Ctx, op: MemoryOp) -> anyhow::Result<CommandOutput> {
+    let read_notes_first = matches!(op, MemoryOp::Context { .. } | MemoryOp::Recall { .. });
+    let synced = synced_project(&op);
+    if let Some(project) = synced.as_ref().filter(|_| read_notes_first) {
+        sync_notes_quietly(ctx, project);
+    }
+    let output = dispatch_memory(ctx, op)?;
+    if let Some(project) = synced.as_ref().filter(|_| !read_notes_first) {
+        sync_notes_quietly(ctx, project);
+    }
+    Ok(output)
+}
+
+fn synced_project(op: &MemoryOp) -> Option<ProjectArg> {
     match op {
+        MemoryOp::Context { project, .. }
+        | MemoryOp::Recall { project, .. }
+        | MemoryOp::Add { project, .. }
+        | MemoryOp::Edit { project, .. }
+        | MemoryOp::Approve { project, .. }
+        | MemoryOp::Archive { project, .. }
+        | MemoryOp::Merge { project, .. }
+        | MemoryOp::Gc { project }
+        | MemoryOp::Distill { project, .. }
+        | MemoryOp::Ingest { project, .. } => Some(project.clone()),
+        MemoryOp::List { .. }
+        | MemoryOp::Show { .. }
+        | MemoryOp::Sync { .. }
+        | MemoryOp::Hook { .. } => None,
+    }
+}
+
+pub(super) fn knowledge_dir(ctx: &Ctx, opened: &Opened) -> Option<PathBuf> {
+    let vault = ctx.vault_override()?;
+    let repo = if opened.known_root {
+        aidp_core::vault::repo_segment(&opened.project.root)
+    } else {
+        opened.project.key.clone()
+    };
+    Some(vault.knowledge_dir(&repo))
+}
+
+fn notes_dir(ctx: &Ctx, opened: &Opened) -> Option<PathBuf> {
+    Some(knowledge_dir(ctx, opened)?.join(NOTES_DIR))
+}
+
+fn sync_notes_quietly(ctx: &Ctx, project: &ProjectArg) {
+    let outcome = open(ctx, project, false).and_then(|opened| {
+        let Some(dir) = notes_dir(ctx, &opened) else {
+            return Ok(());
+        };
+        let report = MemoryManager::new(&opened.store).sync_vault(&opened.project.key, &dir)?;
+        for rejection in report.rejected {
+            tracing::warn!(file = %rejection.file, "memory note refused: {}", rejection.reason);
+        }
+        Ok(())
+    });
+    if let Err(error) = outcome {
+        tracing::warn!(%error, "memory notes not synchronised");
+    }
+}
+
+fn dispatch_memory(ctx: &Ctx, op: MemoryOp) -> anyhow::Result<CommandOutput> {
+    match op {
+        MemoryOp::Hook { event } => Ok(super::memory_hook::run(ctx, event)),
+        MemoryOp::Recall {
+            query,
+            project,
+            route,
+            budget,
+        } => {
+            let opened = open(ctx, &project, false)?;
+            let mut request = ContextRequest::new(opened.project.key.clone());
+            request.issue_text = Some(query);
+            request.route = route.as_deref().map(Route::parse).transpose()?;
+            request.budget_tokens = budget;
+            let block = MemoryManager::new(&opened.store).context(&request, &retriever(&opened))?;
+            if wants_json(ctx) {
+                return Ok(CommandOutput::json(
+                    ctx.format(),
+                    serde_json::to_value(&block)?,
+                ));
+            }
+            if block.markdown.trim().is_empty() {
+                return Ok(CommandOutput::text(NO_RESULT));
+            }
+            Ok(CommandOutput::text(block.markdown.trim_end()))
+        }
+        MemoryOp::Distill {
+            journal,
+            session,
+            project,
+        } => super::memory_hook::distill(ctx, &journal, &session, &project),
+        MemoryOp::Sync { project } => {
+            let opened = open(ctx, &project, false)?;
+            let dir = notes_dir(ctx, &opened).ok_or_else(|| {
+                MemoryError::NotFound("no vault: the notes have no folder".to_string())
+            })?;
+            let report = MemoryManager::new(&opened.store).sync_vault(&opened.project.key, &dir)?;
+            let refused = !report.rejected.is_empty();
+            let output =
+                CommandOutput::json(Some(Format::JsonCompact), serde_json::to_value(report)?);
+            Ok(if refused {
+                output.with_exit(ExitStatus::PolicyRefusal)
+            } else {
+                output
+            })
+        }
         MemoryOp::Context {
             project,
             issue,
@@ -98,6 +249,9 @@ pub fn run_memory(ctx: &Ctx, op: MemoryOp) -> anyhow::Result<CommandOutput> {
                 match issue_text(ctx, &opened.project, &issue) {
                     Some(text) => request.issue_text = Some(text),
                     None => diagnostics.push(format!("{issue}: {ISSUE_NOT_MIRRORED}")),
+                }
+                if request.route.is_none() {
+                    request.route = issue_route(ctx, &opened.project, &issue);
                 }
                 request.issue = Some(issue);
             }
@@ -218,7 +372,12 @@ pub fn run_memory(ctx: &Ctx, op: MemoryOp) -> anyhow::Result<CommandOutput> {
         MemoryOp::Ingest { path, project } => {
             let opened = open(ctx, &project, false)?;
             let target = ctx.absolute(&path);
-            let report = MemoryManager::new(&opened.store).ingest(&opened.project.key, &target)?;
+            let route_of = |issue: &str| issue_route(ctx, &opened.project, issue);
+            let report = MemoryManager::new(&opened.store).ingest_routed(
+                &opened.project.key,
+                &target,
+                &route_of,
+            )?;
             let refused = !report.rejected.is_empty();
             let output = if wants_json(ctx) {
                 CommandOutput::json(ctx.format(), serde_json::to_value(&report)?)
@@ -248,7 +407,7 @@ pub fn run_memory(ctx: &Ctx, op: MemoryOp) -> anyhow::Result<CommandOutput> {
     }
 }
 
-fn open(ctx: &Ctx, argument: &ProjectArg, strict: bool) -> anyhow::Result<Opened> {
+pub(super) fn open(ctx: &Ctx, argument: &ProjectArg, strict: bool) -> anyhow::Result<Opened> {
     let gateway = aidp_gateway::paths::state_dir()?;
     let workspace = ctx.workspace();
     let resolved = resolve_project(argument.project.as_deref(), Some(&gateway), &workspace);
@@ -327,7 +486,7 @@ fn extra_roots(ctx: &Ctx, project: &ProjectRef) -> Vec<IndexRoot> {
     ]
 }
 
-fn issue_text(ctx: &Ctx, project: &ProjectRef, issue: &str) -> Option<String> {
+fn ticket_mirror(ctx: &Ctx, project: &ProjectRef, issue: &str) -> Option<String> {
     let vault = ctx.vault_override()?;
     let repo = aidp_core::vault::repo_segment(&project.root);
     let file: PathBuf = vault
@@ -336,6 +495,15 @@ fn issue_text(ctx: &Ctx, project: &ProjectRef, issue: &str) -> Option<String> {
         .join(repo)
         .join(format!("{issue}.{TICKET_EXTENSION}"));
     std::fs::read_to_string(file).ok()
+}
+
+fn issue_text(ctx: &Ctx, project: &ProjectRef, issue: &str) -> Option<String> {
+    ticket_mirror(ctx, project, issue).map(|mirror| aidp_memory::context::issue_query_text(&mirror))
+}
+
+fn issue_route(ctx: &Ctx, project: &ProjectRef, issue: &str) -> Option<Route> {
+    ticket_mirror(ctx, project, issue)
+        .and_then(|mirror| aidp_memory::context::ticket_route(&mirror))
 }
 
 fn describe(memory: &Memory) -> String {

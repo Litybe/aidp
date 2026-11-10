@@ -1004,7 +1004,7 @@ pub fn validate_claude_session_id(v: &str) -> anyhow::Result<()> {
 
 /// Build the `claude` command without a shell; `AIDP_CLAUDE_BIN` overrides the PATH lookup.
 /// API-key env vars are stripped unless `AIDP_ALLOW_API_KEY=1`, to ride the Max subscription.
-pub(crate) fn claude_command(
+pub fn claude_command(
     args: &[String],
     cwd: &str,
     extra_env: &[(String, String)],

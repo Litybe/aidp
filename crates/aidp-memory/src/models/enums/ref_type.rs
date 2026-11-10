@@ -4,5 +4,6 @@ string_enum!(
         Issue => "issue",
         Pr => "pr",
         Run => "run",
+        Session => "session",
     }
 );

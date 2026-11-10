@@ -1,6 +1,9 @@
 //! Named constants for this crate, one file per concept.
 
 pub mod limits;
+pub mod notes;
 pub mod paths;
+pub mod proposal_fields;
 pub mod schema;
+pub mod sessions;
 pub mod words;

@@ -252,7 +252,7 @@ impl FakeAidp {
                     .push(format!("pr-ready:{number}"));
                 (0, json!({ "changed": true }))
             }
-            ["gh", "pr-merge", number, "--expected-head-sha", sha] => {
+            ["gh", "pr-merge", number, "--expected-head-sha", sha, "--report-conflict"] => {
                 self.verbs
                     .lock()
                     .unwrap()

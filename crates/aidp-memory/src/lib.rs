@@ -8,18 +8,24 @@
 
 pub mod chunking;
 pub mod context;
+pub mod distill;
 pub mod error;
+pub mod eval;
 pub mod graph;
+pub mod hook_context;
 pub mod indexer;
 pub mod manager;
 pub mod mmr;
 pub mod models;
 pub mod pack;
 pub mod project;
+mod proposal_shape;
 pub mod proposals;
 pub mod retriever;
+pub mod session_journal;
 pub mod store;
 pub mod text;
+pub mod vault_notes;
 
 pub use error::{MemoryError, Result};
 pub use indexer::Indexer;
@@ -38,7 +44,7 @@ pub use models::packed::Packed;
 pub use models::project_ref::ProjectRef;
 pub use models::search_query::SearchQuery;
 pub use pack::{pack, render_markdown};
-pub use project::resolve_project;
+pub use project::{is_registered, resolve_project};
 pub use retriever::{Bm25Retriever, Retriever};
 pub use store::{db_path, MemoryStore};
 
