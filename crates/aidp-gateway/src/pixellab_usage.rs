@@ -3,15 +3,12 @@
 //! The daemon never calls Pixellab: it only reads what the stages recorded.
 
 use crate::models::constants::pixellab::{
-    BALANCE_KEYS, BALANCE_MAX_DEPTH, BALANCE_TTL, GENERATIONS_REMAINING_LABEL, MAX_RUNS_PER_TICKET,
+    BALANCE_KEYS, BALANCE_MAX_DEPTH, GENERATIONS_REMAINING_LABEL, MAX_RUNS_PER_TICKET,
     MAX_STAGE_DEPTH, PIPELINES_DIR, USAGE_FILE,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, OnceLock};
-use std::time::Instant;
 
 /// One `pixellab-usage.json`, as the art stages write it.
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
@@ -155,13 +152,45 @@ pub fn usage_files(run_dir: &Path) -> Vec<PathBuf> {
     found
 }
 
-/// The usage of one run: generations summed over its stages, balance from the first
-/// `balanceBefore` to the last `balanceAfter`.
-pub fn aggregate_run(run_id: &str, run_dir: &Path) -> RunPixellabUsage {
+/// What one read of the usage files of a run yields: its usage and the newest balance it recorded.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct RunUsageSummary {
+    pub usage: RunPixellabUsage,
+    pub balance: Option<BalanceSnapshot>,
+}
+
+/// The newest balance (`balanceAfter`, else `balanceBefore`) of `files`, the first of equal dates.
+fn newest_balance(run_id: &str, files: &[PixellabUsageFile]) -> Option<BalanceSnapshot> {
+    let mut best: Option<BalanceSnapshot> = None;
+    for file in files {
+        let Some(raw) = file
+            .balance_after
+            .clone()
+            .or_else(|| file.balance_before.clone())
+        else {
+            continue;
+        };
+        let recorded_at = file.recorded_at.clone().unwrap_or_default();
+        if best.as_ref().is_some_and(|b| b.recorded_at >= recorded_at) {
+            continue;
+        }
+        best = Some(BalanceSnapshot {
+            amount: balance_amount(&raw),
+            raw,
+            recorded_at,
+            run_id: run_id.to_string(),
+        });
+    }
+    best
+}
+
+/// The usage and the newest balance of one run, from a single read of its usage files.
+pub fn summarize_run(run_id: &str, run_dir: &Path) -> RunUsageSummary {
     let mut files: Vec<PixellabUsageFile> = usage_files(run_dir)
         .iter()
         .filter_map(|path| read_usage_file(path))
         .collect();
+    let balance = newest_balance(run_id, &files);
     files.sort_by(|a, b| a.recorded_at.cmp(&b.recorded_at));
     let before = files
         .iter()
@@ -170,7 +199,7 @@ pub fn aggregate_run(run_id: &str, run_dir: &Path) -> RunPixellabUsage {
         .iter()
         .rev()
         .find_map(|file| file.balance_after.as_ref().and_then(balance_amount));
-    RunPixellabUsage {
+    let usage = RunPixellabUsage {
         run_id: run_id.to_string(),
         generations: files.iter().map(|file| file.generations).sum(),
         jobs: files.iter().map(|file| file.jobs.len() as u32).sum(),
@@ -179,6 +208,30 @@ pub fn aggregate_run(run_id: &str, run_dir: &Path) -> RunPixellabUsage {
         spent: before.zip(after).map(|(before, after)| before - after),
         recorded_at: files.last().and_then(|file| file.recorded_at.clone()),
         stages: files.len() as u32,
+    };
+    RunUsageSummary { usage, balance }
+}
+
+/// The usage of one run: generations summed over its stages, balance from the first
+/// `balanceBefore` to the last `balanceAfter`.
+pub fn aggregate_run(run_id: &str, run_dir: &Path) -> RunPixellabUsage {
+    summarize_run(run_id, run_dir).usage
+}
+
+/// The usage of a ticket from the usage of its runs, newest run first.
+pub fn ticket_usage_of(
+    key: &str,
+    runs: impl Iterator<Item = RunPixellabUsage>,
+) -> TicketPixellabUsage {
+    let runs: Vec<RunPixellabUsage> = runs
+        .take(MAX_RUNS_PER_TICKET)
+        .filter(|run| run.stages > 0)
+        .collect();
+    TicketPixellabUsage {
+        key: key.to_string(),
+        generations: runs.iter().map(|run| run.generations).sum(),
+        spent: runs.iter().filter_map(|run| run.spent).sum(),
+        runs,
     }
 }
 
@@ -204,18 +257,13 @@ fn run_dirs_of(vault: &Path, key: &str) -> Vec<(String, PathBuf)> {
 }
 
 /// The usage of ticket `key`: every run of `<vault>/Pipelines/*/<key>/` that recorded some.
+/// Walks the vault; the routes read [`crate::vault_index`] instead.
 pub fn aggregate_ticket(vault: &Path, key: &str) -> TicketPixellabUsage {
-    let runs: Vec<RunPixellabUsage> = run_dirs_of(vault, key)
-        .iter()
-        .map(|(run_id, dir)| aggregate_run(run_id, dir))
-        .filter(|run| run.stages > 0)
-        .collect();
-    TicketPixellabUsage {
-        key: key.to_string(),
-        generations: runs.iter().map(|run| run.generations).sum(),
-        spent: runs.iter().filter_map(|run| run.spent).sum(),
-        runs,
-    }
+    let dirs = run_dirs_of(vault, key);
+    ticket_usage_of(
+        key,
+        dirs.iter().map(|(run_id, dir)| aggregate_run(run_id, dir)),
+    )
 }
 
 fn all_run_dirs(vault: &Path) -> Vec<(String, PathBuf)> {
@@ -242,52 +290,36 @@ fn all_run_dirs(vault: &Path) -> Vec<(String, PathBuf)> {
     runs
 }
 
-/// Scans every run of the vault for the newest recorded balance (`balanceAfter`, else `balanceBefore`).
-pub fn scan_latest_balance(vault: &Path) -> Option<BalanceSnapshot> {
+/// The newest of `candidates` by date, the first of equal dates.
+pub fn newest_of(candidates: impl Iterator<Item = BalanceSnapshot>) -> Option<BalanceSnapshot> {
     let mut best: Option<BalanceSnapshot> = None;
-    for (run_id, dir) in all_run_dirs(vault) {
-        for path in usage_files(&dir) {
-            let Some(file) = read_usage_file(&path) else {
-                continue;
-            };
-            let Some(raw) = file.balance_after.or(file.balance_before) else {
-                continue;
-            };
-            let recorded_at = file.recorded_at.unwrap_or_default();
-            if best.as_ref().is_some_and(|b| b.recorded_at >= recorded_at) {
-                continue;
-            }
-            best = Some(BalanceSnapshot {
-                amount: balance_amount(&raw),
-                raw,
-                recorded_at,
-                run_id: run_id.clone(),
-            });
+    for candidate in candidates {
+        if best
+            .as_ref()
+            .is_some_and(|b| b.recorded_at >= candidate.recorded_at)
+        {
+            continue;
         }
+        best = Some(candidate);
     }
     best
 }
 
-type BalanceCache = Mutex<HashMap<PathBuf, (Instant, Option<BalanceSnapshot>)>>;
-
-fn balance_cache() -> &'static BalanceCache {
-    static CACHE: OnceLock<BalanceCache> = OnceLock::new();
-    CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+/// Scans every run of the vault for the newest recorded balance (`balanceAfter`, else `balanceBefore`).
+/// Walks the vault; the routes read [`crate::vault_index`] instead.
+pub fn scan_latest_balance(vault: &Path) -> Option<BalanceSnapshot> {
+    newest_of(
+        all_run_dirs(vault)
+            .iter()
+            .filter_map(|(run_id, dir)| summarize_run(run_id, dir).balance),
+    )
 }
 
-/// [`scan_latest_balance`], remembered for a short while so a dispatcher tick does not rescan the vault.
+/// The newest balance any run recorded, read from the vault index.
 pub fn latest_balance(vault: &Path) -> Option<BalanceSnapshot> {
-    let mut cache = balance_cache()
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    if let Some((scanned_at, snapshot)) = cache.get(vault) {
-        if scanned_at.elapsed() < BALANCE_TTL {
-            return snapshot.clone();
-        }
-    }
-    let snapshot = scan_latest_balance(vault);
-    cache.insert(vault.to_path_buf(), (Instant::now(), snapshot.clone()));
-    snapshot
+    crate::vault_index::snapshot(vault)
+        .latest_balance()
+        .cloned()
 }
 
 /// `GET /api/pixellab/balance`: the last known balance, its date and the configured reserve.
@@ -324,12 +356,9 @@ pub fn balance_report(vault: &Path) -> Value {
     }
 }
 
-/// Forgets the remembered balance of `vault`, so the next read rescans.
+/// Drops the index of `vault`, so the next read rebuilds it.
 pub fn forget_balance(vault: &Path) {
-    balance_cache()
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .remove(vault);
+    crate::vault_index::forget(vault);
 }
 
 #[cfg(test)]

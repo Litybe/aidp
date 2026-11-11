@@ -141,6 +141,14 @@ const QUERY_PR: &str = "pr";
 const QUERY_FROM: &str = "from";
 const QUERY_TO: &str = "to";
 const QUERY_GROUP_BY: &str = "groupBy";
+const QUERY_KEYS: &str = "keys";
+const CACHE_INVALIDATOR_THREAD: &str = "cache-invalidator";
+const MEMORY_EVENT_PREFIX: &str = "memory.";
+const RUN_EVENTS: [&str; 3] = [
+    crate::native_runs::EVENT_RUN_STARTED,
+    crate::native_runs::EVENT_RUN_STAGE_CHANGED,
+    crate::native_runs::EVENT_RUN_ENDED,
+];
 const QUERY_SERVICE: &str = "service";
 const QUERY_SOURCE: &str = "source";
 const SESSION_NOT_FOUND: &str = "session not found";
@@ -242,6 +250,8 @@ pub struct App {
     pub static_ui: crate::static_ui::StaticUi,
     /// The pipeline doctor; `None` without a flow engine.
     pub doctor: Option<Arc<crate::doctor::Doctor>>,
+    /// Stale-while-revalidate caches of the worktree and memory listings.
+    pub route_caches: crate::route_caches::RouteCaches,
 }
 
 /// The JSON answer of a launch: a native run acknowledgement, or the session launch unchanged.
@@ -822,7 +832,10 @@ fn serve_on_with_auth(
         memory,
         static_ui,
         doctor,
+        route_caches: crate::route_caches::RouteCaches::default(),
     });
+    crate::vault_index::warm(&app.vault_root, &app.state_dir);
+    spawn_cache_invalidator(&app);
 
     let server =
         Arc::new(Server::from_listener(listener, None).map_err(|e| anyhow!("from_listener: {e}"))?);
@@ -869,6 +882,28 @@ fn spawn_inbox_refresh(app: &Arc<App>) {
             app.squad_prs.notify_changed(&app.bus);
         }
     });
+}
+
+/// Drops the cached reads a bus event outdates: memory listings on a memory event, and the run
+/// index of the vault on a native run event.
+fn spawn_cache_invalidator(app: &Arc<App>) {
+    let events = app.bus.subscribe();
+    let app = Arc::clone(app);
+    let spawned = thread::Builder::new()
+        .name(CACHE_INVALIDATOR_THREAD.to_string())
+        .spawn(move || {
+            while let Ok(event) = events.recv() {
+                let kind = event["type"].as_str().unwrap_or_default();
+                if kind.starts_with(MEMORY_EVENT_PREFIX) {
+                    app.route_caches.memory.clear();
+                } else if RUN_EVENTS.contains(&kind) {
+                    crate::vault_index::invalidate(&app.vault_root);
+                }
+            }
+        });
+    if let Err(error) = spawned {
+        tracing::warn!(%error, "cache invalidator not started");
+    }
 }
 
 /// Runs an attention pass on its own thread; the cache fetch may take seconds.
@@ -1989,7 +2024,7 @@ macro_rules! ticket_store_or_503 {
 }
 
 /// One row of `GET /api/worktrees`.
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 struct WorktreeRow {
     key: String,
     project: String,
@@ -2012,7 +2047,7 @@ struct TicketWorktree {
 /// `GET /api/worktrees`: the worktrees under `<vault>/Pipelines`, optionally of one project.
 /// `prunable` is true when the owning ticket is done, cancelled or unknown.
 fn list_worktrees(
-    app: &App,
+    projects: &[Project],
     store: &TicketStore,
     project_filter: Option<&str>,
 ) -> Vec<WorktreeRow> {
@@ -2025,38 +2060,65 @@ fn list_worktrees(
         .map(|ticket| (ticket.key, ticket.status))
         .collect();
     let runner = OsProcessRunner;
-    let mut rows = Vec::new();
-    for project in app.projects.list() {
+    let mut listed = Vec::new();
+    for project in projects {
         if project_filter.is_some_and(|wanted| wanted != project.id) {
             continue;
         }
-        let entries = crate::worktrees::list(&runner, Path::new(&project.path), store.vault_root());
-        for entry in entries {
-            let Some(key) = crate::worktrees::worktree_owner(&entry.path) else {
-                continue;
-            };
-            let prunable = matches!(
-                statuses.get(&key),
-                None | Some(Status::Done) | Some(Status::Cancelled)
-            );
-            let exists = entry.path.exists();
-            let modified = if exists {
-                crate::worktrees::modified_count(&runner, &entry.path)
-            } else {
-                0
-            };
-            rows.push(WorktreeRow {
-                key,
-                project: project.id.clone(),
-                path: entry.path.display().to_string(),
-                branch: entry.branch,
-                exists,
-                modified,
-                prunable,
-            });
+        for entry in crate::worktrees::list(&runner, Path::new(&project.path), store.vault_root()) {
+            if let Some(key) = crate::worktrees::worktree_owner(&entry.path) {
+                listed.push((project, key, entry));
+            }
         }
     }
-    rows
+    std::thread::scope(|scope| {
+        let workers: Vec<_> = listed
+            .into_iter()
+            .map(|(project, key, entry)| {
+                let (runner, statuses) = (&runner, &statuses);
+                scope.spawn(move || {
+                    let prunable = matches!(
+                        statuses.get(&key),
+                        None | Some(Status::Done) | Some(Status::Cancelled)
+                    );
+                    let exists = entry.path.exists();
+                    let modified = if exists {
+                        crate::worktrees::modified_count(runner, &entry.path)
+                    } else {
+                        0
+                    };
+                    WorktreeRow {
+                        key,
+                        project: project.id.clone(),
+                        path: entry.path.display().to_string(),
+                        branch: entry.branch,
+                        exists,
+                        modified,
+                        prunable,
+                    }
+                })
+            })
+            .collect();
+        workers
+            .into_iter()
+            .filter_map(|worker| worker.join().ok())
+            .collect()
+    })
+}
+
+/// `list_worktrees` answered from the stale-while-revalidate cache of the app.
+fn cached_worktrees(app: &App, project_filter: Option<String>) -> anyhow::Result<Value> {
+    let projects = app.projects.list();
+    let vault = app.vault_root.clone();
+    let slot = project_filter.clone().unwrap_or_default();
+    app.route_caches.worktrees.get(slot, move || {
+        let store = TicketStore::open(&vault)?;
+        Ok(json!(list_worktrees(
+            &projects,
+            &store,
+            project_filter.as_deref()
+        )))
+    })
 }
 
 /// The project of a ticket and the repo segment its worktrees live under.
@@ -3020,6 +3082,19 @@ fn route(
             let report = crate::cost_routes::anomaly_report(&all, from.as_deref(), to.as_deref());
             Reply::Json(HTTP_OK, json!(report))
         }
+        (Method::Get, ["tickets", crate::routes::TICKET_COSTS_SEGMENT]) => {
+            let all = app.sessions.list(None, None, 100_000);
+            let keys: Option<Vec<String>> = qs(QUERY_KEYS).map(|raw| {
+                raw.split(',')
+                    .map(str::trim)
+                    .filter(|key| !key.is_empty())
+                    .map(str::to_string)
+                    .collect()
+            });
+            let report =
+                crate::cost_routes::ticket_costs_report(&all, &app.vault_root, keys.as_deref());
+            Reply::Json(HTTP_OK, json!(report))
+        }
         (Method::Get, ["tickets", key, crate::routes::TICKET_COST_SEGMENT]) => {
             let all = app.sessions.list(None, None, 100_000);
             let rate_limit = app.sessions.rate_limit();
@@ -3109,13 +3184,11 @@ fn route(
             }
         }
         (Method::Get, ["worktrees"]) => {
-            let store = ticket_store_or_503!(app);
-            Reply::Json(
-                HTTP_OK,
-                json!(list_worktrees(app, &store, qs(QUERY_PROJECT).as_deref())),
-            )
+            let _store = ticket_store_or_503!(app);
+            Reply::Json(HTTP_OK, cached_worktrees(app, qs(QUERY_PROJECT))?)
         }
         (Method::Post, ["worktrees", "ensure"]) => {
+            app.route_caches.worktrees.clear();
             let store = ticket_store_or_503!(app);
             match worktree_key(body).and_then(|key| ensure_worktree(app, &store, &key)) {
                 Ok(response) => Reply::Json(HTTP_OK, serde_json::to_value(&response)?),
@@ -3123,6 +3196,7 @@ fn route(
             }
         }
         (Method::Post, ["worktrees", "remove"]) => {
+            app.route_caches.worktrees.clear();
             let store = ticket_store_or_503!(app);
             match worktree_key(body).and_then(|key| remove_ticket_worktree(app, &store, &key)) {
                 Ok(response) => Reply::Json(HTTP_OK, serde_json::to_value(&response)?),
@@ -3130,6 +3204,7 @@ fn route(
             }
         }
         (Method::Post, ["worktrees", "prune"]) => {
+            app.route_caches.worktrees.clear();
             let _store = ticket_store_or_503!(app);
             let sweep = app.dispatcher.sweep_worktrees();
             Reply::Json(HTTP_OK, serde_json::to_value(&sweep)?)
@@ -3357,7 +3432,7 @@ fn route(
             };
             let project_dir = PathBuf::from(project.path);
             let refresh = qs(QUERY_REFRESH).as_deref() == Some(QUERY_REFRESH_ON);
-            pr_reply(crate::prs::handle_ticket_pr(
+            pr_reply(crate::prs::handle_ticket_pr_cached(
                 &app.pr_status,
                 &ticket,
                 key,

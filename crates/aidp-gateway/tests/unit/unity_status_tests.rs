@@ -1,6 +1,7 @@
 use super::*;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::time::Instant;
 
 fn process(pid: u32, command_line: &str) -> UnityProcess {
     UnityProcess {
@@ -92,6 +93,10 @@ fn listing_is_cached_until_the_ttl_expires() {
     let expired = CachedProcesses::new(Box::new(CountingSource(calls.clone())), Duration::ZERO);
     expired.list();
     expired.list();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while calls.load(Ordering::SeqCst) < 3 && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(10));
+    }
     assert_eq!(calls.load(Ordering::SeqCst), 3);
 }
 

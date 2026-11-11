@@ -8,13 +8,14 @@ use crate::models::constants::ticket_cost::{
     GROUP_STAGE, GROUP_TICKET, MAX_RUNS_PER_TICKET, MILLION, PIPELINES_DIR, SEVEN_DAY_SECONDS,
     THOUSAND, TOTAL_KEY, UNKNOWN_KEY,
 };
+use crate::models::ticket_cost_brief::TicketCostBrief;
 use crate::sessions::{OriginKind, RateLimitInfo, RateLimitWindow, SessionRecord, TokenUsage};
 use crate::usage::{in_range, UsageBucket, UsageReport};
 use aidp_core::cost::anomaly::{is_anomaly, median_and_mad, modified_z_scores};
 use aidp_core::cost::repricing::reprice_counters;
 use aidp_core::cost::{tier, PriceTable};
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
 
 /// Token counters of one slice of work.
@@ -321,6 +322,31 @@ pub fn ticket_cost(
         budget: None,
         pixellab: None,
     }
+}
+
+/// The dollars and the tokens of every ticket (or of the `wanted` ones) in one pass over `all`.
+/// A ticket's figures are those [`ticket_cost`] reports: same sessions, same order, same pricing.
+pub fn ticket_totals(
+    all: &[SessionRecord],
+    wanted: Option<&HashSet<&str>>,
+) -> BTreeMap<String, TicketCostBrief> {
+    let table = PriceTable::from_env_or_embedded();
+    let mut costs: BTreeMap<String, TicketCostBrief> = BTreeMap::new();
+    for record in all {
+        let Some(key) = ticket_of(record) else {
+            continue;
+        };
+        if wanted.is_some_and(|wanted| !wanted.contains(key)) {
+            continue;
+        }
+        let tokens = session_tokens(record);
+        let brief = costs.entry(key.to_string()).or_default();
+        brief.totals.total_tokens += tokens.total();
+        if let Some(dollars) = session_cost_usd(record, &tokens, &table) {
+            brief.cost_usd = Some(brief.cost_usd.unwrap_or(0.0) + dollars);
+        }
+    }
+    costs
 }
 
 /// Stage rows of every run of ticket `key` under `<vault>/Pipelines/<repo>/<key>/<run>/`.

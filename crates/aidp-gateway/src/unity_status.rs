@@ -1,11 +1,12 @@
 //! Unity status of a project: the editor process, the lock, the latest compile and playtest results.
 
-use crate::sync::lock;
+use crate::swr_cache::SwrCache;
 use crate::unity_lock::ResourceHolder;
 use serde_json::{json, Value};
+use std::convert::Infallible;
 use std::path::Path;
-use std::sync::Mutex;
-use std::time::{Duration, Instant, SystemTime};
+use std::sync::Arc;
+use std::time::{Duration, SystemTime};
 
 /// How long a process listing is reused.
 pub const PROCESS_CACHE_TTL: Duration = Duration::from_secs(5);
@@ -108,32 +109,26 @@ pub fn parse_ps(text: &str) -> Vec<UnityProcess> {
         .collect()
 }
 
-/// A process listing reused for [`PROCESS_CACHE_TTL`].
+/// A process listing reused for [`PROCESS_CACHE_TTL`]; an older one is answered at once while
+/// a background thread lists the processes again.
 pub struct CachedProcesses {
-    source: Box<dyn ProcessSource>,
-    ttl: Duration,
-    cache: Mutex<Option<(Instant, Vec<UnityProcess>)>>,
+    source: Arc<dyn ProcessSource>,
+    cache: SwrCache<(), Vec<UnityProcess>>,
 }
 
 impl CachedProcesses {
     pub fn new(source: Box<dyn ProcessSource>, ttl: Duration) -> Self {
         CachedProcesses {
-            source,
-            ttl,
-            cache: Mutex::new(None),
+            source: Arc::from(source),
+            cache: SwrCache::new(ttl),
         }
     }
 
     pub fn list(&self) -> Vec<UnityProcess> {
-        let mut cache = lock(&self.cache);
-        if let Some((at, processes)) = cache.as_ref() {
-            if at.elapsed() < self.ttl {
-                return processes.clone();
-            }
-        }
-        let processes = self.source.unity_processes();
-        *cache = Some((Instant::now(), processes.clone()));
-        processes
+        let source = Arc::clone(&self.source);
+        self.cache
+            .get((), move || Ok::<_, Infallible>(source.unity_processes()))
+            .unwrap_or_default()
     }
 }
 

@@ -47,3 +47,5 @@ pub mod mcp_configuration;
 
 pub mod flow_manual;
 pub mod settings;
+pub mod swr_cache;
+pub mod vault_index;

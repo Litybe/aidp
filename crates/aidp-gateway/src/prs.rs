@@ -2,9 +2,11 @@
 //! `aidp_integrations::pr`, invalidated by webhooks, plus the two route handlers.
 
 use crate::bus::Bus;
+use crate::models::constants::swr_cache::TICKET_PR_TTL;
 use crate::models::enums::pr_refusal_reason::PrRefusalReason;
 use crate::models::enums::ApiStatus;
 use crate::models::ApiError;
+use crate::swr_cache::SwrCache;
 use crate::sync::lock;
 use aidp_core::clock::Clock;
 use aidp_core::models::enums::HasErrorKind;
@@ -15,8 +17,8 @@ use aidp_integrations::IntegrationError;
 use aidp_tickets::model::Ticket;
 use serde_json::{json, Value};
 use std::collections::HashMap;
-use std::path::Path;
-use std::sync::Mutex;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 
 pub const STATUS_TTL_MS: i64 = 20_000;
 pub const RULES_TTL_MS: i64 = 3_600_000;
@@ -81,12 +83,14 @@ impl From<IntegrationError> for PrRouteError {
 }
 
 type StatusKey = (String, u64);
+type TicketPrKey = (PathBuf, String);
 
 /// Statuses (short TTL) and branch rules (long TTL), time read from the injected clock.
 pub struct PrStatusCache {
     clock: Box<dyn Clock>,
     statuses: Mutex<HashMap<StatusKey, (Value, i64)>>,
     rules: Mutex<HashMap<String, (BranchRules, i64)>>,
+    ticket_prs: SwrCache<TicketPrKey, Option<Value>>,
 }
 
 impl PrStatusCache {
@@ -95,6 +99,7 @@ impl PrStatusCache {
             clock,
             statuses: Mutex::new(HashMap::new()),
             rules: Mutex::new(HashMap::new()),
+            ticket_prs: SwrCache::new(TICKET_PR_TTL),
         }
     }
 
@@ -146,6 +151,7 @@ impl PrStatusCache {
     /// Drops the cached status and tells subscribers the PR changed.
     pub fn invalidate(&self, bus: &Bus, repo: &str, number: u64) {
         lock(&self.statuses).remove(&(repo.to_string(), number));
+        self.ticket_prs.clear();
         bus.emit(
             PR_STATUS_EVENT,
             json!({ KEY_REPO: repo, KEY_NUMBER: number }),
@@ -308,6 +314,37 @@ pub fn handle_ticket_pr(
     };
     let repo = in_dir(project_dir, || repo_slug(None)).ok_or_else(|| no_pr_error(&branch))?;
     handle_status(cache, &repo, number, refresh)
+}
+
+/// [`handle_ticket_pr`] answered from a stale-while-revalidate cache: the last answer comes back
+/// at once and is refreshed on a background thread, so a read never waits on `gh` once a ticket
+/// is known. `refresh` reads again now. A ticket with no pull request is remembered too.
+pub fn handle_ticket_pr_cached(
+    cache: &Arc<PrStatusCache>,
+    ticket: &Ticket,
+    key: &str,
+    project_dir: &Path,
+    refresh: bool,
+) -> Result<Value, PrRouteError> {
+    let slot = (project_dir.to_path_buf(), key.to_string());
+    let (shared, owned_ticket, owned_key, owned_dir) = (
+        Arc::clone(cache),
+        ticket.clone(),
+        key.to_string(),
+        project_dir.to_path_buf(),
+    );
+    let compute =
+        move || match handle_ticket_pr(&shared, &owned_ticket, &owned_key, &owned_dir, refresh) {
+            Ok(status) => Ok(Some(status)),
+            Err(error) if error.reason == Some(PrRefusalReason::NoPullRequest) => Ok(None),
+            Err(error) => Err(error),
+        };
+    let found = if refresh {
+        cache.ticket_prs.refresh(slot, compute)
+    } else {
+        cache.ticket_prs.get(slot, compute)
+    }?;
+    found.ok_or_else(|| no_pr_error(&format!("{TICKET_BRANCH_PREFIX}{key}")))
 }
 
 #[cfg(test)]
