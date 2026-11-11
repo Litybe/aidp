@@ -10,6 +10,8 @@ use crate::models::constants::ticket_cost::{
 };
 use crate::sessions::{OriginKind, RateLimitInfo, RateLimitWindow, SessionRecord, TokenUsage};
 use crate::usage::{in_range, UsageBucket, UsageReport};
+use aidp_core::cost::repricing::reprice_counters;
+use aidp_core::cost::{tier, PriceTable};
 use aidp_core::cost::anomaly::{is_anomaly, median_and_mad, modified_z_scores};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
@@ -111,6 +113,9 @@ pub struct TicketCost {
     pub by_stage: Vec<CostLine>,
     pub by_model: Vec<CostLine>,
     pub window_share: WindowShare,
+    /// Dollars of the ticket's sessions: recorded `cost_usd`, else tokens priced at the model's tier.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cost_usd: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub budget: Option<serde_json::Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -128,13 +133,26 @@ fn started_ms(record: &SessionRecord) -> Option<i64> {
 /// dispatcher, a flow) carries the ticket key in `origin.ref`.
 pub fn ticket_of(record: &SessionRecord) -> Option<&str> {
     if record.origin.is(OriginKind::Run) {
-        return record.target.as_deref().filter(|target| !target.is_empty());
+        return record
+            .target
+            .as_deref()
+            .filter(|target| !target.is_empty())
+            .or_else(|| ticket_in_vault_path(&record.cwd));
     }
     record
         .origin
         .r#ref
         .as_deref()
         .filter(|reference| !reference.is_empty())
+}
+
+/// The ticket of a run folder `…/Pipelines/<repo>/<ticket>/…`, for run sessions started with no
+/// `target` (the pipeline doctor works in `Pipelines/<repo>/<ticket>/doctor/<case>`).
+pub fn ticket_in_vault_path(cwd: &str) -> Option<&str> {
+    let mut parts = cwd.split(['\\', '/']).filter(|part| !part.is_empty());
+    parts.find(|part| part.eq_ignore_ascii_case(PIPELINES_DIR))?;
+    parts.next()?;
+    parts.next()
 }
 
 /// The pipeline run a stage session belongs to (`origin.ref` of a `run` origin).
@@ -222,6 +240,22 @@ fn add_to(lines: &mut BTreeMap<String, CostLine>, key: &str, tokens: &TokenTotal
         .add(tokens, 1);
 }
 
+/// Dollars of one session: its recorded `cost_usd`, else its tokens priced at its model's tier.
+fn session_cost_usd(record: &SessionRecord, tokens: &TokenTotals, table: &PriceTable) -> Option<f64> {
+    if let Some(cost) = record.cost_usd {
+        return Some(cost);
+    }
+    let model = record.model.as_deref()?;
+    let price = table.price(tier(model).as_str());
+    Some(reprice_counters(
+        tokens.input,
+        tokens.output,
+        tokens.cache_create,
+        tokens.cache_read,
+        &price,
+    ))
+}
+
 /// The cost of ticket `key`: its sessions grouped by pipeline (flow), step, stage and model.
 /// `stages` are the stage rows of the ticket's runs; `all` is every session, for the window share.
 pub fn ticket_cost(
@@ -235,9 +269,14 @@ pub fn ticket_cost(
     let mut by_flow = BTreeMap::new();
     let mut by_step = BTreeMap::new();
     let mut by_model = BTreeMap::new();
+    let table = PriceTable::from_env_or_embedded();
+    let mut cost_usd: Option<f64> = None;
     for record in all.iter().filter(|record| ticket_of(record) == Some(key)) {
         let tokens = session_tokens(record);
         totals.add(&tokens, 1);
+        if let Some(dollars) = session_cost_usd(record, &tokens, &table) {
+            cost_usd = Some(cost_usd.unwrap_or(0.0) + dollars);
+        }
         add_to(
             &mut by_flow,
             record.template_id.as_deref().unwrap_or(UNKNOWN_KEY),
@@ -274,6 +313,7 @@ pub fn ticket_cost(
         by_stage: sorted_lines(by_stage),
         by_model: sorted_lines(by_model),
         window_share: window_share(all, key, rate_limit),
+        cost_usd,
         budget: None,
         pixellab: None,
     }
