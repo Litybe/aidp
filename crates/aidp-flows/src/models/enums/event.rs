@@ -72,6 +72,11 @@ pub enum Event {
         step: String,
         at: String,
     },
+    /// The step failed on a false alarm: it counts as passed and the flow goes on.
+    MarkPassed {
+        step: String,
+        at: String,
+    },
     Manual {
         request: ManualRequest,
         at: String,
@@ -96,6 +101,7 @@ impl Event {
             | Event::Abort { at }
             | Event::Retry { at, .. }
             | Event::Skip { at, .. }
+            | Event::MarkPassed { at, .. }
             | Event::Manual { at, .. } => at,
         }
     }

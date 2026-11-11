@@ -97,6 +97,18 @@ fn attempts_count_the_last_24_hours_of_one_ticket() {
 }
 
 #[test]
+fn a_second_investigation_of_one_incident_counts_twice_in_the_cap() {
+    let root = TempWorkspace::new("doctor-store-two-investigations");
+    let store = IncidentStore::load(root.path());
+    let id = store.open(candidate(KEY, "a"), AT).unwrap().candidate.id;
+    store.update(&id, AT, |row| {
+        row.investigated_ms = Some(NOW_MS - HOUR_MS);
+        row.investigations = 2;
+    });
+    assert_eq!(store.attempts(KEY, NOW_MS), 2);
+}
+
+#[test]
 fn one_investigation_at_a_time_is_visible() {
     let root = TempWorkspace::new("doctor-store-investigating");
     let store = IncidentStore::load(root.path());

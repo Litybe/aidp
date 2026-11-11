@@ -648,6 +648,55 @@ impl NativeRunManager {
         self.spawn(live)
     }
 
+    /// Resumes a paused run from `stage`: the rows of that stage and of every later layer of the plan go back to pending.
+    pub fn retry_from(self: &Arc<Self>, run_id: &str, stage: &str) -> anyhow::Result<()> {
+        let _admission = lock(&self.start_guard);
+        self.require_running()?;
+        let live = self.live_or_load(run_id)?;
+        self.require_paused(&live, run_id)?;
+        let view = live.store.view();
+        let Some(layer) = view
+            .plan
+            .iter()
+            .position(|names| names.iter().any(|name| name == stage))
+        else {
+            return Err(not_found(format!("stage `{stage}` is not in run {run_id}")));
+        };
+        let from_here: Vec<&String> = view.plan[layer..].iter().flatten().collect();
+        let rows: Vec<String> = view
+            .stages
+            .iter()
+            .filter(|row| {
+                from_here
+                    .iter()
+                    .any(|name| row.name == **name || row.name.starts_with(&format!("{name}#")))
+            })
+            .map(|row| row.name.clone())
+            .collect();
+        live.store.reset(&rows)?;
+        live.store.set_status(NativeRunStatus::Running, None)?;
+        self.spawn(live)
+    }
+
+    /// Sets the model the remaining stages of a run use.
+    pub fn set_model(&self, run_id: &str, model: &str) -> anyhow::Result<()> {
+        let _admission = lock(&self.start_guard);
+        let live = self.live_or_load(run_id)?;
+        live.store.set_model(model)
+    }
+
+    /// Cancels the live sessions of a run without ending the run; how many were cancelled.
+    pub fn cancel_sessions(&self, run_id: &str) -> anyhow::Result<usize> {
+        let live = self.live_or_load(run_id)?;
+        let sessions = live.control.live_sessions();
+        for session_id in &sessions {
+            if let Err(error) = self.deps.sessions.cancel(session_id) {
+                tracing::warn!(session = %session_id, %error, "session not cancelled");
+            }
+        }
+        Ok(sessions.len())
+    }
+
     /// Skips `stage` and its unfinished rows, and resumes the run.
     pub fn skip(self: &Arc<Self>, run_id: &str, stage: &str) -> anyhow::Result<()> {
         let _admission = lock(&self.start_guard);

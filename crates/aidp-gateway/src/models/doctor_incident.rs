@@ -49,4 +49,14 @@ pub struct DoctorIncident {
     /// Epoch milliseconds the bug cap of the ticket was re-armed by this incident.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rearmed_ms: Option<i64>,
+    /// Investigations started for this incident, a retry included.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub investigations: u32,
+    /// Investigations of this incident that failed: the second one is final.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub investigation_failures: u32,
+}
+
+fn is_zero(value: &u32) -> bool {
+    *value == 0
 }

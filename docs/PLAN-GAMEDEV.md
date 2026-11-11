@@ -230,6 +230,19 @@ review ⇄ fix → test → merge gate), `game-doc` sans test Unity, `game-art` 
 
 ## 5. Test dans Unity : autonomie sans computer use
 
+> **Décision du 2026-11-09 : le test PlayMode est manuel, la vérification automatique est headless.**
+> La route `code` ne joue plus le jeu : `unity-implement`, `unity-fix` et `unity-test` lancent Unity en
+> `-batchmode -nographics` dans le worktree du ticket, pour la compile gate C1 et la suite EditMode C8
+> (recette `unity-verify.md` du skill). Plus de scénario PlaytestDriver, plus de PlayMode, plus de verrou
+> `unity-editor` ni de `workspace: project` pour `game-test-code`, qui finit à `awaiting-merge` : la PR
+> porte une section « Test manuel en PlayMode » (un `T-n` par `CA-n`), recopiée en check-list dans le
+> commentaire `unity-test`, que l'humain joue avant de merger sur GitHub. Motifs : des tickets validés
+> plus vite et par lots, sans éditeur ouvert à monopoliser une machine, et un harness qui tourne tel
+> quel sur un serveur sans écran. Le package `com.aidp.playtest` reste un outil manuel dans l'éditeur
+> (repro, scénarios, portes C1/C8 par pont fichier). Les routes `art` et `map` gardent, pour l'instant,
+> leur voie de test dans le checkout principal avec l'éditeur ouvert. Les §5.1 à §5.4 ci-dessous
+> décrivent l'état antérieur et restent la référence du package.
+
 ### 5.1 Verrou de l'éditeur
 
 - Nouvelle ressource du daemon `unity-editor` par projet (même mécanique que le « one writer per

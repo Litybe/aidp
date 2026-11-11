@@ -468,6 +468,58 @@ fn skip_moves_past_a_failed_step() {
 }
 
 #[test]
+fn mark_passed_moves_past_a_failed_step_and_keeps_the_flow_going() {
+    let def = def_with(vec![action("a", FAIL), action("b", NOOP)]);
+    let mut stepped = send(
+        &def,
+        start(&def),
+        fail_with("a", 0, ActionOutcome::TechnicalError("boom".into())),
+    );
+
+    stepped = send(
+        &def,
+        stepped,
+        Event::MarkPassed {
+            step: "a".to_string(),
+            at: AT.to_string(),
+        },
+    );
+
+    let passed = step_state(&stepped, "a");
+    assert_eq!(passed.status, StepStatus::Done);
+    assert_eq!(passed.outputs.get("marked_passed"), Some(&json!(true)));
+    assert!(has_effect(&stepped, "b:0:run_action"));
+}
+
+#[test]
+fn mark_passed_of_a_step_that_did_not_fail_is_rejected() {
+    let def = def_with(vec![action("a", NOOP)]);
+    let stepped = start(&def);
+
+    let event = Event::MarkPassed {
+        step: "a".to_string(),
+        at: AT.to_string(),
+    };
+
+    assert_eq!(rejection(&def, stepped.0, event), RejectReason::WrongState);
+}
+
+#[test]
+fn the_optional_flag_of_a_step_is_read_and_defaults_to_false() {
+    let def = def_of(
+        "id: f
+version: 1
+steps:
+  - { id: a, kind: action, use: noop, optional: true }
+  - { id: b, kind: action, use: noop }
+",
+    );
+
+    assert!(def.steps[0].optional);
+    assert!(!def.steps[1].optional);
+}
+
+#[test]
 fn retry_of_a_step_that_did_not_fail_is_rejected() {
     let def = def_with(vec![action("a", NOOP)]);
     let stepped = start(&def);

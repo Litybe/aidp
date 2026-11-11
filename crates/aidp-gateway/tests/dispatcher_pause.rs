@@ -151,7 +151,11 @@ fn invalid_bodies_answer_400_and_leave_the_pause_unchanged() {
 fn empty_or_field_less_body_pauses() {
     for body in [BODY_EMPTY, BODY_NO_FIELD] {
         let daemon = boot("dp-default");
-        assert_eq!(daemon.post(PAUSE_PATH, body).status(), STATUS_OK, "body: {body:?}");
+        assert_eq!(
+            daemon.post(PAUSE_PATH, body).status(),
+            STATUS_OK,
+            "body: {body:?}"
+        );
         assert_paused(&daemon, true);
         daemon.handle.stop();
     }

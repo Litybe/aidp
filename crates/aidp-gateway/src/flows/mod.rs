@@ -19,6 +19,7 @@ pub mod registry;
 pub mod step_outputs;
 pub mod store;
 pub mod ticket_snapshot;
+pub mod unity_wait;
 
 #[cfg(test)]
 #[path = "../../tests/unit/agent_sessions_fake.rs"]
@@ -449,6 +450,16 @@ impl FlowEngine {
             at,
         };
         self.control(key, actor, event, format!("skip {step} by {actor}"))
+    }
+
+    /// Counts a failed step as passed, journaled under `actor`.
+    pub fn mark_passed(&self, key: &str, step: &str, actor: &str) -> anyhow::Result<FlowState> {
+        let at = self.executor.now();
+        let event = Event::MarkPassed {
+            step: step.to_string(),
+            at,
+        };
+        self.control(key, actor, event, format!("mark {step} passed by {actor}"))
     }
 
     /// Records a human decision on a step waiting for one. Any other step answers `Conflict`.
