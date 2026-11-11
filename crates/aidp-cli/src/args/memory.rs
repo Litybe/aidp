@@ -293,6 +293,48 @@ pub enum MemoryOp {
         #[command(flatten)]
         project: ProjectArg,
     },
+    /// Ingest a knowledge-proposals.json: add, merge, inbox, rewrite or supersede knowledge notes, then re-index them.
+    IngestKnowledge {
+        /// A knowledge-proposals.json file, or a folder holding one.
+        #[arg(value_name = "FILE")]
+        path: PathBuf,
+        /// Project of the notes.
+        #[command(flatten)]
+        project: ProjectArg,
+    },
+    /// Review the proposed knowledge notes waiting in `<vault>/Knowledge/_inbox`.
+    Inbox {
+        #[command(subcommand)]
+        op: MemoryInboxOp,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum MemoryInboxOp {
+    /// List the notes waiting for review.
+    List {
+        /// Project of the notes.
+        #[command(flatten)]
+        project: ProjectArg,
+    },
+    /// Activate a note: an add or supersede moves to its folder, an update rewrites its target.
+    Approve {
+        /// File name or path of the inbox note.
+        #[arg(value_name = "PATH")]
+        path: String,
+        /// Project of the notes.
+        #[command(flatten)]
+        project: ProjectArg,
+    },
+    /// Move a note to `_inbox/_rejected/`; nothing is deleted.
+    Reject {
+        /// File name or path of the inbox note.
+        #[arg(value_name = "PATH")]
+        path: String,
+        /// Project of the notes.
+        #[command(flatten)]
+        project: ProjectArg,
+    },
 }
 
 #[derive(Subcommand)]

@@ -2,6 +2,7 @@
 
 pub mod embedding;
 pub mod knowledge;
+pub mod knowledge_proposals;
 pub mod limits;
 pub mod notes;
 pub mod paths;

@@ -28,6 +28,7 @@ aidp-workspace-hack = { version = "0.1", path = "../aidp-workspace-hack" }
 
 [dev-dependencies]
 tempfile.workspace = true
+jsonschema.workspace = true
 
 [[test]]
 name = "integration"

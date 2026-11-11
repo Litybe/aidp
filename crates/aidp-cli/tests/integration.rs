@@ -29,6 +29,7 @@ mod it_loc27_containment;
 mod it_log_format;
 mod it_log_stdout_contract;
 mod it_memory_hook;
+mod it_memory_knowledge;
 mod it_merge_hooks;
 mod it_mock_cli;
 mod it_plan_exec;

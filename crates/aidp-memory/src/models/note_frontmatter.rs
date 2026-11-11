@@ -12,4 +12,5 @@ pub struct NoteFrontmatter {
     pub agents: Vec<String>,
     pub status: Option<String>,
     pub importance: Option<f64>,
+    pub updated: Option<String>,
 }

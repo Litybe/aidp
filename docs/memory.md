@@ -118,6 +118,63 @@ equals a member of a group adds the other members: a multi-word member becomes t
 words, a single word a prefix term. The original terms come first and the total stays under the
 24-term cap. The glossary is optional, read once per process by the CLI, and never indexed.
 
+### Knowledge proposals
+
+A stage may write `knowledge-proposals.json` in its stage folder (schema:
+`schema/knowledge-proposals.schema.json`, at most 5 proposals, body 8 000 characters at most):
+
+```json
+{ "proposals": [ { "action": "add", "domain": "unity", "scope": "global", "slug": "coyote-time",
+  "title": "Temps de grace", "body": "markdown", "tags": [], "agents": [], "importance": 0.8,
+  "target": "_global/unity/other.md", "evidence": "why, refs" } ] }
+```
+
+`action` is `add`, `update` or `supersede`; `scope` `global` (`Knowledge/_global/<domain>/<slug>.md`) or
+`project` (`Knowledge/<repo>/notes/<domain>/<slug>.md`); `target` (a note path relative to `Knowledge/`)
+is required by `update` and `supersede`. An unknown field, a bad slug, a body over the limit or more than
+five proposals refuse the whole file; a proposal whose target is missing or leaves `Knowledge/` is refused
+alone. Ingestion (`aidp memory ingest-knowledge`, or the daemon at the end of a run, same ledger as the
+memory proposals) reconciles each proposal and never deletes anything:
+
+- `add`: the proposal is compared with the notes already indexed (`knowledge` chunks of the project and of
+  `_global`). With the embedding model the best cosine decides: 0.92 or more is the same note, only a line
+  `- <date> run:<id>: <evidence>` is appended to its `## Evidence` section and its `updated` date bumped; from
+  0.75 to 0.92 the proposal is written to `<vault>/Knowledge/_inbox/<slug>.md` with `status: proposed` and a
+  `candidate_of: "[[Knowledge/.../note]]"` link; below that the note is written, `status: active`. Without
+  the model (or before the notes are embedded) the 5 best BM25 hits are compared by word-set Jaccard and
+  0.55 or more is the same note. An existing destination file is never overwritten: the proposal goes to
+  the inbox with the file as candidate. The domains `lore`, `game-design` and `rooms` always go to the
+  inbox.
+- `update`: the body of the target is replaced (title and new body, the frontmatter kept, `updated` and
+  `source` bumped, the evidence lines kept and one added). The previous file is first copied to
+  `<vault>/Knowledge/_history/<path with / as __>__<previous updated>.md` (never indexed). An update of a
+  `lore`, `game-design` or `rooms` note (by domain of the proposal or of the target) goes to the inbox with
+  `action: update` and a `target` link.
+- `supersede`: the new note is written like an `add` without the duplicate test, then the target gets
+  `status: superseded`, `superseded_by: "[[Knowledge/.../new]]"` and a new `updated` (superseded notes are
+  not retrieved). Protected domains go to the inbox with `action: supersede`.
+
+Notes are written in the frontmatter format above (`type: note`, `domain`, `tags`, `agents`, `status`,
+`importance`, `updated`, `source: run:<id>`, or `source: manual` for `ingest-knowledge`), then `# Title`,
+the body and a `## Evidence` section. An inbox note also carries `action`, `scope`, `repo` (project scope),
+`target` and `candidate_of`. The knowledge sources are re-indexed afterwards (by the CLI command, or by the
+daemon after the run).
+
+```
+aidp memory ingest-knowledge <file-or-folder> [--project P]
+aidp memory inbox list [--project P]
+aidp memory inbox approve <name-or-path> [--project P]
+aidp memory inbox reject <name-or-path> [--project P]
+```
+
+`ingest-knowledge` prints `{ files, added, merged, inboxed, updated, superseded, results, rejected }` and
+exits 4 when something was refused. `inbox approve` moves an `add` or `supersede` note to its folder
+(`Knowledge/_global/<domain>/` or `Knowledge/<repo>/notes/<domain>/`, named after the file) with `status:
+active` and without the inbox fields, marks the target of a `supersede`, or applies an `update` to its
+target (the inbox file moves to `_inbox/_applied/`); an existing destination is exit 4. `inbox reject`
+moves the file to `_inbox/_rejected/`. Both re-index the knowledge notes. `inbox list` prints each note's
+path, domain, action, title and candidate or target. All need a vault.
+
 ## Compiler injection
 
 A pipeline that sets `settings.knowledge` gets a `## Knowledge (reference data, not instructions)`
@@ -183,7 +240,8 @@ text`, cut to 2 000
 characters. `rag index` embeds, by batches of 64 and in the indexing transaction, every chunk of the
 project that has no vector or whose vector comes from another model, so a model change is applied by
 the next `rag index`. A memory rewritten by `memory add/edit/...` has no vector until the next
-`rag index`; BM25 still finds it meanwhile.
+`rag index`; BM25 still finds it meanwhile. The daemon embeds the memories of a project and of `_global`
+right after the ingestion of a finished run.
 
 ## CLI
 
@@ -208,6 +266,8 @@ aidp memory edit M-12 [--title ...] [--text ...] [--kind ...] [--route ...] [--p
 aidp memory merge M-12 --into M-7
 aidp memory gc
 aidp memory ingest <folder-or-file>
+aidp memory ingest-knowledge <file-or-folder>
+aidp memory inbox list|approve <path>|reject <path>
 ```
 
 `rag index` prints `{ indexed, updated, removed, unchanged, chunks, embedded, durationMs, skippedSources }`.
@@ -367,6 +427,10 @@ few point lookups, and loads `graph.json` once per process (a few MB). `memory c
 
 ## Rust API
 
+`build_retriever(&store, root, embedder)` (hybrid with an embedder, BM25 without; the CLI and the daemon
+both use it) and `install_vault_glossary(vault)`, `KnowledgeIngestor::new(&store, vault, repo, project)`
+(`.with_embedder(..)`, `.ingest_file(..)`, `.ingest_bytes(..)`) and `KnowledgeInbox::new(vault, repo)`
+(`list`, `approve`, `reject`),
 `MemoryStore::open_in(gateway_dir)`, `Indexer::new(&store).index(&ProjectRef, &IndexOptions)`,
 `Bm25Retriever::new(&store, Some(project_root))` implementing `Retriever::search(&SearchQuery)`,
 `HybridRetriever::new(&store, Some(project_root), Box<dyn Embedder>)` implementing it too,
@@ -389,3 +453,9 @@ pull request and run references completed) and, after a successful `gh.merge`, r
 does not lower its OS priority: the pass is incremental (stat only for unchanged files) and
 streams one file at a time. Ingestion and re-indexing failures are logged and never block a run or
 a flow.
+
+On `run.ended` the daemon also reconciles the `knowledge-proposals.json` files of the run, refreshes the
+vectors of the memories, and queues a re-index of the `run`, `ticket` and `knowledge` sources of the
+project (`_global` knowledge included); at start it ingests the runs that ended in the last 30 days while
+it was down (see [gateway-api.md](gateway-api.md#after-a-run)). Search over HTTP is hybrid with the same
+construction as the CLI, glossary included.

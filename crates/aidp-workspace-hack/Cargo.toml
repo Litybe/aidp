@@ -23,7 +23,7 @@ workspace = true
 aho-corasick = { version = "1" }
 bit-set = { version = "0.8" }
 bit-vec = { version = "0.8" }
-getrandom = { version = "0.3", default-features = false, features = ["std"] }
+getrandom = { version = "0.3", default-features = false, features = ["std", "wasm_js"] }
 log = { version = "0.4", default-features = false, features = ["std"] }
 memchr = { version = "2" }
 once_cell = { version = "1" }

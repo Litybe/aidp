@@ -241,3 +241,71 @@ fn project_rule_and_read_only_mode() {
     assert!(write >= 400 && reindex >= 400, "{write} {reindex}");
     read_only.handle.stop();
 }
+
+fn knowledge_note(domain: &str, title: &str) -> String {
+    format!(
+        "---\ntype: note\ndomain: {domain}\ntags: []\nagents: []\nstatus: active\nimportance: 0.5\nupdated: 2026-11-11\nsource: test\n---\n# {title}\n\nUne regle pour {title}.\n"
+    )
+}
+
+#[test]
+fn search_filters_knowledge_by_domain_and_agent_type() {
+    let vault = TempWorkspace::new("gw-mem-vault");
+    for (domain, title) in [("unity", "saut"), ("pixel-art", "contour")] {
+        let dir = vault.path().join("Knowledge/_global").join(domain);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("note.md"), knowledge_note(domain, title)).unwrap();
+    }
+    let project = mini_project();
+    let _env = EnvGuard::set(VAULT_ENV, vault.path().to_str().unwrap());
+    let booted = boot(
+        vault.path(),
+        vec![project_entry("game", project.path())],
+        false,
+    );
+    let port = booted.port;
+    let events = booted.handle.app().bus.subscribe();
+    let (status, body) = send(
+        "POST",
+        port,
+        "/api/rag/reindex",
+        json!({ "source": "knowledge" }),
+    );
+    assert_eq!(status, 202, "{body}");
+    loop {
+        let event = events
+            .recv_timeout(Duration::from_secs(30))
+            .expect("rag.reindexed");
+        if event["type"] == "rag.reindexed" && event["data"]["trigger"] == "api" {
+            break;
+        }
+    }
+
+    let paths = |query: &str| -> Vec<String> {
+        let (status, found) = get(port, &format!("/api/rag/search?source=knowledge&{query}"));
+        assert_eq!(status, 200, "{found}");
+        found["hits"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|hit| hit["path"].as_str().unwrap().to_string())
+            .collect()
+    };
+    assert_eq!(paths("q=regle").len(), 2);
+    assert_eq!(
+        paths("q=regle&domain=unity"),
+        ["Knowledge/_global/unity/note.md"]
+    );
+    assert_eq!(
+        paths("q=regle&agentType=pixel-artist"),
+        ["Knowledge/_global/pixel-art/note.md"]
+    );
+    assert_eq!(
+        paths("q=regle&domain=unity&agentType=pixel-artist"),
+        ["Knowledge/_global/unity/note.md"]
+    );
+    assert_eq!(paths("q=regle&lexical=true").len(), 2);
+    let (status, _) = get(port, "/api/rag/search?q=regle&domain=cooking");
+    assert_eq!(status, 400);
+    booted.handle.stop();
+}

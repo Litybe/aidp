@@ -1,3 +1,5 @@
+use super::knowledge_proposals::HISTORY_DIR;
+
 /// Folder of the BIBLE under a project.
 pub const BIBLE_DIR: &str = ".claude/BIBLE";
 /// Folder of the design documents under a project.
@@ -31,6 +33,7 @@ pub const EXCLUDED_DIRS: &[&str] = &[
     NOTES_DIR,
     INBOX_DIR,
     EVAL_DIR,
+    HISTORY_DIR,
 ];
 /// Folder of the memory notes under `<vault>/Knowledge/<repo>`.
 pub const NOTES_DIR: &str = "_memories";

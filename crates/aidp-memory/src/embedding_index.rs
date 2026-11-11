@@ -4,6 +4,7 @@ use crate::embedder::Embedder;
 use crate::error::{MemoryError, Result};
 use crate::models::constants::embedding::{EMBED_BATCH, EMBED_MAX_CHARS};
 use crate::models::enums::Source;
+use crate::store::MemoryStore;
 use crate::vectors::encode_vector;
 use rusqlite::{params, Connection, Transaction};
 
@@ -53,6 +54,22 @@ pub fn embed_pending(
         }
         embedded += batch.len();
     }
+}
+
+/// Embeds, in one write, the chunks of `source` that lack a vector in each of `projects`.
+pub fn embed_projects(
+    store: &MemoryStore,
+    embedder: &dyn Embedder,
+    projects: &[&str],
+    source: Option<Source>,
+) -> Result<usize> {
+    store.write(|transaction| {
+        let mut total = 0;
+        for project in projects {
+            total += embed_pending(transaction, embedder, project, source)?;
+        }
+        Ok(total)
+    })
 }
 
 fn pending_batch(

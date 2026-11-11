@@ -784,6 +784,7 @@ fn serve_on_with_auth(
     let memory =
         crate::memory_ingest::MemoryHub::new(&config.state_dir, &config.vault_root, bus.clone());
     memory.spawn_listener(native_runs.clone(), projects.clone());
+    memory.spawn_catch_up(projects.clone());
     let app = Arc::new(App {
         bus,
         projects,

@@ -1,9 +1,10 @@
+use super::memory_knowledge;
 use super::CommandOutput;
 use crate::args::memory::{MemoryModelOp, MemoryOp, ProjectArg, RagOp};
 use crate::ctx::Ctx;
 use crate::models::hit_view::HitView;
 use aidp_core::{ExitStatus, Format};
-use aidp_memory::agent_roles::{effective_domains, role_of};
+use aidp_memory::agent_roles::{parse_domains, role_of};
 use aidp_memory::glossary;
 use aidp_memory::models::constants::paths::NOTES_DIR;
 use aidp_memory::models::constants::schema::GLOBAL_PROJECT;
@@ -11,10 +12,10 @@ use aidp_memory::models::memory_filter::MemoryFilter;
 use aidp_memory::models::memory_patch::MemoryPatch;
 use aidp_memory::models::memory_ref::MemoryRef;
 use aidp_memory::{
-    is_registered, load_default_embedder, model_status, pack, render_markdown, resolve_project,
-    Bm25Retriever, ContextRequest, Domain, HybridRetriever, IndexOptions, IndexRoot, Indexer,
-    Memory, MemoryError, MemoryKind, MemoryManager, MemoryStatus, MemoryStore, NewMemory,
-    ProjectRef, RefType, Retriever, Route, SearchQuery, Source,
+    build_retriever, is_registered, load_default_embedder, model_status, pack, render_markdown,
+    resolve_project, ContextRequest, IndexOptions, IndexRoot, Indexer, Memory, MemoryError,
+    MemoryKind, MemoryManager, MemoryStatus, MemoryStore, NewMemory, ProjectRef, RefType,
+    Retriever, Route, SearchQuery, Source,
 };
 use std::path::PathBuf;
 
@@ -176,7 +177,9 @@ fn synced_project(op: &MemoryOp) -> Option<ProjectArg> {
         | MemoryOp::Gc { project }
         | MemoryOp::Distill { project, .. }
         | MemoryOp::Ingest { project, .. } => Some(project.clone()),
-        MemoryOp::List { .. }
+        MemoryOp::IngestKnowledge { .. }
+        | MemoryOp::Inbox { .. }
+        | MemoryOp::List { .. }
         | MemoryOp::Show { .. }
         | MemoryOp::Sync { .. }
         | MemoryOp::Model { .. }
@@ -217,6 +220,10 @@ fn sync_notes_quietly(ctx: &Ctx, project: &ProjectArg) {
 fn dispatch_memory(ctx: &Ctx, op: MemoryOp) -> anyhow::Result<CommandOutput> {
     match op {
         MemoryOp::Hook { event } => Ok(super::memory_hook::run(ctx, event)),
+        MemoryOp::IngestKnowledge { path, project } => {
+            memory_knowledge::ingest_knowledge(ctx, &path, &project)
+        }
+        MemoryOp::Inbox { op } => memory_knowledge::inbox(ctx, op),
         MemoryOp::Recall {
             query,
             project,
@@ -510,15 +517,15 @@ pub(super) fn open(ctx: &Ctx, argument: &ProjectArg, strict: bool) -> anyhow::Re
 
 pub(super) fn retriever(opened: &Opened, lexical: bool) -> Box<dyn Retriever + '_> {
     let root = opened.known_root.then(|| opened.project.root.clone());
-    if !lexical {
-        if let Some(embedder) = load_default_embedder(&opened.gateway) {
-            return Box::new(HybridRetriever::new(&opened.store, root, embedder));
-        }
-    }
-    Box::new(Bm25Retriever::new(&opened.store, root))
+    let embedder = if lexical {
+        None
+    } else {
+        load_default_embedder(&opened.gateway)
+    };
+    build_retriever(&opened.store, root, embedder)
 }
 
-fn wants_json(ctx: &Ctx) -> bool {
+pub(super) fn wants_json(ctx: &Ctx) -> bool {
     matches!(
         ctx.format(),
         Some(Format::JsonCompact | Format::JsonPretty | Format::Ndjson)
@@ -541,7 +548,7 @@ fn parse_ref(raw: &str) -> Result<MemoryRef, MemoryError> {
     })
 }
 
-fn extra_roots(ctx: &Ctx, project: &ProjectRef) -> Vec<IndexRoot> {
+pub(super) fn extra_roots(ctx: &Ctx, project: &ProjectRef) -> Vec<IndexRoot> {
     let Some(vault) = ctx.vault_override() else {
         return Vec::new();
     };
@@ -565,17 +572,8 @@ fn extra_roots(ctx: &Ctx, project: &ProjectRef) -> Vec<IndexRoot> {
     ]
 }
 
-/// The domains of `--domain`, else those of the agent type; empty means every domain.
-fn parse_domains(raw: &[String], agent_type: Option<&str>) -> Result<Vec<Domain>, MemoryError> {
-    let explicit = raw
-        .iter()
-        .map(|domain| Domain::parse(domain))
-        .collect::<Result<Vec<_>, _>>()?;
-    Ok(effective_domains(&explicit, agent_type))
-}
-
 /// `<vault>/Knowledge/_global`, indexed under the `_global` project.
-fn global_knowledge_root(ctx: &Ctx) -> Option<IndexRoot> {
+pub(super) fn global_knowledge_root(ctx: &Ctx) -> Option<IndexRoot> {
     let vault = ctx.vault_override()?;
     Some(IndexRoot {
         source: Source::Knowledge,

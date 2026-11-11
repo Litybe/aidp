@@ -14,6 +14,7 @@ use crate::models::constants::knowledge::{
 use crate::models::constants::paths::{TICKETS_DIR, TICKET_EXTENSION};
 use crate::models::context_request::ContextRequest;
 use crate::models::enums::Route;
+use crate::models::shared_embedder::SharedEmbedder;
 use crate::project::resolve_project;
 use crate::retriever::{Bm25Retriever, Retriever};
 use crate::store::MemoryStore;
@@ -23,22 +24,6 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 
 type EmbedderLoader = Box<dyn Fn(&Path) -> Option<Box<dyn Embedder>>>;
-
-struct SharedEmbedder(Arc<dyn Embedder>);
-
-impl Embedder for SharedEmbedder {
-    fn model_id(&self) -> &str {
-        self.0.model_id()
-    }
-
-    fn dim(&self) -> usize {
-        self.0.dim()
-    }
-
-    fn embed(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>> {
-        self.0.embed(texts)
-    }
-}
 
 /// Builds the knowledge block of a stage from the memory index of the gateway directory.
 ///

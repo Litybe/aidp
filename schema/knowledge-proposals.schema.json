@@ -1,0 +1,43 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/ai-dev-pipeline/schema/knowledge-proposals.schema.json",
+  "title": "knowledge-proposals.json",
+  "description": "Knowledge notes a stage proposes to add, rewrite or replace. Written in the stage folder, ingested when the run ends. At most 5 proposals; `lore`, `game-design` and `rooms` notes always wait in Knowledge/_inbox for review.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["proposals"],
+  "properties": {
+    "proposals": {
+      "type": "array",
+      "maxItems": 5,
+      "items": { "$ref": "#/definitions/proposal" }
+    }
+  },
+  "definitions": {
+    "label": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/ -]*$", "maxLength": 60 },
+    "proposal": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["action", "domain", "scope", "slug", "title", "body"],
+      "properties": {
+        "action": { "enum": ["add", "update", "supersede"], "description": "add a note, rewrite the body of `target`, or write a new note that replaces `target`." },
+        "domain": { "enum": ["game-design", "lore", "mechanics", "rooms", "unity", "csharp", "pixel-art", "pixel-animation", "level-design", "tooling"] },
+        "scope": { "enum": ["global", "project"], "description": "global: Knowledge/_global/<domain>/<slug>.md; project: Knowledge/<repo>/notes/<domain>/<slug>.md." },
+        "slug": { "type": "string", "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$", "maxLength": 80 },
+        "title": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "body": { "type": "string", "minLength": 1, "maxLength": 8000, "description": "Markdown." },
+        "tags": { "type": "array", "maxItems": 20, "items": { "$ref": "#/definitions/label" } },
+        "agents": { "type": "array", "maxItems": 20, "items": { "$ref": "#/definitions/label" }, "description": "Agent types that must see the note; empty means all." },
+        "importance": { "type": "number", "minimum": 0, "maximum": 1, "default": 0.5 },
+        "target": { "type": "string", "minLength": 1, "description": "Existing note path relative to Knowledge/, required by update and supersede." },
+        "evidence": { "type": "string", "maxLength": 1000, "description": "Why the note is right, with references." }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "action": { "enum": ["update", "supersede"] } }, "required": ["action"] },
+          "then": { "required": ["target"] }
+        }
+      ]
+    }
+  }
+}

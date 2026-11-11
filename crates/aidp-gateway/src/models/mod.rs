@@ -267,6 +267,7 @@ pub mod flow_action_process;
 pub mod flow_action_processes;
 pub mod gateway_capabilities;
 pub mod mcp_provider_server;
+pub mod memory_catch_up_report;
 pub mod models_settings;
 pub mod pipeline_catalog;
 pub mod pr_attention_file;
