@@ -2,19 +2,24 @@
 //! run its route, its stage token rows and its Pixellab usage and balance. It is built once, then
 //! refreshed incrementally on a background thread: a run is read again only when its
 //! `run-state.json` or its directory changed. The cost, usage and Pixellab routes read it instead
-//! of walking the vault.
+//! of walking the vault. When the daemon gives it a database ([`warm`]), the index is also kept in
+//! SQLite ([`crate::vault_index_store`]): a restart loads it at once and refreshes it in the
+//! background. Reads always go to the in-memory structures; the database is only persistence.
 
 use crate::cost_routes::route_of_state;
 use crate::models::constants::pixellab::{MAX_RUNS_PER_TICKET, PIPELINES_DIR};
+use crate::models::constants::vault_index::INDEX_DB_FILE;
 use crate::models::constants::vault_index::{
     INDEX_REFRESH_TTL, MAX_SCAN_WORKERS, REFRESH_THREAD_NAME, WARM_THREAD_NAME,
 };
+use crate::models::stored_run::StoredRun;
 use crate::pixellab_usage::{
     newest_of, summarize_run, ticket_usage_of, BalanceSnapshot, RunPixellabUsage,
     TicketPixellabUsage,
 };
 use crate::sync::lock;
 use crate::ticket_cost::{stage_rows_of, StageRow};
+use crate::vault_index_store::IndexStore;
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -23,10 +28,10 @@ use std::time::{Instant, SystemTime};
 
 /// What decides that a run must be read again.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct RunSignature {
-    state_modified: Option<SystemTime>,
-    state_len: u64,
-    dir_modified: Option<SystemTime>,
+pub(crate) struct RunSignature {
+    pub(crate) state_modified: Option<SystemTime>,
+    pub(crate) state_len: u64,
+    pub(crate) dir_modified: Option<SystemTime>,
 }
 
 /// One pipeline run, as the routes need it.
@@ -38,7 +43,7 @@ pub struct RunSummary {
     pub stages: Vec<StageRow>,
     pub pixellab: RunPixellabUsage,
     pub balance: Option<BalanceSnapshot>,
-    signature: RunSignature,
+    pub(crate) signature: RunSignature,
 }
 
 #[derive(Clone, Debug)]
@@ -76,6 +81,63 @@ impl VaultSnapshot {
             tickets,
             dirs,
         }
+    }
+
+    /// The index of the runs a database stored, grouped by ticket directory.
+    fn from_stored(stored: Vec<StoredRun>) -> Self {
+        let mut dirs: HashMap<PathBuf, TicketDir> = HashMap::new();
+        for entry in stored {
+            let Some(ticket_dir) = entry.run_dir.parent() else {
+                continue;
+            };
+            dirs.entry(ticket_dir.to_path_buf())
+                .or_insert_with(|| TicketDir {
+                    key: entry.ticket.clone(),
+                    runs: Vec::new(),
+                })
+                .runs
+                .push(entry.run);
+        }
+        Self::assemble(dirs)
+    }
+
+    /// The runs, by directory, of ticket `key` (every ticket when `None`).
+    fn stored_runs(&self, key: Option<&str>) -> HashMap<PathBuf, StoredRun> {
+        let mut found = HashMap::new();
+        for (path, dir) in &self.dirs {
+            if key.is_some_and(|wanted| dir.key != wanted) {
+                continue;
+            }
+            for run in &dir.runs {
+                let run_dir = path.join(&run.run_id);
+                found.insert(
+                    run_dir.clone(),
+                    StoredRun {
+                        run_dir,
+                        ticket: dir.key.clone(),
+                        run: Arc::clone(run),
+                    },
+                );
+            }
+        }
+        found
+    }
+
+    /// What differs from `before`: the runs read again or new, and the directories gone.
+    fn changes_since(
+        &self,
+        before: &VaultSnapshot,
+        key: Option<&str>,
+    ) -> (Vec<StoredRun>, Vec<PathBuf>) {
+        let mut earlier = before.stored_runs(key);
+        let mut upserts = Vec::new();
+        for (run_dir, stored) in self.stored_runs(key) {
+            match earlier.remove(&run_dir) {
+                Some(old) if Arc::ptr_eq(&old.run, &stored.run) => {}
+                _ => upserts.push(stored),
+            }
+        }
+        (upserts, earlier.into_keys().collect())
     }
 
     /// The runs of `key` across the repos, newest first.
@@ -249,6 +311,8 @@ struct Slot {
     current: Mutex<Option<(Arc<VaultSnapshot>, Instant)>>,
     build: Mutex<()>,
     refreshing: AtomicBool,
+    database: Mutex<Option<PathBuf>>,
+    store: Mutex<Option<Arc<IndexStore>>>,
 }
 
 type Slots = Mutex<HashMap<PathBuf, Arc<Slot>>>;
@@ -261,8 +325,83 @@ fn slot_of(vault: &Path) -> Arc<Slot> {
             current: Mutex::new(None),
             build: Mutex::new(()),
             refreshing: AtomicBool::new(false),
+            database: Mutex::new(None),
+            store: Mutex::new(None),
         })
     }))
+}
+
+/// The database of the slot, opened on first use; `None` when there is none or it is unusable.
+fn store_of(slot: &Slot) -> Option<Arc<IndexStore>> {
+    let mut opened = lock(&slot.store);
+    if let Some(store) = opened.as_ref() {
+        return Some(Arc::clone(store));
+    }
+    let path = lock(&slot.database).take()?;
+    match IndexStore::open_or_recreate(&path) {
+        Ok(store) => {
+            let store = Arc::new(store);
+            *opened = Some(Arc::clone(&store));
+            Some(store)
+        }
+        Err(error) => {
+            tracing::warn!(%error, path = %path.display(), "vault index cache disabled");
+            None
+        }
+    }
+}
+
+/// Stops using the database for the rest of the process after a failure; reads stay in memory.
+fn disable_store(slot: &Slot, error: &anyhow::Error) {
+    tracing::warn!(%error, "vault index cache disabled");
+    *lock(&slot.store) = None;
+    *lock(&slot.database) = None;
+}
+
+/// The index of the vault as the database stores it, `None` when it holds no full scan of it.
+fn load_stored(slot: &Slot, vault: &Path) -> Option<VaultSnapshot> {
+    let store = store_of(slot)?;
+    let loaded = store.is_scanned(vault).and_then(|scanned| {
+        if scanned {
+            store.load(vault).map(Some)
+        } else {
+            Ok(None)
+        }
+    });
+    match loaded {
+        Ok(stored) => stored.map(VaultSnapshot::from_stored),
+        Err(error) => {
+            disable_store(slot, &error);
+            None
+        }
+    }
+}
+
+/// Stores a full scan, replacing what the database held for `vault`.
+fn store_all(slot: &Slot, vault: &Path, snapshot: &VaultSnapshot) {
+    let Some(store) = store_of(slot) else { return };
+    let runs: Vec<StoredRun> = snapshot.stored_runs(None).into_values().collect();
+    if let Err(error) = store.replace(vault, &runs) {
+        disable_store(slot, &error);
+    }
+}
+
+/// Stores what `after` changed since `before` (the runs of ticket `key` only when given).
+fn store_changes(
+    slot: &Slot,
+    vault: &Path,
+    before: &VaultSnapshot,
+    after: &VaultSnapshot,
+    key: Option<&str>,
+) {
+    let Some(store) = store_of(slot) else { return };
+    let (upserts, removed) = after.changes_since(before, key);
+    if upserts.is_empty() && removed.is_empty() {
+        return;
+    }
+    if let Err(error) = store.apply(vault, &upserts, &removed) {
+        disable_store(slot, &error);
+    }
 }
 
 fn start_refresh(slot: &Arc<Slot>, vault: &Path) {
@@ -282,7 +421,11 @@ fn start_refresh(slot: &Arc<Slot>, vault: &Path) {
                 .as_ref()
                 .map(|(snapshot, _)| Arc::clone(snapshot));
             let next = Arc::new(scan(&root, before.as_deref()));
-            *lock(&background.current) = Some((next, Instant::now()));
+            *lock(&background.current) = Some((Arc::clone(&next), Instant::now()));
+            match before.as_deref() {
+                Some(earlier) => store_changes(&background, &root, earlier, &next, None),
+                None => store_all(&background, &root, &next),
+            }
             background.refreshing.store(false, Ordering::SeqCst);
         })
         .is_ok();
@@ -291,7 +434,8 @@ fn start_refresh(slot: &Arc<Slot>, vault: &Path) {
     }
 }
 
-/// The index of `vault`. The first read builds it (later readers wait for that one build); an
+/// The index of `vault`. The first read loads it from the database when one holds a full scan
+/// (a background refresh follows), else builds it (later readers wait for that one build); an
 /// older one is answered at once while a background thread refreshes it.
 pub fn snapshot(vault: &Path) -> Arc<VaultSnapshot> {
     if vault.as_os_str().is_empty() {
@@ -309,8 +453,15 @@ pub fn snapshot(vault: &Path) -> Arc<VaultSnapshot> {
     if let Some((snapshot, _)) = lock(&slot.current).clone() {
         return snapshot;
     }
+    if let Some(stored) = load_stored(&slot, vault) {
+        let loaded = Arc::new(stored);
+        *lock(&slot.current) = Some((Arc::clone(&loaded), Instant::now()));
+        start_refresh(&slot, vault);
+        return loaded;
+    }
     let built = Arc::new(scan(vault, None));
     *lock(&slot.current) = Some((Arc::clone(&built), Instant::now()));
+    store_all(&slot, vault, &built);
     built
 }
 
@@ -336,9 +487,12 @@ pub fn refresh_ticket(vault: &Path, key: &str) -> Arc<VaultSnapshot> {
     }
     let next = Arc::new(VaultSnapshot::assemble(dirs));
     let slot = slot_of(vault);
-    let mut stored = lock(&slot.current);
-    let built_at = stored.as_ref().map_or_else(Instant::now, |(_, at)| *at);
-    *stored = Some((Arc::clone(&next), built_at));
+    {
+        let mut stored = lock(&slot.current);
+        let built_at = stored.as_ref().map_or_else(Instant::now, |(_, at)| *at);
+        *stored = Some((Arc::clone(&next), built_at));
+    }
+    store_changes(&slot, vault, &current, &next, Some(key));
     next
 }
 
@@ -354,19 +508,43 @@ pub fn invalidate(vault: &Path) {
     }
 }
 
-/// Drops the index of `vault`: the next read builds it again.
+/// Drops the index of `vault`, memory and database: the next read walks the vault again.
 pub fn forget(vault: &Path) {
     if vault.as_os_str().is_empty() {
         return;
     }
-    *lock(&slot_of(vault).current) = None;
+    let slot = slot_of(vault);
+    *lock(&slot.current) = None;
+    if let Some(store) = store_of(&slot) {
+        if let Err(error) = store.forget(vault) {
+            disable_store(&slot, &error);
+        }
+    }
 }
 
-/// Builds the index of `vault` on its own thread, so the first request finds it ready.
-pub fn warm(vault: &Path) {
+/// Where the database of the index lives under the gateway state directory: next to the memory
+/// database.
+pub fn database_path(state_dir: &Path) -> PathBuf {
+    aidp_memory::store::db_path(state_dir).with_file_name(INDEX_DB_FILE)
+}
+
+/// Keeps the index of `vault` in the SQLite file `database` from now on (opened on first use).
+pub fn use_database(vault: &Path, database: &Path) {
     if vault.as_os_str().is_empty() {
         return;
     }
+    let slot = slot_of(vault);
+    *lock(&slot.store) = None;
+    *lock(&slot.database) = Some(database.to_path_buf());
+}
+
+/// Loads or builds the index of `vault` on its own thread, so the first request finds it ready;
+/// `state_dir` is where its database lives.
+pub fn warm(vault: &Path, state_dir: &Path) {
+    if vault.as_os_str().is_empty() {
+        return;
+    }
+    use_database(vault, &database_path(state_dir));
     let root = vault.to_path_buf();
     let _ = std::thread::Builder::new()
         .name(WARM_THREAD_NAME.to_string())

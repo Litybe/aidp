@@ -87,6 +87,7 @@ pub mod unity_routes;
 pub mod unity_status;
 pub mod usage;
 pub mod vault_index;
+pub mod vault_index_store;
 pub mod workspace_resolver;
 pub mod worktrees;
 

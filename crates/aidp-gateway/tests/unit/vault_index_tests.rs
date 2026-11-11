@@ -1,5 +1,6 @@
 use super::*;
 use crate::models::constants::pixellab::USAGE_FILE;
+use crate::models::constants::vault_index::SCHEMA_VERSION;
 use crate::pixellab_usage::{aggregate_ticket, scan_latest_balance};
 use crate::ticket_cost::load_stage_rows;
 use aidp_testkit::TempWorkspace;
@@ -255,4 +256,230 @@ fn parallel_map_keeps_the_order_of_its_items() {
         (0..50u32).map(|value| value * value).collect::<Vec<_>>()
     );
     assert!(parallel_map(Vec::<u32>::new(), |value| value).is_empty());
+}
+
+const DB_NAME: &str = "vault-index.sqlite";
+const UNKNOWN_SCHEMA_VERSION: u32 = 9999;
+const GARBAGE: &[u8] = b"this is not a sqlite database, only text that fills the file";
+const USER_VERSION_PRAGMA: &str = "user_version";
+
+fn database_in(dir: &TempWorkspace) -> PathBuf {
+    dir.path().join(DB_NAME)
+}
+
+fn forget_memory(vault: &Path) {
+    *lock(&slot_of(vault).current) = None;
+}
+
+fn wait_until(condition: impl Fn() -> bool) {
+    let deadline = std::time::Instant::now() + WAIT_LIMIT;
+    while !condition() && std::time::Instant::now() < deadline {
+        std::thread::sleep(POLL);
+    }
+}
+
+fn stored_runs_of(database: &Path, vault: &Path) -> Vec<StoredRun> {
+    IndexStore::open(database).unwrap().load(vault).unwrap()
+}
+
+fn stored_big_tokens(database: &Path, vault: &Path) -> bool {
+    stored_runs_of(database, vault).iter().any(|entry| {
+        entry.run.run_id == NEW_RUN
+            && entry.run.repo == REPO
+            && entry
+                .run
+                .stages
+                .first()
+                .is_some_and(|row| row.tokens.input == BIG_TOKENS)
+    })
+}
+
+#[test]
+fn a_stored_index_loads_without_walking_the_vault() {
+    let vault = seeded_vault();
+    let dir = TempWorkspace::new("vault-index-db");
+    let scanned = scan(vault.path(), None);
+    let store = IndexStore::open(&database_in(&dir)).unwrap();
+    assert!(!store.is_scanned(vault.path()).unwrap());
+    let runs: Vec<StoredRun> = scanned.stored_runs(None).into_values().collect();
+    store.replace(vault.path(), &runs).unwrap();
+    assert!(store.is_scanned(vault.path()).unwrap());
+    std::fs::remove_dir_all(vault.path().join(PIPELINES_DIR)).unwrap();
+    let loaded = VaultSnapshot::from_stored(store.load(vault.path()).unwrap());
+    assert_eq!(loaded.run_count(), 4);
+    for key in [TICKET, OTHER_TICKET] {
+        assert_eq!(loaded.stage_rows(key), scanned.stage_rows(key));
+        assert_eq!(loaded.pixellab_of(key), scanned.pixellab_of(key));
+        assert_eq!(loaded.route_of(key), scanned.route_of(key));
+    }
+    assert_eq!(loaded.latest_balance(), scanned.latest_balance());
+    assert!(loaded.latest_balance().is_some());
+    for run in loaded.runs_of(TICKET) {
+        let original = scanned
+            .runs_of(TICKET)
+            .iter()
+            .find(|candidate| candidate.run_id == run.run_id && candidate.repo == run.repo)
+            .unwrap();
+        assert_eq!(run.signature, original.signature);
+    }
+}
+
+#[test]
+fn a_restart_serves_the_database_at_once_then_refreshes_in_the_background() {
+    let vault = seeded_vault();
+    let dir = TempWorkspace::new("vault-index-restart");
+    let database = database_in(&dir);
+    use_database(vault.path(), &database);
+    assert_eq!(snapshot(vault.path()).run_count(), 4);
+    assert_eq!(stored_runs_of(&database, vault.path()).len(), 4);
+
+    forget_memory(vault.path());
+    std::fs::remove_dir_all(run_dir(vault.path(), REPO, OTHER_TICKET, OLD_RUN)).unwrap();
+    write_state(
+        vault.path(),
+        REPO,
+        TICKET,
+        NEW_RUN,
+        ART_PIPELINE,
+        BIG_TOKENS,
+    );
+    let at_once = snapshot(vault.path());
+    assert_eq!(at_once.run_count(), 4);
+    assert_ne!(pick(&at_once, NEW_RUN).stages[0].tokens.input, BIG_TOKENS);
+
+    wait_until(|| {
+        stored_runs_of(&database, vault.path()).len() == 3
+            && stored_big_tokens(&database, vault.path())
+    });
+    let refreshed = snapshot(vault.path());
+    assert_eq!(refreshed.run_count(), 3);
+    assert_eq!(pick(&refreshed, NEW_RUN).stages[0].tokens.input, BIG_TOKENS);
+    assert_eq!(stored_runs_of(&database, vault.path()).len(), 3);
+    assert!(stored_big_tokens(&database, vault.path()));
+}
+
+#[test]
+fn a_changed_run_state_is_stored_again_and_an_unchanged_run_is_kept() {
+    let vault = seeded_vault();
+    let dir = TempWorkspace::new("vault-index-changed");
+    let database = database_in(&dir);
+    use_database(vault.path(), &database);
+    let first = snapshot(vault.path());
+    write_state(
+        vault.path(),
+        REPO,
+        TICKET,
+        NEW_RUN,
+        ART_PIPELINE,
+        BIG_TOKENS,
+    );
+    invalidate(vault.path());
+    wait_until(|| stored_big_tokens(&database, vault.path()));
+    assert!(stored_big_tokens(&database, vault.path()));
+    let second = snapshot(vault.path());
+    assert!(Arc::ptr_eq(&pick(&first, OLD_RUN), &pick(&second, OLD_RUN)));
+}
+
+#[test]
+fn forget_makes_the_database_stale_so_the_next_read_walks_the_vault() {
+    let vault = seeded_vault();
+    let dir = TempWorkspace::new("vault-index-forget-db");
+    let database = database_in(&dir);
+    use_database(vault.path(), &database);
+    assert_eq!(snapshot(vault.path()).run_count(), 4);
+    forget(vault.path());
+    assert!(!IndexStore::open(&database)
+        .unwrap()
+        .is_scanned(vault.path())
+        .unwrap());
+    std::fs::remove_dir_all(run_dir(vault.path(), REPO, OTHER_TICKET, OLD_RUN)).unwrap();
+    assert_eq!(snapshot(vault.path()).run_count(), 3);
+    assert_eq!(stored_runs_of(&database, vault.path()).len(), 3);
+}
+
+#[test]
+fn refresh_ticket_stores_the_runs_it_read_again() {
+    let vault = TempWorkspace::new("vault-index-ticket-db");
+    let dir = TempWorkspace::new("vault-index-ticket-db-file");
+    let database = database_in(&dir);
+    write_state(vault.path(), REPO, TICKET, NEW_RUN, ART_PIPELINE, 1);
+    use_database(vault.path(), &database);
+    assert_eq!(snapshot(vault.path()).pixellab_of(TICKET).generations, 0);
+    write_usage(
+        vault.path(),
+        REPO,
+        TICKET,
+        NEW_RUN,
+        7,
+        10.0,
+        "2026-11-10T10:00:00Z",
+    );
+    refresh_ticket(vault.path(), TICKET);
+    let stored = stored_runs_of(&database, vault.path());
+    assert_eq!(stored[0].run.pixellab.generations, 7);
+    assert!(stored[0].run.balance.is_some());
+}
+
+#[test]
+fn another_schema_version_rebuilds_the_database() {
+    let vault = seeded_vault();
+    let dir = TempWorkspace::new("vault-index-schema");
+    let database = database_in(&dir);
+    let runs: Vec<StoredRun> = scan(vault.path(), None)
+        .stored_runs(None)
+        .into_values()
+        .collect();
+    IndexStore::open(&database)
+        .unwrap()
+        .replace(vault.path(), &runs)
+        .unwrap();
+    {
+        let connection = rusqlite::Connection::open(&database).unwrap();
+        connection
+            .pragma_update(None, USER_VERSION_PRAGMA, UNKNOWN_SCHEMA_VERSION)
+            .unwrap();
+    }
+    let store = IndexStore::open(&database).unwrap();
+    assert!(!store.is_scanned(vault.path()).unwrap());
+    assert!(store.load(vault.path()).unwrap().is_empty());
+    let connection = rusqlite::Connection::open(&database).unwrap();
+    let version: u32 = connection
+        .pragma_query_value(None, USER_VERSION_PRAGMA, |row| row.get(0))
+        .unwrap();
+    assert_eq!(version, SCHEMA_VERSION);
+}
+
+#[test]
+fn a_corrupt_database_is_recreated_and_the_index_still_answers() {
+    let vault = seeded_vault();
+    let dir = TempWorkspace::new("vault-index-corrupt");
+    let database = database_in(&dir);
+    std::fs::write(&database, GARBAGE).unwrap();
+    assert!(IndexStore::open(&database).is_err());
+    use_database(vault.path(), &database);
+    assert_eq!(snapshot(vault.path()).run_count(), 4);
+    assert_eq!(stored_runs_of(&database, vault.path()).len(), 4);
+}
+
+#[test]
+fn an_unopenable_database_falls_back_to_memory() {
+    let vault = seeded_vault();
+    let dir = TempWorkspace::new("vault-index-unopenable");
+    let blocked = dir.path().join(DB_NAME);
+    std::fs::create_dir_all(&blocked).unwrap();
+    use_database(vault.path(), &blocked);
+    assert_eq!(snapshot(vault.path()).run_count(), 4);
+    assert_eq!(refresh_ticket(vault.path(), TICKET).run_count(), 4);
+    forget(vault.path());
+    assert_eq!(snapshot(vault.path()).run_count(), 4);
+}
+
+#[test]
+fn the_database_sits_next_to_the_memory_database() {
+    let state = Path::new("state");
+    assert_eq!(
+        database_path(state).parent(),
+        aidp_memory::store::db_path(state).parent()
+    );
+    assert_eq!(database_path(state).file_name().unwrap(), INDEX_DB_FILE);
 }

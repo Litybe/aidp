@@ -1035,6 +1035,18 @@ than 15 s (a run is read again only when its `run-state.json` or its directory c
 `run.started`, `run.stage_changed` and `run.ended`. The ticket ceilings (`budget.per_ticket`,
 `budget.pixellab.per_ticket`) read the runs of the ticket again before they decide.
 
+The index is persisted in SQLite, `<gateway dir>/memory/vault-index.sqlite` (next to `memory.db`, WAL,
+`PRAGMA user_version` checked: another version drops and rebuilds it). One row per run keyed by its
+directory (repo, ticket, run id, route, the `run-state.json` size and mtime and the directory mtime
+that decide staleness, Pixellab usage, newest balance) and one row per stage row. At startup the
+daemon loads it at once, so the routes answer from it without walking the vault, then runs the
+incremental refresh in the background: it stats each run, reads again only the changed ones, and
+writes the changed runs and deletes the vanished ones in one transaction. Reads stay on the
+in-memory index; SQLite is only its persistence. The run files remain the source of truth (the
+`aidp` CLI writes them from other processes) and the database is a cache: if it cannot be opened it
+is deleted and recreated, and if that fails the daemon logs a warning and keeps the in-memory
+behaviour. Response shapes do not change.
+
 `GET /api/worktrees`, `GET /api/tickets/:key/pr`, `GET /api/catalog/templates|flows[/:id]`,
 `GET /api/memory` and `GET /api/unity/status` are served stale-while-revalidate (`swr_cache.rs`): the
 last answer comes back at once and, once older than its TTL (worktrees 20 s, ticket pull request

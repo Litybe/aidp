@@ -834,7 +834,7 @@ fn serve_on_with_auth(
         doctor,
         route_caches: crate::route_caches::RouteCaches::default(),
     });
-    crate::vault_index::warm(&app.vault_root);
+    crate::vault_index::warm(&app.vault_root, &app.state_dir);
     spawn_cache_invalidator(&app);
 
     let server =
