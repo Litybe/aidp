@@ -10,9 +10,9 @@ use crate::models::constants::ticket_cost::{
 };
 use crate::sessions::{OriginKind, RateLimitInfo, RateLimitWindow, SessionRecord, TokenUsage};
 use crate::usage::{in_range, UsageBucket, UsageReport};
+use aidp_core::cost::anomaly::{is_anomaly, median_and_mad, modified_z_scores};
 use aidp_core::cost::repricing::reprice_counters;
 use aidp_core::cost::{tier, PriceTable};
-use aidp_core::cost::anomaly::{is_anomaly, median_and_mad, modified_z_scores};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
@@ -241,7 +241,11 @@ fn add_to(lines: &mut BTreeMap<String, CostLine>, key: &str, tokens: &TokenTotal
 }
 
 /// Dollars of one session: its recorded `cost_usd`, else its tokens priced at its model's tier.
-fn session_cost_usd(record: &SessionRecord, tokens: &TokenTotals, table: &PriceTable) -> Option<f64> {
+fn session_cost_usd(
+    record: &SessionRecord,
+    tokens: &TokenTotals,
+    table: &PriceTable,
+) -> Option<f64> {
     if let Some(cost) = record.cost_usd {
         return Some(cost);
     }

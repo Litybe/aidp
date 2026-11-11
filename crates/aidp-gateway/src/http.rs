@@ -3040,7 +3040,11 @@ fn route(
             let all = app.sessions.list(None, None, 100_000);
             Reply::Json(
                 HTTP_OK,
-                json!(crate::issue_cost::issue_cost_report(&app.vault_root, key, &all)),
+                json!(crate::issue_cost::issue_cost_report(
+                    &app.vault_root,
+                    key,
+                    &all
+                )),
             )
         }
         (Method::Get, ["usage", "rate-limit"]) => Reply::Json(

@@ -53,7 +53,13 @@ fn a_run_stage_session_belongs_to_its_target_ticket_not_to_its_run_id() {
 #[test]
 fn the_route_group_reads_the_run_state_then_the_pipeline_then_the_template() {
     let vault = TempWorkspace::new("cost-routes");
-    write_run_state(vault.path(), "GH-410", "run-art", "art-produce", Some("art"));
+    write_run_state(
+        vault.path(),
+        "GH-410",
+        "run-art",
+        "art-produce",
+        Some("art"),
+    );
     write_run_state(vault.path(), "GH-418", "run-code", "unity-implement", None);
     let records = vec![
         stage_session("s1", "GH-410", "run-art", "art-produce", 100),
@@ -91,7 +97,22 @@ fn the_ticket_group_keys_on_the_issue_and_lists_its_runs() {
 #[test]
 fn the_route_of_a_ticket_comes_from_its_latest_run_state() {
     let vault = TempWorkspace::new("cost-route-key");
-    write_run_state(vault.path(), "GH-7", "20261109-000000-aaaa", "dev", Some("code"));
-    write_run_state(vault.path(), "GH-7", "20261110-000000-bbbb", "art-produce", Some("art"));
-    assert_eq!(route_of_key(vault.path(), "GH-7", &[]).as_deref(), Some("art"));
+    write_run_state(
+        vault.path(),
+        "GH-7",
+        "20261109-000000-aaaa",
+        "dev",
+        Some("code"),
+    );
+    write_run_state(
+        vault.path(),
+        "GH-7",
+        "20261110-000000-bbbb",
+        "art-produce",
+        Some("art"),
+    );
+    assert_eq!(
+        route_of_key(vault.path(), "GH-7", &[]).as_deref(),
+        Some("art")
+    );
 }
