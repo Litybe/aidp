@@ -349,6 +349,9 @@ pub struct DoctorConfig {
     /// Model a run is resumed with after the provider stayed overloaded through every resumption. Unset: no fallback.
     #[serde(default)]
     pub fallback_model: Option<String>,
+    /// Local clone of each repository (`owner/name`) a harness pull request may target, besides the built-in ones. A config entry wins over the environment for the same repository.
+    #[serde(default)]
+    pub harness_repos: std::collections::BTreeMap<String, String>,
 }
 
 impl DoctorConfig {
@@ -376,6 +379,7 @@ impl Default for DoctorConfig {
             max_budget_raise: 0,
             prune_worktree_hours: Self::default_prune_worktree_hours(),
             fallback_model: None,
+            harness_repos: std::collections::BTreeMap::new(),
         }
     }
 }

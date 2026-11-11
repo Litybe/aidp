@@ -52,8 +52,27 @@ pub const ART_TEMPLATE_PREFIXES: [&str; 2] = ["art-", "pixelart"];
 /// Note of an incident closed without investigation because it is no longer a live failure.
 pub const OBSOLETE_NOTE: &str =
     "obsolete: no longer a live failure (run replaced, flow over, or run too old)";
-/// Repositories a harness patch may target.
-pub const HARNESS_REPOS: [&str; 2] = ["Litybe/aidp", "Litybe/aidp-skill"];
+/// Daemon repository: its local clone is named by `AIDP_SOURCE_ROOT`.
+pub const HARNESS_REPO_AIDP: &str = "Litybe/aidp";
+/// Skill repository: its local clone is the skill root.
+pub const HARNESS_REPO_SKILL: &str = "Litybe/aidp-skill";
+/// Studio repository (web front); its clone comes from `doctor.harness_repos`.
+pub const HARNESS_REPO_STUDIO: &str = "Litybe/aidp-studio";
+/// Unity package repository; its clone comes from `doctor.harness_repos`.
+pub const HARNESS_REPO_UNITY: &str = "Litybe/aidp-unity";
+/// Repositories a harness patch may target, besides those of `doctor.harness_repos`.
+pub const HARNESS_REPOS: [&str; 4] = [
+    HARNESS_REPO_AIDP,
+    HARNESS_REPO_SKILL,
+    HARNESS_REPO_STUDIO,
+    HARNESS_REPO_UNITY,
+];
+/// Environment variable naming the local clone of the daemon repository.
+pub const ENV_SOURCE_ROOT: &str = "AIDP_SOURCE_ROOT";
+/// Name of the remote whose URL must name the repository of a clone.
+pub const CLONE_REMOTE: &str = "origin";
+/// Host of the remote URLs a clone may have.
+pub const GITHUB_HOST: &str = "github.com";
 /// Parameter of `open_harness_pr` naming the `owner/name` repository.
 pub const PARAM_HARNESS_REPO: &str = "repo";
 /// Prefix of the branch a harness patch is pushed to.
