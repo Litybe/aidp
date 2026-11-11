@@ -261,7 +261,9 @@ fn contextual_usage_groups_by_ticket_and_route() {
     assert_eq!(by_ticket.totals.total_tokens, 16);
     let by_route = aggregate_contextual(&all, None, None, "route", &context);
     let keys: Vec<&str> = by_route.buckets.iter().map(|b| b.key.as_str()).collect();
-    assert_eq!(keys, vec!["code", "unknown"]);
+    // The other ticket has no known route but its sessions run a `dev-unity` template: route by template.
+    assert_eq!(keys, vec!["code"]);
+    assert_eq!(by_route.buckets[0].total_tokens, 16);
 }
 
 #[test]

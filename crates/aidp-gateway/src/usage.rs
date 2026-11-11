@@ -81,6 +81,9 @@ pub struct UsageBucket {
     pub estimated_cost_usd: f64,
     pub sessions: u64,
     pub turns: u64,
+    /// Run ids behind a `ticket` bucket (tooltip of the page), empty for the other groupings.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub runs: Vec<String>,
 }
 
 #[derive(Serialize, Clone, Debug)]

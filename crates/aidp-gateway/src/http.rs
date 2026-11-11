@@ -2646,6 +2646,9 @@ fn route(
     if let Some((status, reply)) = crate::memory_routes::handle(app, m, path, &q, &body) {
         return Ok(Reply::Json(status, reply));
     }
+    if let Some((status, reply)) = crate::art_assets::handle(&app.native_runs, m, path, &q) {
+        return Ok(Reply::Json(status, reply));
+    }
     if let Some(reply) = crate::run_files::handle(&app.native_runs, m, path) {
         return Ok(match reply {
             crate::run_files::RunFilesReply::Json(status, value) => Reply::Json(status, value),
@@ -3028,6 +3031,16 @@ fn route(
                 Some(report) => Reply::Json(HTTP_OK, json!(report)),
                 None => err(HTTP_NOT_FOUND, TICKET_COST_NOT_FOUND),
             }
+        }
+        (
+            Method::Get,
+            ["tickets", key, crate::routes::TICKET_COST_SEGMENT, crate::issue_cost::DETAIL_SEGMENT],
+        ) => {
+            let all = app.sessions.list(None, None, 100_000);
+            Reply::Json(
+                HTTP_OK,
+                json!(crate::issue_cost::issue_cost_report(&app.vault_root, key, &all)),
+            )
         }
         (Method::Get, ["usage", "rate-limit"]) => Reply::Json(
             HTTP_OK,

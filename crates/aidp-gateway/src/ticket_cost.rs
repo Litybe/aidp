@@ -8,7 +8,7 @@ use crate::models::constants::ticket_cost::{
     GROUP_STAGE, GROUP_TICKET, MAX_RUNS_PER_TICKET, MILLION, PIPELINES_DIR, SEVEN_DAY_SECONDS,
     THOUSAND, TOTAL_KEY, UNKNOWN_KEY,
 };
-use crate::sessions::{RateLimitInfo, RateLimitWindow, SessionRecord, TokenUsage};
+use crate::sessions::{OriginKind, RateLimitInfo, RateLimitWindow, SessionRecord, TokenUsage};
 use crate::usage::{in_range, UsageBucket, UsageReport};
 use aidp_core::cost::anomaly::{is_anomaly, median_and_mad, modified_z_scores};
 use serde::{Deserialize, Serialize};
@@ -123,13 +123,27 @@ fn started_ms(record: &SessionRecord) -> Option<i64> {
         .map(|moment| moment.timestamp_millis())
 }
 
-/// The ticket a session belongs to: its `origin.ref`, when it has one.
+/// The ticket a session belongs to. A stage session of a pipeline run (`origin.kind == "run"`)
+/// carries the run id in `origin.ref` and the ticket in `target`; any other origin (the
+/// dispatcher, a flow) carries the ticket key in `origin.ref`.
 pub fn ticket_of(record: &SessionRecord) -> Option<&str> {
+    if record.origin.is(OriginKind::Run) {
+        return record.target.as_deref().filter(|target| !target.is_empty());
+    }
     record
         .origin
         .r#ref
         .as_deref()
         .filter(|reference| !reference.is_empty())
+}
+
+/// The pipeline run a stage session belongs to (`origin.ref` of a `run` origin).
+pub fn run_of(record: &SessionRecord) -> Option<&str> {
+    record
+        .origin
+        .r#ref
+        .as_deref()
+        .filter(|reference| !reference.is_empty() && record.origin.is(OriginKind::Run))
 }
 
 /// The token counters of a session, zero while it has reported none.
@@ -314,6 +328,8 @@ pub fn stage_rows_of(state: &aidp_core::models::run_state::RunState) -> Vec<Stag
 pub struct CostContext {
     pub stages: HashMap<String, Vec<StageRow>>,
     pub routes: HashMap<String, String>,
+    /// Route of each run id, read from its run state; wins over the ticket's route.
+    pub run_routes: HashMap<String, String>,
 }
 
 /// Whether `groupBy` is served by [`aggregate_contextual`].
@@ -373,8 +389,16 @@ pub fn aggregate_contextual(
                 .model
                 .clone()
                 .unwrap_or_else(|| UNKNOWN_KEY.to_string()),
-            GROUP_ROUTE => ticket
-                .and_then(|key| context.routes.get(key).cloned())
+            GROUP_ROUTE => run_of(record)
+                .and_then(|run| context.run_routes.get(run).cloned())
+                .or_else(|| ticket.and_then(|key| context.routes.get(key).cloned()))
+                .or_else(|| {
+                    record
+                        .template_id
+                        .as_deref()
+                        .and_then(aidp_tickets::ticket_route::route_of_template)
+                        .map(|route| route.as_str().to_string())
+                })
                 .unwrap_or_else(|| UNKNOWN_KEY.to_string()),
             _ => {
                 if let Some(ticket) = ticket.filter(|ticket| !seen_tickets.contains(ticket)) {
@@ -383,7 +407,13 @@ pub fn aggregate_contextual(
                 continue;
             }
         };
-        add_session(bucket_for(&mut buckets, &key), record, &tokens);
+        let bucket = bucket_for(&mut buckets, &key);
+        add_session(bucket, record, &tokens);
+        if group_by == GROUP_TICKET {
+            if let Some(run) = run_of(record).filter(|run| !bucket.runs.iter().any(|r| r == run)) {
+                bucket.runs.push(run.to_string());
+            }
+        }
     }
     if group_by == GROUP_STAGE {
         for row in seen_tickets
