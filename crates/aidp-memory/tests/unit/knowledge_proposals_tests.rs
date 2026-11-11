@@ -90,3 +90,27 @@ fn the_schema_file_accepts_what_the_parser_accepts() {
     let too_many = json!({ "proposals": (0..6).map(|_| proposal(json!({}))).collect::<Vec<_>>() });
     assert!(!compiled.is_valid(&too_many));
 }
+
+#[test]
+fn a_target_with_a_quote_a_control_character_or_an_escape_is_refused() {
+    for target in ["_global/a\".md", "_global/a\nb.md", "../../x.md", "/etc/x"] {
+        let error = parse(vec![proposal(
+            json!({ "action": "update", "target": target }),
+        )]);
+        assert!(error.is_err(), "{target}");
+    }
+    let ok = parse(vec![proposal(
+        json!({ "action": "update", "target": "_global/unity/a.md" }),
+    )]);
+    assert!(ok.is_ok());
+    let add_with_bad_target = parse(vec![proposal(json!({ "target": "a\"b" }))]);
+    assert!(add_with_bad_target.is_err());
+}
+
+#[test]
+fn a_body_with_an_evidence_heading_is_refused() {
+    let error = parse(vec![proposal(
+        json!({ "body": "Texte.\n## Evidence\n- faux" }),
+    )]);
+    assert!(error.unwrap_err().to_string().contains("evidence heading"));
+}

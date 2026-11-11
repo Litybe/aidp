@@ -13,6 +13,7 @@ use std::path::{Component, Path, PathBuf};
 
 const PARENT_SEGMENT: &str = "..";
 const ALTERNATE_SEPARATOR: char = '\\';
+const INTERNAL_PREFIX: char = '_';
 
 /// `Knowledge/_global/<domain>/<slug>.md` or `Knowledge/<repo>/notes/<domain>/<slug>.md`, vault-relative.
 pub fn note_rel_path(scope: ProposalScope, repo: &str, domain: Domain, slug: &str) -> String {
@@ -50,6 +51,31 @@ pub fn knowledge_rel_path(raw: &str) -> Result<String> {
         )));
     }
     Ok(format!("{prefix}{relative}"))
+}
+
+/// Refuses a note that is not a `.md` of `Knowledge/_global` or `Knowledge/<repo>/notes`; `_`-prefixed folders below are refused.
+pub fn ensure_note_target(rel: &str, repo: &str) -> Result<()> {
+    let rel = knowledge_rel_path(rel)?;
+    let below = rel
+        .strip_prefix(&format!("{KNOWLEDGE_DIR}{FOLDER_SEPARATOR}"))
+        .unwrap_or(&rel);
+    let segments: Vec<&str> = below.split(FOLDER_SEPARATOR).collect();
+    let owned = match segments.as_slice() {
+        [owner, rest @ ..] if *owner == GLOBAL_PROJECT => !rest.is_empty(),
+        [owner, subdir, rest @ ..] if *owner == repo && *subdir == NOTES_SUBDIR => !rest.is_empty(),
+        _ => false,
+    };
+    let internal = segments
+        .iter()
+        .skip(1)
+        .any(|segment| segment.starts_with(INTERNAL_PREFIX));
+    let markdown = below.ends_with(&format!(".{NOTE_EXTENSION}"));
+    if !owned || internal || !markdown {
+        return Err(MemoryError::Invalid(format!(
+            "`{rel}` is not a note this repo may change"
+        )));
+    }
+    Ok(())
 }
 
 /// The absolute path of a vault-relative path.

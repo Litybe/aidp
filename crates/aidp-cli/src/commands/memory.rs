@@ -5,6 +5,7 @@ use crate::ctx::Ctx;
 use crate::models::hit_view::HitView;
 use aidp_core::{ExitStatus, Format};
 use aidp_memory::agent_roles::{narrow_by_route, parse_domains, role_of};
+use aidp_memory::embedding_index::{embed_pending, lacks_vectors};
 use aidp_memory::glossary;
 use aidp_memory::models::constants::paths::NOTES_DIR;
 use aidp_memory::models::constants::schema::GLOBAL_PROJECT;
@@ -203,18 +204,28 @@ fn notes_dir(ctx: &Ctx, opened: &Opened) -> Option<PathBuf> {
 
 fn sync_notes_quietly(ctx: &Ctx, project: &ProjectArg) {
     let outcome = open(ctx, project, false).and_then(|opened| {
-        let Some(dir) = notes_dir(ctx, &opened) else {
-            return Ok(());
-        };
-        let report = MemoryManager::new(&opened.store).sync_vault(&opened.project.key, &dir)?;
-        for rejection in report.rejected {
-            tracing::warn!(file = %rejection.file, "memory note refused: {}", rejection.reason);
+        if let Some(dir) = notes_dir(ctx, &opened) {
+            let report = MemoryManager::new(&opened.store).sync_vault(&opened.project.key, &dir)?;
+            for rejection in report.rejected {
+                tracing::warn!(file = %rejection.file, "memory note refused: {}", rejection.reason);
+            }
         }
-        Ok(())
+        embed_memories(&opened)
     });
     if let Err(error) = outcome {
         tracing::warn!(%error, "memory notes not synchronised");
     }
+}
+
+fn embed_memories(opened: &Opened) -> anyhow::Result<()> {
+    let key = opened.project.key.as_str();
+    if !lacks_vectors(&opened.store, key, Source::Memory)? {
+        return Ok(());
+    }
+    if let Some(embedder) = load_default_embedder(&opened.gateway) {
+        embed_pending(&opened.store, embedder.as_ref(), key, Some(Source::Memory))?;
+    }
+    Ok(())
 }
 
 fn dispatch_memory(ctx: &Ctx, op: MemoryOp) -> anyhow::Result<CommandOutput> {
@@ -290,6 +301,7 @@ chunks d'un autre modele: {}",
                 MemoryError::NotFound("no vault: the notes have no folder".to_string())
             })?;
             let report = MemoryManager::new(&opened.store).sync_vault(&opened.project.key, &dir)?;
+            embed_memories(&opened)?;
             let refused = !report.rejected.is_empty();
             let output =
                 CommandOutput::json(Some(Format::JsonCompact), serde_json::to_value(report)?);

@@ -7,6 +7,8 @@ use crate::models::constants::knowledge_proposals::{
 use crate::models::enums::ProposalAction;
 use crate::models::knowledge_proposal::KnowledgeProposal;
 use crate::models::knowledge_proposal_file::KnowledgeProposalFile;
+use crate::note_paths::knowledge_rel_path;
+use crate::note_text::has_evidence_heading;
 use regex::Regex;
 use std::sync::OnceLock;
 
@@ -76,6 +78,22 @@ pub fn validate_proposal(proposal: &KnowledgeProposal) -> Result<()> {
             slug,
             format!("evidence is over {MAX_EVIDENCE_CHARS} characters"),
         ));
+    }
+    if has_evidence_heading(&proposal.body) {
+        return Err(invalid(slug, "body must not hold an evidence heading"));
+    }
+    if let Some(target) = proposal
+        .target
+        .as_deref()
+        .filter(|target| !target.is_empty())
+    {
+        if target
+            .chars()
+            .any(|character| character.is_control() || character == '"')
+        {
+            return Err(invalid(slug, "target holds a control character or a quote"));
+        }
+        knowledge_rel_path(target).map_err(|error| invalid(slug, error))?;
     }
     let needs_target = matches!(
         proposal.action,

@@ -20,7 +20,7 @@ pub fn build_retriever<'a>(
     }
 }
 
-/// Installs the glossary of `<vault>/Knowledge/_glossary.md` for this process; the first call wins.
+/// Installs the glossary of `<vault>/Knowledge/_glossary.md` for this process; the last call wins.
 pub fn install_vault_glossary(vault_root: &Path) {
     glossary::install_from_dir(&vault_root.join(KNOWLEDGE_DIR));
 }

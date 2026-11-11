@@ -10,7 +10,10 @@ use crate::models::constants::knowledge_proposals::{
 use crate::models::constants::paths::INBOX_DIR;
 use crate::models::enums::NoteStatus;
 use crate::note_paths::{absolute, free_path, knowledge_rel_path, wikilink};
-use crate::note_text::{append_evidence, evidence_of, render_body, replace_body, set_field};
+use crate::note_text::{
+    append_evidence, body_of, evidence_has_source, evidence_of, render_body, replace_body,
+    set_field, without_evidence,
+};
 use std::path::{Path, PathBuf};
 
 const NO_DATE: &str = "undated";
@@ -64,9 +67,18 @@ impl NoteVault {
         Ok(())
     }
 
-    /// Adds an evidence bullet to an existing note and bumps its `updated` date.
-    pub fn add_evidence(&self, rel: &str, entry: &str) -> Result<()> {
+    /// Whether a note already carries evidence from `source`.
+    pub fn has_source(&self, rel: &str, source: &str) -> bool {
+        self.read(rel)
+            .is_ok_and(|content| evidence_has_source(&content, source))
+    }
+
+    /// Adds an evidence bullet to an existing note and bumps its `updated` date; a `source` already cited changes nothing.
+    pub fn add_evidence(&self, rel: &str, source: &str, entry: &str) -> Result<()> {
         let content = self.read(rel)?;
+        if evidence_has_source(&content, source) {
+            return Ok(());
+        }
         let content = set_field(&append_evidence(&content, entry), KEY_UPDATED, &self.today);
         self.write(rel, &content)
     }
@@ -82,6 +94,11 @@ impl NoteVault {
     ) -> Result<()> {
         let target = knowledge_rel_path(target)?;
         let old = self.read(&target)?;
+        let unchanged =
+            without_evidence(&body_of(&old)).trim() == render_body(title, body, &[]).trim();
+        if unchanged && evidence_has_source(&old, source) {
+            return Ok(());
+        }
         self.archive_version(&target, &old)?;
         let mut evidence = evidence_of(&old);
         evidence.push(entry.to_string());

@@ -85,3 +85,45 @@ fn a_synonym_already_in_the_query_is_not_repeated() {
     let expression = match_expression_with("knockback recul", Some(&glossary())).unwrap();
     assert_eq!(expression.matches("\"recul\"*").count(), 1);
 }
+
+fn glossary_dir(group: &str) -> tempfile::TempDir {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join(GLOSSARY_FILE),
+        format!("---\ntype: glossary\n---\n\n# G\n\n```yaml\ngroups:\n  - [{group}]\n```\n"),
+    )
+    .unwrap();
+    dir
+}
+
+#[test]
+fn the_last_installed_folder_wins_and_is_independent_of_the_first() {
+    let first = glossary_dir("alpha, beta");
+    let second = glossary_dir("gamma, delta");
+    install_from_dir(first.path());
+    assert_eq!(current().unwrap().groups[0][0], "alpha");
+    install_from_dir(second.path());
+    assert_eq!(current().unwrap().groups[0][0], "gamma");
+}
+
+#[test]
+fn a_changed_file_is_read_again() {
+    let dir = glossary_dir("alpha, beta");
+    let path = dir.path().join(GLOSSARY_FILE);
+    assert_eq!(cached(&path).unwrap().groups[0][0], "alpha");
+    std::fs::write(
+        &path,
+        "---\ntype: glossary\n---\n\n```yaml\ngroups:\n  - [omega, sigma]\n```\n",
+    )
+    .unwrap();
+    let later = std::time::SystemTime::now() + std::time::Duration::from_secs(30);
+    std::fs::File::options()
+        .write(true)
+        .open(&path)
+        .unwrap()
+        .set_modified(later)
+        .unwrap();
+    assert_eq!(cached(&path).unwrap().groups[0][0], "omega");
+    std::fs::remove_file(&path).unwrap();
+    assert!(cached(&path).is_none());
+}

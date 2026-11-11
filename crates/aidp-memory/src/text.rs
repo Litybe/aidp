@@ -183,7 +183,7 @@ pub fn singular(term: &str) -> String {
 
 /// An FTS5 match expression: every term as a prefix, joined with `OR`, widened by the installed glossary.
 pub fn match_expression(query: &str) -> Option<String> {
-    match_expression_with(query, crate::glossary::current())
+    match_expression_with(query, crate::glossary::current().as_deref())
 }
 
 /// [`match_expression`] with an explicit glossary.

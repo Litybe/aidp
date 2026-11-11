@@ -1,28 +1,68 @@
-//! The synonym glossary: loaded once per process, it widens BM25 queries.
+//! The synonym glossary: cached by file and modification time, it widens BM25 queries.
 
 use crate::error::{MemoryError, Result};
 use crate::knowledge_note::split_frontmatter;
 use crate::models::constants::knowledge::{BLOCK_FENCE, GLOSSARY_BLOCK_OPEN, GLOSSARY_FILE};
 use crate::models::glossary::Glossary;
 use crate::text::{fold, is_stopword, singular};
-use std::path::Path;
-use std::sync::OnceLock;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, OnceLock, RwLock};
+use std::time::SystemTime;
 
-static CURRENT: OnceLock<Glossary> = OnceLock::new();
+type Cache = HashMap<PathBuf, (SystemTime, Arc<Glossary>)>;
 
-/// The glossary installed for this process, if any.
-pub fn current() -> Option<&'static Glossary> {
-    CURRENT.get()
+static ACTIVE: RwLock<Option<PathBuf>> = RwLock::new(None);
+
+fn cache() -> &'static RwLock<Cache> {
+    static CACHE: OnceLock<RwLock<Cache>> = OnceLock::new();
+    CACHE.get_or_init(|| RwLock::new(HashMap::new()))
 }
 
-/// Installs the glossary of `<knowledge_dir>/_glossary.md`; the first call wins, a missing file does nothing.
+/// The glossary of the last installed folder, reloaded when its file changed.
+pub fn current() -> Option<Arc<Glossary>> {
+    let path = ACTIVE
+        .read()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .clone()?;
+    cached(&path)
+}
+
+/// Makes `<knowledge_dir>/_glossary.md` the glossary of this process; the last call wins.
 pub fn install_from_dir(knowledge_dir: &Path) {
-    if CURRENT.get().is_some() {
-        return;
+    let path = knowledge_dir.join(GLOSSARY_FILE);
+    *ACTIVE
+        .write()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(path);
+}
+
+/// The glossary at `path`, parsed again only when its modification time changed.
+pub fn cached(path: &Path) -> Option<Arc<Glossary>> {
+    let modified = std::fs::metadata(path)
+        .and_then(|meta| meta.modified())
+        .ok()?;
+    if let Some((stamp, glossary)) = cache()
+        .read()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .get(path)
+    {
+        if *stamp == modified {
+            return Some(Arc::clone(glossary));
+        }
     }
-    if let Some(glossary) = Glossary::load(&knowledge_dir.join(GLOSSARY_FILE)) {
-        let _ = CURRENT.set(glossary);
+    let loaded = Glossary::load(path).map(Arc::new);
+    let mut entries = cache()
+        .write()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    match &loaded {
+        Some(glossary) => {
+            entries.insert(path.to_path_buf(), (modified, Arc::clone(glossary)));
+        }
+        None => {
+            entries.remove(path);
+        }
     }
+    loaded
 }
 
 impl Glossary {

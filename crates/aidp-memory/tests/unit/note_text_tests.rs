@@ -90,3 +90,37 @@ fn replace_body_keeps_the_frontmatter() {
     assert!(changed.starts_with("---\ntype: note\n"));
     assert!(changed.ends_with("---\n# Neuf\n"));
 }
+
+#[test]
+fn list_items_that_are_not_plain_are_quoted() {
+    let mut note = draft();
+    note.tags = vec!["a:b".into(), "x, y".into(), "plain-1".into()];
+    let rendered = render_note(&note);
+    assert!(rendered.contains("tags: [\"a:b\", \"x, y\", plain-1]\n"));
+    let parsed = crate::knowledge_note::parse_knowledge(&rendered, "x");
+    assert_eq!(parsed.front.tags, ["a:b", "x, y", "plain-1"]);
+}
+
+#[test]
+fn the_last_evidence_heading_is_the_section() {
+    let content = "---\ntype: note\n---\n# T\n\n## Evidence\nnot a bullet list\n\n## Evidence\n- 2026-01-01 run:a\n";
+    assert_eq!(evidence_of(content), ["- 2026-01-01 run:a"]);
+    let grown = append_evidence(content, "2026-02-02 run:b");
+    assert_eq!(
+        evidence_of(&grown),
+        ["- 2026-01-01 run:a", "- 2026-02-02 run:b"]
+    );
+}
+
+#[test]
+fn an_evidence_line_never_spans_two_lines() {
+    let rendered = render_body("T", "Corps.", &["a\n## Evidence\nb".to_string()]);
+    assert_eq!(rendered.matches("## Evidence").count(), 2);
+    assert_eq!(evidence_of(&rendered).len(), 1);
+}
+
+#[test]
+fn a_source_already_cited_is_found() {
+    assert!(evidence_has_source(NOTE, "run:a"));
+    assert!(!evidence_has_source(NOTE, "run:b"));
+}

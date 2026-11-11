@@ -1,11 +1,11 @@
 //! The knowledge block a sub-agent receives when it starts.
 
-use crate::agent_roles::{agent_name, domains_for};
+use crate::agent_roles::{agent_name, domains_for_route};
 use crate::error::Result;
 use crate::models::constants::knowledge::{
     DOMAIN_WORD_SEPARATOR, HOOK_K, HOOK_QUERY_MAX_CHARS, KNOWLEDGE_HEADING,
 };
-use crate::models::enums::{Domain, Source};
+use crate::models::enums::{Domain, Route, Source};
 use crate::models::hit::Hit;
 use crate::models::search_query::SearchQuery;
 use crate::retriever::Retriever;
@@ -26,14 +26,16 @@ pub fn role_query(agent_type: &str, domains: &[Domain]) -> String {
 /// The knowledge block for an agent type, at most `max_chars` characters; empty when nothing matches.
 ///
 /// The query is the prompt when there is one, else the words of the agent's domains.
+/// A generic agent reads the domains of `route` when it is known.
 pub fn agent_knowledge(
     retriever: &dyn Retriever,
     project: &str,
     agent_type: &str,
     prompt: Option<&str>,
+    route: Option<Route>,
     max_chars: usize,
 ) -> Result<String> {
-    let domains = domains_for(agent_type);
+    let domains = domains_for_route(agent_type, route);
     let text = match prompt.map(str::trim).filter(|prompt| !prompt.is_empty()) {
         Some(prompt) => truncate_chars(prompt, HOOK_QUERY_MAX_CHARS).to_string(),
         None => role_query(agent_type, &domains),
@@ -56,25 +58,48 @@ fn entry(hit: &Hit) -> String {
     )
 }
 
-/// The heading, the lookup hint and as many entries as fit `max_chars`; empty without entry.
+/// Characters a `character` takes once written inside a JSON string.
+fn json_width(character: char) -> usize {
+    match character {
+        '"' | '\\' | '\n' | '\r' | '\t' | '\u{8}' | '\u{c}' => 2,
+        control if control < ' ' => 6,
+        _ => 1,
+    }
+}
+
+fn json_len(text: &str) -> usize {
+    text.chars().map(json_width).sum()
+}
+
+fn truncate_json(text: &str, room: usize) -> String {
+    let mut used = 0;
+    text.chars()
+        .take_while(|character| {
+            used += json_width(*character);
+            used <= room
+        })
+        .collect()
+}
+
+/// The heading, the lookup hint and as many entries as fit `max_chars` once JSON-escaped; empty without entry.
 pub fn render(hits: &[Hit], agent_type: &str, max_chars: usize) -> String {
     let header = format!(
         "{KNOWLEDGE_HEADING}\n\nNotes for `{}`. More: `aidp rag search \"<query>\" --agent-type {}`.\n\n",
         agent_name(agent_type),
         agent_name(agent_type)
     );
-    let mut used = header.chars().count();
+    let mut used = json_len(&header);
     let mut body = String::new();
     for hit in hits {
         let mut text = entry(hit);
         let room = max_chars.saturating_sub(used);
-        if text.chars().count() > room {
+        if json_len(&text) > room {
             if !body.is_empty() {
                 continue;
             }
-            text = truncate_chars(&text, room).to_string();
+            text = truncate_json(&text, room);
         }
-        used += text.chars().count();
+        used += json_len(&text);
         body.push_str(&text);
     }
     if body.trim().is_empty() {

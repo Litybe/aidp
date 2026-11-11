@@ -207,3 +207,23 @@ fn the_best_memory_is_shortened_rather_than_skipped() {
     assert_eq!(block.memories.len(), 1);
     assert!(block.memories[0].text.len() < long_text.len());
 }
+
+#[test]
+fn only_a_plain_issue_key_is_a_path_segment() {
+    for ok in ["GH-12", "42", "a.b_c-1"] {
+        assert_eq!(safe_issue(ok), Some(ok));
+    }
+    for bad in ["", "..", "a..b", "../x", "a/b", "a\\b", "C:x", "a b"] {
+        assert_eq!(safe_issue(bad), None, "{bad}");
+    }
+}
+
+#[test]
+fn a_route_line_in_a_text_is_found() {
+    assert_eq!(
+        route_in_text("intro\n  route: art\nsuite"),
+        Some(Route::Art)
+    );
+    assert_eq!(route_in_text("route: 'code'"), Some(Route::Code));
+    assert_eq!(route_in_text("route: nothing\nno route"), None);
+}

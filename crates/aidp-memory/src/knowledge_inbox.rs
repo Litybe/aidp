@@ -10,7 +10,7 @@ use crate::models::enums::{Domain, NoteStatus, ProposalAction, ProposalOutcome, 
 use crate::models::inbox_decision::InboxDecision;
 use crate::models::inbox_entry::InboxEntry;
 use crate::models::inbox_frontmatter::InboxFrontmatter;
-use crate::note_paths::{knowledge_rel_path, note_rel_path, vault_relative};
+use crate::note_paths::{ensure_note_target, knowledge_rel_path, note_rel_path, vault_relative};
 use crate::note_text::{body_of, remove_fields, set_field, without_evidence};
 use crate::note_vault::NoteVault;
 use std::path::{Path, PathBuf};
@@ -106,23 +106,21 @@ impl KnowledgeInbox {
             .map(ProposalScope::parse)
             .transpose()?
             .unwrap_or(ProposalScope::Project);
-        let repo = front.repo.as_deref().unwrap_or(&self.vault.repo);
-        let destination = note_rel_path(scope, repo, domain, &stem_of(file));
+        let destination = note_rel_path(scope, &self.vault.repo, domain, &stem_of(file));
         if self.vault.exists(&destination) {
             return Err(MemoryError::Conflict(format!(
                 "a note already exists at {destination}"
             )));
         }
+        let superseded = (action == ProposalAction::Supersede)
+            .then(|| self.superseded_target(front))
+            .transpose()?;
         let active = remove_fields(content, &INBOX_KEYS);
         let active = set_field(&active, KEY_STATUS, NoteStatus::Active.as_str());
         let active = set_field(&active, KEY_UPDATED, &self.vault.today);
-        let superseded = (action == ProposalAction::Supersede)
-            .then(|| front.target.as_deref().map(unlink))
-            .flatten();
         self.vault.write(&destination, &active)?;
         if let Some(target) = superseded {
-            self.vault
-                .mark_superseded(&knowledge_rel_path(&target)?, &destination)?;
+            self.vault.mark_superseded(&target, &destination)?;
         }
         std::fs::remove_file(file)?;
         let outcome = if action == ProposalAction::Supersede {
@@ -136,6 +134,17 @@ impl KnowledgeInbox {
         })
     }
 
+    fn superseded_target(&self, front: &InboxFrontmatter) -> Result<String> {
+        let raw =
+            front.target.as_deref().map(unlink).ok_or_else(|| {
+                MemoryError::Invalid("an inbox supersede needs a target".to_string())
+            })?;
+        let target = knowledge_rel_path(&raw)?;
+        ensure_note_target(&target, &self.vault.repo)?;
+        self.vault.read(&target)?;
+        Ok(target)
+    }
+
     fn approve_update(
         &self,
         file: &Path,
@@ -146,6 +155,7 @@ impl KnowledgeInbox {
             knowledge_rel_path(&unlink(front.target.as_deref().ok_or_else(|| {
                 MemoryError::Invalid("an inbox update needs a target".to_string())
             })?))?;
+        ensure_note_target(&target, &self.vault.repo)?;
         let title = parse_knowledge(content, &stem_of(file)).title;
         let source = front.source.clone().unwrap_or_default();
         let entry = format!("{} {source} (approved)", self.vault.today);

@@ -472,3 +472,38 @@ fn the_hub_retriever_follows_the_embedder_and_the_lexical_flag() {
     assert!(hybrid.iter().any(|hit| hit.via == "hybrid"), "{hybrid:?}");
     assert!(lexical.iter().all(|hit| hit.via == "bm25"));
 }
+
+#[test]
+fn concurrent_ingestions_of_one_run_ingest_it_once() {
+    let state = TempWorkspace::new("mem-state");
+    let vault = TempWorkspace::new("mem-vault");
+    let workspace = mini_project();
+    let run = TempWorkspace::new("mem-run");
+    write_knowledge(&run, "05-learn", KNOWLEDGE_PROPOSALS);
+    let hub = vault_hub(&state, &vault, false);
+    let project = project_in(&workspace);
+    let run_facts = facts(run.path());
+    let files: usize = std::thread::scope(|scope| {
+        let handles: Vec<_> = (0..8)
+            .map(|_| scope.spawn(|| hub.ingest_knowledge(&project, &run_facts).unwrap().files))
+            .collect();
+        handles
+            .into_iter()
+            .map(|handle| handle.join().unwrap())
+            .sum()
+    });
+    assert_eq!(files, 1);
+}
+
+#[test]
+fn an_issue_key_that_climbs_out_of_the_tickets_folder_has_no_route() {
+    let state = TempWorkspace::new("mem-state");
+    let vault = TempWorkspace::new("mem-vault");
+    let hub = vault_hub(&state, &vault, false);
+    let tickets = vault.path().join(TICKETS_DIR);
+    fs::create_dir_all(tickets.join("repo")).unwrap();
+    fs::write(tickets.join("repo/ok.md"), "---\nroute: code\n---\n").unwrap();
+    fs::write(tickets.join("secret.md"), "---\nroute: art\n---\n").unwrap();
+    assert!(hub.ticket_route("repo", "ok").is_some());
+    assert!(hub.ticket_route("repo", "../secret").is_none());
+}

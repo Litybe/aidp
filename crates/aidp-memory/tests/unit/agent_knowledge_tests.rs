@@ -1,4 +1,6 @@
 use super::*;
+use crate::agent_roles::domains_for;
+use std::sync::Mutex;
 
 fn hit(index: usize, text: &str) -> Hit {
     Hit {
@@ -66,4 +68,41 @@ fn the_role_query_names_the_domains_or_the_agent() {
         "pixel art pixel animation tooling"
     );
     assert_eq!(role_query("custom:Some-Agent", &[]), "some agent");
+}
+
+#[test]
+fn the_serialised_context_stays_under_the_cap_even_with_escapes() {
+    let body = "\"quoted\"\n\\path\t".repeat(120);
+    let hits: Vec<Hit> = (0..12).map(|index| hit(index, &body)).collect();
+    let block = render(&hits, "executor", 9000);
+    let serialised = serde_json::to_string(&block).unwrap();
+    assert!(serialised.chars().count() - 2 <= 9000);
+    assert!(serialised.chars().count() < 10_000);
+    assert!(block.contains("### Note 0"));
+}
+
+struct Capture(Mutex<Vec<Domain>>);
+
+impl Retriever for Capture {
+    fn search(&self, query: &SearchQuery) -> Result<Vec<Hit>> {
+        *self.0.lock().unwrap() = query.domains.clone();
+        Ok(Vec::new())
+    }
+}
+
+#[test]
+fn a_generic_agent_reads_the_domains_of_the_inferred_route() {
+    let capture = Capture(Mutex::new(Vec::new()));
+    agent_knowledge(&capture, "p", "executor", Some("work"), None, 9000).unwrap();
+    assert!(capture.0.lock().unwrap().is_empty());
+    agent_knowledge(
+        &capture,
+        "p",
+        "executor",
+        Some("work"),
+        Some(Route::Code),
+        9000,
+    )
+    .unwrap();
+    assert_eq!(*capture.0.lock().unwrap(), Route::Code.domains().to_vec());
 }

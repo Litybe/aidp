@@ -64,7 +64,7 @@ fn approving_an_add_moves_the_note_active_without_inbox_fields() {
     )]);
     let decision = inbox(&vault).approve("Knowledge/_inbox/rule.md").unwrap();
     assert_eq!(decision.outcome, Some(ProposalOutcome::Added));
-    assert_eq!(decision.path, "Knowledge/Other/notes/unity/rule.md");
+    assert_eq!(decision.path, "Knowledge/Mini/notes/unity/rule.md");
     let moved = read(&vault, &decision.path);
     assert!(moved.contains("status: active\n"));
     assert!(moved.contains("updated: 2026-11-11\n"));
@@ -179,4 +179,41 @@ fn unknown_and_escaping_names_are_refused() {
     let escaped = format!("..\\..\\{}", outside.path().join("secret.md").display());
     assert!(inbox(&vault).approve(&escaped).is_err());
     assert!(outside.path().join("secret.md").exists());
+}
+
+#[test]
+fn a_repo_written_in_the_note_never_chooses_the_destination() {
+    let vault = vault_with(&[(
+        "Knowledge/_inbox/rule.md",
+        inbox_note("action: add\nscope: project\nrepo: ../../../escape\n"),
+    )]);
+    let decision = inbox(&vault).approve("rule").unwrap();
+    assert_eq!(decision.path, "Knowledge/Mini/notes/unity/rule.md");
+    assert!(!vault.path().join("../escape").exists());
+}
+
+#[test]
+fn a_supersede_with_an_unusable_target_writes_nothing() {
+    for target in [
+        "[[Knowledge/_global/unity/ghost]]",
+        "[[Knowledge/_inbox/other]]",
+        "[[Knowledge/Other/notes/unity/x]]",
+    ] {
+        let vault = vault_with(&[
+            (
+                "Knowledge/_inbox/rule.md",
+                inbox_note(&format!(
+                    "action: supersede\nscope: global\ntarget: \"{target}\"\n"
+                )),
+            ),
+            ("Knowledge/Other/notes/unity/x.md", OLD.to_string()),
+            ("Knowledge/_inbox/other.md", OLD.to_string()),
+        ]);
+        assert!(inbox(&vault).approve("rule").is_err(), "{target}");
+        assert!(!vault
+            .path()
+            .join("Knowledge/_global/unity/rule.md")
+            .exists());
+        assert!(vault.path().join("Knowledge/_inbox/rule.md").exists());
+    }
 }

@@ -260,6 +260,23 @@ pub fn ticket_route(mirror: &str) -> Option<Route> {
         .and_then(|value| Route::parse(value.trim().trim_matches(['\'', '"'])).ok())
 }
 
+/// The issue key when it is one path segment of `[A-Za-z0-9._-]` without `..`, else `None`.
+pub fn safe_issue(issue: &str) -> Option<&str> {
+    let valid = !issue.is_empty()
+        && !issue.contains("..")
+        && issue
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || "._-".contains(character));
+    valid.then_some(issue)
+}
+
+/// The first `route:` line of a text, such as a ticket or a stage prompt; `None` when it names none.
+pub fn route_in_text(text: &str) -> Option<Route> {
+    text.lines()
+        .filter_map(|line| line.trim_start().strip_prefix(ROUTE_KEY))
+        .find_map(|value| Route::parse(value.trim().trim_matches(['\'', '"'])).ok())
+}
+
 /// Project paths (`Assets/...`, `Docs/...`) mentioned in a text.
 pub fn extract_paths(text: &str) -> Vec<String> {
     let mut paths: Vec<String> = PATH_PATTERN

@@ -10,9 +10,26 @@ use crate::models::note_draft::NoteDraft;
 const LINE_BREAK: &str = "\n";
 const FIELD_SEPARATOR: char = ':';
 const LIST_SEPARATOR: &str = ", ";
+const WORD_SEPARATOR: &str = " ";
+
+fn is_plain(item: &str) -> bool {
+    !item.is_empty()
+        && item
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || "-_./".contains(character))
+}
+
+fn list_item(item: &str) -> String {
+    if is_plain(item) {
+        item.to_string()
+    } else {
+        serde_json::to_string(item).unwrap_or_else(|_| format!("\"{item}\""))
+    }
+}
 
 fn list(items: &[String]) -> String {
-    format!("[{}]", items.join(LIST_SEPARATOR))
+    let quoted: Vec<String> = items.iter().map(|item| list_item(item)).collect();
+    format!("[{}]", quoted.join(LIST_SEPARATOR))
 }
 
 /// Renders a note file: frontmatter in the order of the existing notes, title, body, evidence.
@@ -65,6 +82,10 @@ fn strip_title(body: &str, title: &str) -> String {
 }
 
 fn evidence_line(text: &str) -> String {
+    let text = &text
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(WORD_SEPARATOR);
     if text.starts_with(EVIDENCE_BULLET) {
         text.to_string()
     } else {
@@ -130,7 +151,7 @@ pub fn replace_body(content: &str, body: &str) -> String {
 fn evidence_range(lines: &[&str]) -> Option<(usize, usize)> {
     let start = lines
         .iter()
-        .position(|line| line.trim() == EVIDENCE_HEADING)?;
+        .rposition(|line| line.trim() == EVIDENCE_HEADING)?;
     let end = lines[start + 1..]
         .iter()
         .position(|line| line.starts_with(SECTION_PREFIX))
@@ -149,6 +170,21 @@ pub fn evidence_of(content: &str) -> Vec<String> {
             .map(|line| line.trim_end().to_string())
             .collect()
     })
+}
+
+/// Whether an evidence bullet already names `source`.
+pub fn evidence_has_source(content: &str, source: &str) -> bool {
+    evidence_of(content).iter().any(|line| {
+        line.trim_start_matches(EVIDENCE_BULLET)
+            .split_whitespace()
+            .nth(1)
+            .is_some_and(|token| token.trim_end_matches(FIELD_SEPARATOR) == source)
+    })
+}
+
+/// Whether a text holds a line that opens the evidence section.
+pub fn has_evidence_heading(text: &str) -> bool {
+    text.lines().any(|line| line.trim() == EVIDENCE_HEADING)
 }
 
 /// The text without its `## Evidence` section.

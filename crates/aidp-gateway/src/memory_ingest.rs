@@ -107,6 +107,7 @@ pub struct MemoryHub {
     store: Mutex<Option<Arc<MemoryStore>>>,
     queue: Mutex<Queue>,
     ledger: Mutex<()>,
+    ingest_gate: Mutex<()>,
     embedder: OnceLock<Option<Arc<dyn Embedder>>>,
 }
 
@@ -142,6 +143,7 @@ impl MemoryHub {
             store: Mutex::new(None),
             queue: Mutex::new(Queue::default()),
             ledger: Mutex::new(()),
+            ingest_gate: Mutex::new(()),
             embedder,
         })
     }
@@ -381,6 +383,7 @@ impl MemoryHub {
         project: &ProjectRef,
         facts: &RunFacts,
     ) -> Result<IngestReport, MemoryError> {
+        let _gate = lock(&self.ingest_gate);
         let store = self.store()?;
         let manager = MemoryManager::new(&store);
         let mut total = IngestReport::default();
@@ -432,6 +435,7 @@ impl MemoryHub {
         project: &ProjectRef,
         facts: &RunFacts,
     ) -> Result<KnowledgeIngestReport, MemoryError> {
+        let _gate = lock(&self.ingest_gate);
         let mut total = KnowledgeIngestReport::default();
         if self.vault_root.as_os_str().is_empty() {
             return Ok(total);
@@ -485,6 +489,7 @@ impl MemoryHub {
         if self.vault_root.as_os_str().is_empty() {
             return None;
         }
+        let issue = aidp_memory::context::safe_issue(issue)?;
         let mirror = std::fs::read_to_string(
             self.vault_root
                 .join(TICKETS_DIR)

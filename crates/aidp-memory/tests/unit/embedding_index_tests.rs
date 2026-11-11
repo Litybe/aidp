@@ -121,9 +121,7 @@ fn more_chunks_than_one_batch_are_all_embedded() {
         })
         .unwrap();
     let embedder = HashEmbedder::new(FAKE_MODEL);
-    let embedded = store
-        .write(|transaction| embed_pending(transaction, &embedder, "p", None))
-        .unwrap();
+    let embedded = embed_pending(&store, &embedder, "p", None).unwrap();
     assert_eq!(embedded, total);
     assert_eq!(vector_models(&store).len(), total);
 }
@@ -133,4 +131,75 @@ fn embedding_text_is_title_then_text_cut_to_the_limit() {
     assert_eq!(embedding_text("T", "body"), "T\nbody");
     let long = "x".repeat(EMBED_MAX_CHARS * 2);
     assert_eq!(embedding_text("T", &long).chars().count(), EMBED_MAX_CHARS);
+}
+
+struct WrongDim;
+
+impl Embedder for WrongDim {
+    fn model_id(&self) -> &str {
+        "wrong"
+    }
+
+    fn dim(&self) -> usize {
+        4
+    }
+
+    fn embed(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>> {
+        Ok(texts.iter().map(|_| vec![0.0; 3]).collect())
+    }
+}
+
+struct ReadsStore<'a>(&'a MemoryStore);
+
+impl Embedder for ReadsStore<'_> {
+    fn model_id(&self) -> &str {
+        "reads"
+    }
+
+    fn dim(&self) -> usize {
+        1
+    }
+
+    fn embed(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>> {
+        self.0.stats("p")?;
+        Ok(texts.iter().map(|_| vec![1.0]).collect())
+    }
+}
+
+fn insert_chunk(store: &MemoryStore, source: &str) {
+    store
+        .write(|transaction| {
+            transaction.execute(
+                "INSERT INTO chunks (id, project, source, path, line_start, line_end, title, text, hash, mtime) \
+                 VALUES ('p:c#0', 'p', ?1, 'a.md', 1, 1, 't', 'x', 'h', 0)",
+                params![source],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+}
+
+#[test]
+fn a_vector_of_the_wrong_length_is_an_error_not_a_loop() {
+    let store = MemoryStore::open_in_memory().unwrap();
+    insert_chunk(&store, "doc");
+    let error = embed_pending(&store, &WrongDim, "p", None).unwrap_err();
+    assert!(matches!(error, MemoryError::Embedding(_)));
+}
+
+#[test]
+fn the_model_runs_without_the_store_lock() {
+    let store = MemoryStore::open_in_memory().unwrap();
+    insert_chunk(&store, "doc");
+    let embedder = ReadsStore(&store);
+    assert_eq!(embed_pending(&store, &embedder, "p", None).unwrap(), 1);
+}
+
+#[test]
+fn memory_chunks_without_a_vector_are_reported() {
+    let store = MemoryStore::open_in_memory().unwrap();
+    insert_chunk(&store, "memory");
+    assert!(lacks_vectors(&store, "p", Source::Memory).unwrap());
+    embed_pending(&store, &ReadsStore(&store), "p", Some(Source::Memory)).unwrap();
+    assert!(!lacks_vectors(&store, "p", Source::Memory).unwrap());
 }

@@ -51,3 +51,26 @@ fn vault_relative_uses_forward_slashes() {
     let path = absolute(root, "Knowledge/_inbox/a.md");
     assert_eq!(vault_relative(root, &path), "Knowledge/_inbox/a.md");
 }
+
+#[test]
+fn note_targets_are_limited_to_the_global_and_repo_notes() {
+    for ok in [
+        "Knowledge/_global/unity/a.md",
+        "Knowledge/Mini/notes/unity/a.md",
+    ] {
+        assert!(ensure_note_target(ok, "Mini").is_ok(), "{ok}");
+    }
+    for bad in [
+        "Knowledge/Other/notes/unity/a.md",
+        "Knowledge/Mini/unity/a.md",
+        "Knowledge/_inbox/a.md",
+        "Knowledge/_history/a.md",
+        "Knowledge/_global/_x/a.md",
+        "Knowledge/Mini/notes/_x/a.md",
+        "Knowledge/_global/unity/a.txt",
+        "Knowledge/_global",
+        "Knowledge/_glossary.md",
+    ] {
+        assert!(ensure_note_target(bad, "Mini").is_err(), "{bad}");
+    }
+}

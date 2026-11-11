@@ -95,18 +95,15 @@ impl<'a> Indexer<'a> {
                     options.full,
                     &mut report,
                 )?;
-                if let Some(embedder) = self.embedder {
-                    report.embedded +=
-                        embed_pending(transaction, embedder, &project.key, Some(source))?;
-                }
                 Ok(())
             })?;
+            if let Some(embedder) = self.embedder {
+                report.embedded += embed_pending(self.store, embedder, &project.key, Some(source))?;
+            }
         }
         self.index_global_knowledge(project, options, &mut report)?;
         if let Some(embedder) = self.embedder {
-            report.embedded += self
-                .store
-                .write(|transaction| embed_pending(transaction, embedder, &project.key, None))?;
+            report.embedded += embed_pending(self.store, embedder, &project.key, None)?;
         }
         report.chunks = self.store.stats(&project.key)?.chunks;
         report.duration_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
@@ -146,17 +143,17 @@ impl Indexer<'_> {
                 &targets,
                 options.full,
                 report,
+            )
+        })?;
+        if let Some(embedder) = self.embedder {
+            report.embedded += embed_pending(
+                self.store,
+                embedder,
+                GLOBAL_PROJECT,
+                Some(Source::Knowledge),
             )?;
-            if let Some(embedder) = self.embedder {
-                report.embedded += embed_pending(
-                    transaction,
-                    embedder,
-                    GLOBAL_PROJECT,
-                    Some(Source::Knowledge),
-                )?;
-            }
-            Ok(())
-        })
+        }
+        Ok(())
     }
 }
 

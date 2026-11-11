@@ -17,6 +17,7 @@ use crate::models::hook_payload::HookPayload;
 use crate::models::hook_reply::HookReply;
 use aidp_core::Format;
 use aidp_memory::agent_knowledge::agent_knowledge;
+use aidp_memory::context::route_in_text;
 use aidp_memory::distill::{distill_prompt, proposals_from_reply, should_distill};
 use aidp_memory::models::constants::knowledge::HOOK_MAX_CHARS;
 use aidp_memory::models::constants::paths::{MEMORY_DIR, PROPOSALS_FILE};
@@ -104,11 +105,13 @@ fn subagent_knowledge(
         return Ok(None);
     }
     let prompt = payload.prompt.as_deref().or(payload.description.as_deref());
+    let route = prompt.and_then(route_in_text);
     let context = agent_knowledge(
-        retriever(opened, false).as_ref(),
+        retriever(opened, true).as_ref(),
         &opened.project.key,
         agent_type,
         prompt,
+        route,
         HOOK_MAX_CHARS,
     )?;
     Ok((!context.is_empty()).then_some((EVENT_SUBAGENT_START, context)))

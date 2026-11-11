@@ -97,11 +97,15 @@ impl Fixture {
     }
 
     fn ingest(&self, proposals: Vec<Value>) -> KnowledgeIngestReport {
+        self.ingest_from(RUN, proposals)
+    }
+
+    fn ingest_from(&self, source: &str, proposals: Vec<Value>) -> KnowledgeIngestReport {
         self.ingestor()
             .ingest_bytes(
                 "file.json",
                 json!({ "proposals": proposals }).to_string().as_bytes(),
-                RUN,
+                source,
             )
             .unwrap()
     }
@@ -273,8 +277,8 @@ fn an_existing_destination_is_never_overwritten() {
 #[test]
 fn two_inbox_notes_with_one_slug_keep_both() {
     let fixture = Fixture::new(&[]);
-    fixture.ingest(vec![proposal(json!({ "domain": "lore" }))]);
-    fixture.ingest(vec![proposal(json!({ "domain": "lore" }))]);
+    fixture.ingest_from("run:r-1", vec![proposal(json!({ "domain": "lore" }))]);
+    fixture.ingest_from("run:r-2", vec![proposal(json!({ "domain": "lore" }))]);
     assert!(fixture.exists("Knowledge/_inbox/new-rule.md"));
     assert!(fixture.exists("Knowledge/_inbox/new-rule-2.md"));
 }
@@ -302,8 +306,8 @@ fn a_second_update_the_same_day_keeps_both_previous_versions() {
     let update = proposal(json!({
         "action": "update", "target": "Knowledge/_global/unity/coyote-time.md"
     }));
-    fixture.ingest(vec![update.clone()]);
-    fixture.ingest(vec![update]);
+    fixture.ingest_from("run:r-1", vec![update.clone()]);
+    fixture.ingest_from("run:r-2", vec![update]);
     let count = std::fs::read_dir(fixture.vault.path().join("Knowledge/_history"))
         .unwrap()
         .count();
@@ -360,7 +364,9 @@ fn a_bad_target_rejects_only_its_proposal() {
     let fixture = Fixture::new(&[]);
     let report = fixture.ingest(vec![
         proposal(json!({ "action": "update", "target": "_global/unity/missing.md" })),
-        proposal(json!({ "action": "update", "target": "../outside.md", "slug": "other" })),
+        proposal(
+            json!({ "action": "update", "target": "Other/notes/unity/x.md", "slug": "other" }),
+        ),
         proposal(json!({ "slug": "fine" })),
     ]);
     assert_eq!(
@@ -397,4 +403,109 @@ fn the_report_adds_up() {
     assert_eq!((total.files, total.added, total.inboxed), (2, 1, 1));
     assert_eq!(total.changed(), 2);
     assert_eq!(total.results.len(), 2);
+}
+
+#[test]
+fn labels_with_a_colon_are_quoted_and_the_note_parses_back() {
+    let fixture = Fixture::new(&[]);
+    let report = fixture.ingest(vec![proposal(json!({
+        "tags": ["scope:ui", "plain"], "agents": ["plugin:agent"]
+    }))]);
+    assert_eq!(report.added, 1);
+    let written = fixture.read("Knowledge/Mini/notes/unity/new-rule.md");
+    assert!(written.contains("tags: [\"scope:ui\", plain]\n"));
+    let parsed = parse_knowledge(&written, "x");
+    assert_eq!(parsed.front.tags, ["scope:ui", "plain"]);
+    assert_eq!(parsed.front.agents, ["plugin:agent"]);
+}
+
+#[test]
+fn replaying_a_file_changes_nothing() {
+    let fixture = Fixture::new(&[(EXISTING, NOTE)]);
+    let proposals = vec![
+        proposal(json!({})),
+        proposal(json!({ "slug": "lore-rule", "domain": "lore" })),
+        proposal(json!({
+            "action": "update", "target": EXISTING, "slug": "upd", "body": "Corps neuf."
+        })),
+    ];
+    let first = fixture.ingest(proposals.clone());
+    assert_eq!((first.added, first.inboxed, first.updated), (1, 1, 1));
+    let note_after = fixture.read("Knowledge/Mini/notes/unity/new-rule.md");
+    let target_after = fixture.read(EXISTING);
+    let count = |dir: &str| {
+        std::fs::read_dir(fixture.vault.path().join(dir))
+            .unwrap()
+            .count()
+    };
+    let history = count("Knowledge/_history");
+    fixture.ingest(proposals);
+    assert_eq!(
+        fixture.read("Knowledge/Mini/notes/unity/new-rule.md"),
+        note_after
+    );
+    assert_eq!(fixture.read(EXISTING), target_after);
+    assert_eq!(count("Knowledge/_inbox"), 1);
+    assert_eq!(count("Knowledge/_history"), history);
+}
+
+#[test]
+fn a_merge_replay_does_not_repeat_the_evidence() {
+    let fixture = Fixture::new(&[(EXISTING, NOTE)]);
+    fixture.index(None);
+    let merge = proposal(json!({
+        "slug": "coyote-again", "title": "Coyote time", "body": EXISTING_BODY, "evidence": "revu"
+    }));
+    fixture.ingest(vec![merge.clone()]);
+    let once = fixture.read(EXISTING);
+    fixture.ingest(vec![merge]);
+    assert_eq!(fixture.read(EXISTING), once);
+}
+
+#[test]
+fn a_failing_proposal_is_rejected_and_the_next_ones_still_apply() {
+    let fixture = Fixture::new(&[]);
+    let report = fixture.ingest(vec![
+        proposal(json!({ "action": "update", "target": "_global/unity/ghost.md", "slug": "bad" })),
+        proposal(json!({})),
+    ]);
+    assert_eq!((report.rejected.len(), report.added), (1, 1));
+    assert!(report.rejected[0].file.ends_with("#bad"));
+}
+
+#[test]
+fn update_targets_outside_the_notes_of_this_repo_are_refused() {
+    let other = "Knowledge/Other/notes/unity/x.md";
+    let history = "Knowledge/_history/old.md";
+    let hidden = "Knowledge/_global/_secret/x.md";
+    let text = "Knowledge/_global/unity/x.txt";
+    let fixture = Fixture::new(&[
+        (other, NOTE),
+        (history, NOTE),
+        (hidden, NOTE),
+        (text, NOTE),
+        (EXISTING, NOTE),
+    ]);
+    for target in [other, history, hidden, text] {
+        let report = fixture.ingest(vec![proposal(json!({
+            "action": "update", "target": target, "slug": "upd", "body": "Neuf."
+        }))]);
+        assert_eq!((report.updated, report.rejected.len()), (0, 1), "{target}");
+        assert_eq!(fixture.read(target), NOTE);
+    }
+    let allowed = fixture.ingest(vec![proposal(json!({
+        "action": "update", "target": EXISTING, "slug": "upd", "body": "Neuf."
+    }))]);
+    assert_eq!(allowed.updated, 1);
+}
+
+#[test]
+fn evidence_text_is_kept_on_one_line() {
+    let fixture = Fixture::new(&[]);
+    fixture.ingest(vec![proposal(json!({
+        "evidence": "line one\n## Evidence\n- fake"
+    }))]);
+    let written = fixture.read("Knowledge/Mini/notes/unity/new-rule.md");
+    assert_eq!(crate::note_text::evidence_of(&written).len(), 1);
+    assert_eq!(written.matches("## Evidence").count(), 2);
 }

@@ -1,7 +1,7 @@
 //! The knowledge block of a pipeline stage, built when the pipeline is compiled.
 
 use crate::agent_roles::{domains_for_route, role_of};
-use crate::context::{issue_query_text, ticket_route};
+use crate::context::{issue_query_text, safe_issue, ticket_route};
 use crate::embedder::Embedder;
 use crate::error::Result;
 use crate::glossary;
@@ -77,6 +77,7 @@ impl KnowledgeContextProvider {
 
     fn ticket_mirror(&self, project_root: &Path, issue: &str) -> Option<String> {
         let vault = self.vault_root.as_ref()?;
+        let issue = safe_issue(issue)?;
         let repo = aidp_core::vault::repo_segment(project_root);
         let file = vault
             .join(TICKETS_DIR)

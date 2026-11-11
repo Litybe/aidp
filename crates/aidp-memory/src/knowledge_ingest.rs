@@ -7,7 +7,8 @@ use crate::knowledge_note::parse_knowledge;
 use crate::knowledge_proposals::parse_knowledge_proposals;
 use crate::models::constants::knowledge_proposals::{
     DATE_FORMAT, FALLBACK_CANDIDATES, FALLBACK_JACCARD, INBOX_COSINE, INBOX_ONLY_DOMAINS,
-    KEY_ACTION, KEY_CANDIDATE_OF, KEY_REPO, KEY_SCOPE, KEY_TARGET, MERGE_COSINE,
+    KEY_ACTION, KEY_CANDIDATE_OF, KEY_REPO, KEY_SCOPE, KEY_SOURCE, KEY_TARGET, MERGE_COSINE,
+    NAME_COLLISION_SEPARATOR,
 };
 use crate::models::constants::schema::GLOBAL_PROJECT;
 use crate::models::duplicate_verdict::DuplicateVerdict;
@@ -20,7 +21,9 @@ use crate::models::knowledge_proposal::KnowledgeProposal;
 use crate::models::note_draft::NoteDraft;
 use crate::models::proposal_result::ProposalResult;
 use crate::models::search_query::SearchQuery;
-use crate::note_paths::{knowledge_rel_path, note_rel_path, vault_relative, wikilink};
+use crate::note_paths::{
+    ensure_note_target, knowledge_rel_path, note_rel_path, vault_relative, wikilink,
+};
 use crate::note_text::{body_of, render_note};
 use crate::note_vault::NoteVault;
 use crate::retriever::{Bm25Retriever, Retriever};
@@ -96,15 +99,10 @@ impl<'a> KnowledgeIngestor<'a> {
         for proposal in &file.proposals {
             match self.apply(proposal, source) {
                 Ok(result) => record(&mut report, result),
-                Err(
-                    error @ (MemoryError::Invalid(_)
-                    | MemoryError::NotFound(_)
-                    | MemoryError::Conflict(_)),
-                ) => report.rejected.push(IngestRejection {
+                Err(error) => report.rejected.push(IngestRejection {
                     file: format!("{label}#{}", proposal.slug),
                     reason: error.to_string(),
                 }),
-                Err(error) => return Err(error),
             }
         }
         Ok(report)
@@ -121,13 +119,19 @@ impl<'a> KnowledgeIngestor<'a> {
     fn add(&self, proposal: &KnowledgeProposal, source: &str) -> Result<ProposalResult> {
         let verdict = self.verdict(proposal)?;
         let destination = self.destination(proposal);
+        if self.vault.has_source(&destination, source) {
+            return Ok(result(proposal, ProposalOutcome::Merged, &destination));
+        }
         if INBOX_ONLY_DOMAINS.contains(&proposal.domain) {
             return self.to_inbox(proposal, source, candidate_of(&verdict));
         }
         match verdict {
             DuplicateVerdict::Same(existing) if self.vault.exists(&existing) => {
-                self.vault
-                    .add_evidence(&existing, &self.evidence_entry(proposal, source))?;
+                self.vault.add_evidence(
+                    &existing,
+                    source,
+                    &self.evidence_entry(proposal, source),
+                )?;
                 Ok(result(proposal, ProposalOutcome::Merged, &existing))
             }
             DuplicateVerdict::Close(existing) if self.vault.exists(&existing) => {
@@ -164,6 +168,9 @@ impl<'a> KnowledgeIngestor<'a> {
             return self.to_inbox(proposal, source, Some(target));
         }
         let destination = self.destination(proposal);
+        if self.vault.has_source(&destination, source) {
+            return Ok(result(proposal, ProposalOutcome::Superseded, &destination));
+        }
         if self.vault.exists(&destination) {
             return self.to_inbox(proposal, source, Some(destination));
         }
@@ -174,6 +181,7 @@ impl<'a> KnowledgeIngestor<'a> {
 
     fn target_of(&self, proposal: &KnowledgeProposal) -> Result<String> {
         let target = knowledge_rel_path(proposal.target.as_deref().unwrap_or_default())?;
+        ensure_note_target(&target, &self.vault.repo)?;
         if !self.vault.exists(&target) {
             return Err(MemoryError::NotFound(format!(
                 "target note not found: {target}"
@@ -207,7 +215,11 @@ impl<'a> KnowledgeIngestor<'a> {
         let evidence = proposal
             .evidence
             .as_deref()
-            .map(str::trim)
+            .map(|text| {
+                text.split_whitespace()
+                    .collect::<Vec<_>>()
+                    .join(WORD_SEPARATOR)
+            })
             .filter(|text| !text.is_empty());
         match evidence {
             Some(text) => format!("{} {source}{SEPARATOR}{text}", self.vault.today),
@@ -254,6 +266,9 @@ impl<'a> KnowledgeIngestor<'a> {
         source: &str,
         candidate: Option<String>,
     ) -> Result<ProposalResult> {
+        if let Some(existing) = self.inboxed_from(&proposal.slug, source) {
+            return Ok(result(proposal, ProposalOutcome::Inboxed, &existing));
+        }
         let mut extra = vec![
             (KEY_ACTION.to_string(), proposal.action.to_string()),
             (KEY_SCOPE.to_string(), proposal.scope.to_string()),
@@ -275,6 +290,31 @@ impl<'a> KnowledgeIngestor<'a> {
             ProposalOutcome::Inboxed,
             &vault_relative(&self.vault.root, &path),
         ))
+    }
+
+    fn inboxed_from(&self, slug: &str, source: &str) -> Option<String> {
+        let marker = format!("{KEY_SOURCE}: {source}");
+        let collision = format!("{slug}{NAME_COLLISION_SEPARATOR}");
+        std::fs::read_dir(self.vault.inbox_dir())
+            .ok()?
+            .flatten()
+            .map(|entry| entry.path())
+            .filter(|path| {
+                let stem = path
+                    .file_stem()
+                    .map(|stem| stem.to_string_lossy().to_string())
+                    .unwrap_or_default();
+                path.is_file()
+                    && (stem == slug
+                        || stem.strip_prefix(&collision).is_some_and(|suffix| {
+                            !suffix.is_empty() && suffix.chars().all(|digit| digit.is_ascii_digit())
+                        }))
+            })
+            .find(|path| {
+                std::fs::read_to_string(path)
+                    .is_ok_and(|content| content.lines().any(|line| line.trim() == marker))
+            })
+            .map(|path| vault_relative(&self.vault.root, &path))
     }
 
     fn verdict(&self, proposal: &KnowledgeProposal) -> Result<DuplicateVerdict> {
@@ -390,7 +430,10 @@ fn candidate_of(verdict: &DuplicateVerdict) -> Option<String> {
 }
 
 fn wikilink_or_raw(target: &str) -> String {
-    knowledge_rel_path(target).map_or_else(|_| format!("\"{target}\""), |rel| wikilink(&rel))
+    knowledge_rel_path(target).map_or_else(
+        |_| serde_json::to_string(target).unwrap_or_default(),
+        |rel| wikilink(&rel),
+    )
 }
 
 fn result(proposal: &KnowledgeProposal, outcome: ProposalOutcome, path: &str) -> ProposalResult {
