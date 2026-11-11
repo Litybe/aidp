@@ -795,3 +795,40 @@ fn paginated_thread_connections_are_combined_before_counting() {
     assert_eq!(status.threads.unresolved, 14);
     assert_eq!(status.threads.actionable, Some(10));
 }
+
+fn status_with_merge_fields(mergeable: &str, merge_state: Option<&str>) -> PrStatus {
+    let mut document = data(OPEN_PENDING);
+    let pr = &mut document["repository"]["pullRequest"];
+    pr["mergeable"] = json!(mergeable);
+    if let Some(merge_state) = merge_state {
+        pr["mergeStateStatus"] = json!(merge_state);
+    }
+    status_with(&document, NO_RULES)
+}
+
+#[test]
+fn a_dirty_pr_is_conflicting_and_serializes_both_fields() {
+    let status = status_with_merge_fields("CONFLICTING", Some("DIRTY"));
+    assert_eq!(status.mergeable, Mergeable::Conflicting);
+    assert_eq!(status.merge_state_status, MergeStateStatus::Dirty);
+    let value = serde_json::to_value(&status).unwrap();
+    assert_eq!(value["mergeable"], "conflicting");
+    assert_eq!(value["mergeStateStatus"], "dirty");
+}
+
+#[test]
+fn merge_state_status_reads_behind_and_has_hooks() {
+    let behind = status_with_merge_fields("MERGEABLE", Some("BEHIND"));
+    assert_eq!(behind.merge_state_status, MergeStateStatus::Behind);
+    let hooks = status_with_merge_fields("MERGEABLE", Some("HAS_HOOKS"));
+    assert_eq!(hooks.merge_state_status, MergeStateStatus::HasHooks);
+}
+
+#[test]
+fn a_missing_or_new_merge_state_status_is_unknown() {
+    let missing = status_with_merge_fields("UNKNOWN", None);
+    assert_eq!(missing.mergeable, Mergeable::Unknown);
+    assert_eq!(missing.merge_state_status, MergeStateStatus::Unknown);
+    let novel = status_with_merge_fields("MERGEABLE", Some("SOMETHING_NEW"));
+    assert_eq!(novel.merge_state_status, MergeStateStatus::Unknown);
+}

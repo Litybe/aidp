@@ -35,6 +35,7 @@ mod wire {
     pub const LATEST_REVIEWS: &str = "latestOpinionatedReviews";
     pub const LOGIN: &str = "login";
     pub const MERGEABLE: &str = "mergeable";
+    pub const MERGE_STATE_STATUS: &str = "mergeStateStatus";
     pub const NAME: &str = "name";
     pub const NODES: &str = "nodes";
     pub const NUMBER: &str = "number";
@@ -112,6 +113,23 @@ pub enum PrState {
 pub enum Mergeable {
     Mergeable,
     Conflicting,
+    #[default]
+    #[serde(other)]
+    Unknown,
+}
+
+/// GitHub's `mergeStateStatus`: why a PR can or cannot merge right now (`dirty` is a conflict,
+/// `behind` means the base moved on). `unknown` also covers a value GitHub adds later.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum MergeStateStatus {
+    Clean,
+    Dirty,
+    Behind,
+    Blocked,
+    Unstable,
+    HasHooks,
+    Draft,
     #[default]
     #[serde(other)]
     Unknown,
@@ -249,7 +267,7 @@ mod gh_args {
 
 const GH_PAGINATE: &str = "--paginate";
 const GH_SLURP: &str = "--slurp";
-const PR_STATUS_QUERY: &str = "query($owner:String!,$name:String!,$number:Int!,$endCursor:String){viewer{login} repository(owner:$owner,name:$name){pullRequest(number:$number){number url title state isDraft headRefName headRefOid baseRefName mergeable reviewDecision author{login} latestOpinionatedReviews(first:30){nodes{author{login} state submittedAt commit{oid}}} reviews(last:100){nodes{author{login} state submittedAt commit{oid}}} reviewRequests(first:20){nodes{requestedReviewer{... on User{login} ... on Team{name}}}} commits(last:1){nodes{commit{statusCheckRollup{contexts(first:100){nodes{__typename ... on CheckRun{name status conclusion detailsUrl startedAt} ... on StatusContext{context state targetUrl}}}}}}} reviewThreads(first:100,after:$endCursor){pageInfo{hasNextPage endCursor} nodes{id isResolved isOutdated comments(last:1){totalCount nodes{id author{login} createdAt}}}}}}}";
+const PR_STATUS_QUERY: &str = "query($owner:String!,$name:String!,$number:Int!,$endCursor:String){viewer{login} repository(owner:$owner,name:$name){pullRequest(number:$number){number url title state isDraft headRefName headRefOid baseRefName mergeable mergeStateStatus reviewDecision author{login} latestOpinionatedReviews(first:30){nodes{author{login} state submittedAt commit{oid}}} reviews(last:100){nodes{author{login} state submittedAt commit{oid}}} reviewRequests(first:20){nodes{requestedReviewer{... on User{login} ... on Team{name}}}} commits(last:1){nodes{commit{statusCheckRollup{contexts(first:100){nodes{__typename ... on CheckRun{name status conclusion detailsUrl startedAt} ... on StatusContext{context state targetUrl}}}}}}} reviewThreads(first:100,after:$endCursor){pageInfo{hasNextPage endCursor} nodes{id isResolved isOutdated comments(last:1){totalCount nodes{id author{login} createdAt}}}}}}}";
 
 /// A check run or status context, reduced to what the verdict needs.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -807,6 +825,7 @@ pub struct PrStatus {
     pub review: ReviewReport,
     pub checks: ChecksReport,
     pub mergeable: Mergeable,
+    pub merge_state_status: MergeStateStatus,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub behind_by: Option<u64>,
     pub threads: ThreadsReport,
@@ -913,6 +932,7 @@ pub fn build_status(
         require_resolution: rules.require_thread_resolution,
     };
     let mergeable: Mergeable = lowercase_or_default(pr, wire::MERGEABLE);
+    let merge_state_status: MergeStateStatus = lowercase_or_default(pr, wire::MERGE_STATE_STATUS);
     let gate = merge_gate(&GateFacts {
         state,
         is_draft,
@@ -965,6 +985,7 @@ pub fn build_status(
         review,
         checks,
         mergeable,
+        merge_state_status,
         threads,
         gate,
         degraded,

@@ -8,8 +8,10 @@ use crate::models::constants::ticket_cost::{
     GROUP_STAGE, GROUP_TICKET, MAX_RUNS_PER_TICKET, MILLION, PIPELINES_DIR, SEVEN_DAY_SECONDS,
     THOUSAND, TOTAL_KEY, UNKNOWN_KEY,
 };
-use crate::sessions::{RateLimitInfo, RateLimitWindow, SessionRecord, TokenUsage};
+use crate::sessions::{OriginKind, RateLimitInfo, RateLimitWindow, SessionRecord, TokenUsage};
 use crate::usage::{in_range, UsageBucket, UsageReport};
+use aidp_core::cost::repricing::reprice_counters;
+use aidp_core::cost::{tier, PriceTable};
 use aidp_core::cost::anomaly::{is_anomaly, median_and_mad, modified_z_scores};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
@@ -111,6 +113,9 @@ pub struct TicketCost {
     pub by_stage: Vec<CostLine>,
     pub by_model: Vec<CostLine>,
     pub window_share: WindowShare,
+    /// Dollars of the ticket's sessions: recorded `cost_usd`, else tokens priced at the model's tier.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cost_usd: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub budget: Option<serde_json::Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -123,13 +128,40 @@ fn started_ms(record: &SessionRecord) -> Option<i64> {
         .map(|moment| moment.timestamp_millis())
 }
 
-/// The ticket a session belongs to: its `origin.ref`, when it has one.
+/// The ticket a session belongs to. A stage session of a pipeline run (`origin.kind == "run"`)
+/// carries the run id in `origin.ref` and the ticket in `target`; any other origin (the
+/// dispatcher, a flow) carries the ticket key in `origin.ref`.
 pub fn ticket_of(record: &SessionRecord) -> Option<&str> {
+    if record.origin.is(OriginKind::Run) {
+        return record
+            .target
+            .as_deref()
+            .filter(|target| !target.is_empty())
+            .or_else(|| ticket_in_vault_path(&record.cwd));
+    }
     record
         .origin
         .r#ref
         .as_deref()
         .filter(|reference| !reference.is_empty())
+}
+
+/// The ticket of a run folder `…/Pipelines/<repo>/<ticket>/…`, for run sessions started with no
+/// `target` (the pipeline doctor works in `Pipelines/<repo>/<ticket>/doctor/<case>`).
+pub fn ticket_in_vault_path(cwd: &str) -> Option<&str> {
+    let mut parts = cwd.split(['\\', '/']).filter(|part| !part.is_empty());
+    parts.find(|part| part.eq_ignore_ascii_case(PIPELINES_DIR))?;
+    parts.next()?;
+    parts.next()
+}
+
+/// The pipeline run a stage session belongs to (`origin.ref` of a `run` origin).
+pub fn run_of(record: &SessionRecord) -> Option<&str> {
+    record
+        .origin
+        .r#ref
+        .as_deref()
+        .filter(|reference| !reference.is_empty() && record.origin.is(OriginKind::Run))
 }
 
 /// The token counters of a session, zero while it has reported none.
@@ -208,6 +240,22 @@ fn add_to(lines: &mut BTreeMap<String, CostLine>, key: &str, tokens: &TokenTotal
         .add(tokens, 1);
 }
 
+/// Dollars of one session: its recorded `cost_usd`, else its tokens priced at its model's tier.
+fn session_cost_usd(record: &SessionRecord, tokens: &TokenTotals, table: &PriceTable) -> Option<f64> {
+    if let Some(cost) = record.cost_usd {
+        return Some(cost);
+    }
+    let model = record.model.as_deref()?;
+    let price = table.price(tier(model).as_str());
+    Some(reprice_counters(
+        tokens.input,
+        tokens.output,
+        tokens.cache_create,
+        tokens.cache_read,
+        &price,
+    ))
+}
+
 /// The cost of ticket `key`: its sessions grouped by pipeline (flow), step, stage and model.
 /// `stages` are the stage rows of the ticket's runs; `all` is every session, for the window share.
 pub fn ticket_cost(
@@ -221,9 +269,14 @@ pub fn ticket_cost(
     let mut by_flow = BTreeMap::new();
     let mut by_step = BTreeMap::new();
     let mut by_model = BTreeMap::new();
+    let table = PriceTable::from_env_or_embedded();
+    let mut cost_usd: Option<f64> = None;
     for record in all.iter().filter(|record| ticket_of(record) == Some(key)) {
         let tokens = session_tokens(record);
         totals.add(&tokens, 1);
+        if let Some(dollars) = session_cost_usd(record, &tokens, &table) {
+            cost_usd = Some(cost_usd.unwrap_or(0.0) + dollars);
+        }
         add_to(
             &mut by_flow,
             record.template_id.as_deref().unwrap_or(UNKNOWN_KEY),
@@ -260,6 +313,7 @@ pub fn ticket_cost(
         by_stage: sorted_lines(by_stage),
         by_model: sorted_lines(by_model),
         window_share: window_share(all, key, rate_limit),
+        cost_usd,
         budget: None,
         pixellab: None,
     }
@@ -314,6 +368,8 @@ pub fn stage_rows_of(state: &aidp_core::models::run_state::RunState) -> Vec<Stag
 pub struct CostContext {
     pub stages: HashMap<String, Vec<StageRow>>,
     pub routes: HashMap<String, String>,
+    /// Route of each run id, read from its run state; wins over the ticket's route.
+    pub run_routes: HashMap<String, String>,
 }
 
 /// Whether `groupBy` is served by [`aggregate_contextual`].
@@ -373,8 +429,16 @@ pub fn aggregate_contextual(
                 .model
                 .clone()
                 .unwrap_or_else(|| UNKNOWN_KEY.to_string()),
-            GROUP_ROUTE => ticket
-                .and_then(|key| context.routes.get(key).cloned())
+            GROUP_ROUTE => run_of(record)
+                .and_then(|run| context.run_routes.get(run).cloned())
+                .or_else(|| ticket.and_then(|key| context.routes.get(key).cloned()))
+                .or_else(|| {
+                    record
+                        .template_id
+                        .as_deref()
+                        .and_then(aidp_tickets::ticket_route::route_of_template)
+                        .map(|route| route.as_str().to_string())
+                })
                 .unwrap_or_else(|| UNKNOWN_KEY.to_string()),
             _ => {
                 if let Some(ticket) = ticket.filter(|ticket| !seen_tickets.contains(ticket)) {
@@ -383,7 +447,13 @@ pub fn aggregate_contextual(
                 continue;
             }
         };
-        add_session(bucket_for(&mut buckets, &key), record, &tokens);
+        let bucket = bucket_for(&mut buckets, &key);
+        add_session(bucket, record, &tokens);
+        if group_by == GROUP_TICKET {
+            if let Some(run) = run_of(record).filter(|run| !bucket.runs.iter().any(|r| r == run)) {
+                bucket.runs.push(run.to_string());
+            }
+        }
     }
     if group_by == GROUP_STAGE {
         for row in seen_tickets

@@ -138,18 +138,23 @@ fn pause_then_resume_toggles_and_returns_effective_state() {
 #[test]
 fn invalid_bodies_answer_400_and_leave_the_pause_unchanged() {
     let daemon = boot("dp-invalid");
-    for body in [
-        BODY_EMPTY,
-        BODY_INVALID_JSON,
-        BODY_STRING_PAUSED,
-        BODY_NO_FIELD,
-    ] {
+    for body in [BODY_INVALID_JSON, BODY_STRING_PAUSED] {
         let reply = daemon.post(PAUSE_PATH, body);
         assert_eq!(reply.status(), STATUS_BAD_REQUEST, "body: {body:?}");
         assert_paused(&daemon, false);
         assert_eq!(daemon.config_text(), INITIAL_CONFIG);
     }
     daemon.handle.stop();
+}
+
+#[test]
+fn empty_or_field_less_body_pauses() {
+    for body in [BODY_EMPTY, BODY_NO_FIELD] {
+        let daemon = boot("dp-default");
+        assert_eq!(daemon.post(PAUSE_PATH, body).status(), STATUS_OK, "body: {body:?}");
+        assert_paused(&daemon, true);
+        daemon.handle.stop();
+    }
 }
 
 #[test]

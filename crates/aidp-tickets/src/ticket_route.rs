@@ -9,9 +9,10 @@ use serde_json::Value;
 const ROUTE_FIELD: &str = "route";
 const LABEL_PREFIXES: [&str; 3] = ["aidp:route:", "route:", "route/"];
 const ART_TEMPLATE_MARKERS: [&str; 1] = ["pixelart"];
+const ART_TEMPLATE_PREFIX: &str = "art";
 const MAP_TEMPLATE_PREFIX: &str = "map";
 const DOC_TEMPLATE_PREFIX: &str = "doc";
-const CODE_TEMPLATE_PREFIXES: [&str; 3] = ["dev", "fix", "review"];
+const CODE_TEMPLATE_PREFIXES: [&str; 4] = ["dev", "fix", "review", "unity"];
 
 /// The route of `ticket`, `None` when nothing tells.
 pub fn route_of_ticket(ticket: &Ticket) -> Option<BudgetRoute> {
@@ -55,6 +56,7 @@ pub fn route_of_template(template: &str) -> Option<BudgetRoute> {
     if ART_TEMPLATE_MARKERS
         .iter()
         .any(|marker| id.contains(marker))
+        || id.starts_with(ART_TEMPLATE_PREFIX)
     {
         Some(BudgetRoute::Art)
     } else if id.starts_with(MAP_TEMPLATE_PREFIX) {
