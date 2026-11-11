@@ -20,6 +20,7 @@ pub mod memory_note;
 pub mod memory_patch;
 pub mod memory_ref;
 pub mod memory_scope;
+pub mod model_status;
 pub mod new_memory;
 pub mod packed;
 pub mod project_ref;

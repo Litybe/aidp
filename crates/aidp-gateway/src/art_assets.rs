@@ -217,7 +217,13 @@ fn pick_cover(images: &[ArtImage]) -> Option<&ArtImage> {
             .unwrap_or(COVER_STAGES.len());
         let final_file = i.path.contains("/files/") || i.stage == "export";
         // Lower is better.
-        (preview, !final_file, i.kind != FileKind::Png, stage, i.path.len())
+        (
+            preview,
+            !final_file,
+            i.kind != FileKind::Png,
+            stage,
+            i.path.len(),
+        )
     };
     images.iter().min_by_key(|i| rank(i))
 }
@@ -282,7 +288,11 @@ pub fn gallery(runs: &[NativeRunView], query: &ArtQuery) -> (Vec<ArtRun>, Option
             cover,
             images: found.images,
         };
-        if query.issue.as_deref().is_some_and(|i| !matches_issue(&item, i)) {
+        if query
+            .issue
+            .as_deref()
+            .is_some_and(|i| !matches_issue(&item, i))
+        {
             continue;
         }
         if query.q.as_deref().is_some_and(|q| !matches_text(&item, q)) {

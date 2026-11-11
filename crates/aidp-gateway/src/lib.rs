@@ -9,6 +9,7 @@
 //! `aidp gateway serve` runs the daemon; [`cli_api`] holds the one-shot HTTP client verbs.
 
 pub mod aidp_bin;
+pub mod art_assets;
 pub mod attachments;
 pub mod attention;
 pub mod automations;
@@ -61,7 +62,6 @@ pub mod projects;
 pub mod prs;
 pub mod queue;
 pub mod routes;
-pub mod art_assets;
 pub mod run_files;
 pub mod runs;
 pub mod session_error;

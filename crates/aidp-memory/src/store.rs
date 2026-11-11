@@ -49,6 +49,7 @@ impl MemoryStore {
         connection.busy_timeout(Duration::from_millis(BUSY_TIMEOUT_MS))?;
         connection.pragma_update(None, "journal_mode", "WAL")?;
         connection.pragma_update(None, "synchronous", "NORMAL")?;
+        connection.pragma_update(None, "foreign_keys", true)?;
         let store = Self {
             connection: Mutex::new(connection),
             path,

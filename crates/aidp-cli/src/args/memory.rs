@@ -25,6 +25,9 @@ pub enum RagOp {
         /// Re-chunk every file even when unchanged.
         #[arg(long)]
         full: bool,
+        /// Require the embedding model: fail when it is not installed. Without the flag, chunks are embedded whenever the model is present.
+        #[arg(long)]
+        embed: bool,
     },
     /// Search the index (BM25 plus code graph) and pack excerpts under a token budget.
     Search {
@@ -46,6 +49,9 @@ pub enum RagOp {
         /// Token budget of the packed excerpts (tokens are characters / 4).
         #[arg(long, default_value_t = 1500)]
         budget: usize,
+        /// Force BM25 only, even when the embedding model is installed.
+        #[arg(long)]
+        lexical: bool,
     },
     /// Measure the search on cases with known answers: recall at k and mean reciprocal rank.
     Eval {
@@ -58,6 +64,9 @@ pub enum RagOp {
         /// Hits that count as an answer.
         #[arg(long, default_value_t = 5)]
         k: usize,
+        /// Force BM25 only, even when the embedding model is installed.
+        #[arg(long)]
+        lexical: bool,
     },
     /// Delete the index of an orphan key: never a registered project, never a key with memories.
     Purge {
@@ -86,6 +95,9 @@ pub enum MemoryOp {
         /// Token budget of the block.
         #[arg(long, default_value_t = 2000)]
         budget: usize,
+        /// Force BM25 only, even when the embedding model is installed.
+        #[arg(long)]
+        lexical: bool,
     },
     /// Answer a question from the memories and the corpus, project and global, under a budget.
     Recall {
@@ -101,6 +113,9 @@ pub enum MemoryOp {
         /// Token budget of the answer.
         #[arg(long, default_value_t = 1500)]
         budget: usize,
+        /// Force BM25 only, even when the embedding model is installed.
+        #[arg(long)]
+        lexical: bool,
     },
     /// Add a memory (proposed unless `--status active`).
     Add {
@@ -252,6 +267,11 @@ pub enum MemoryOp {
         #[command(flatten)]
         project: ProjectArg,
     },
+    /// Inspect the embedding model used by the hybrid search.
+    Model {
+        #[command(subcommand)]
+        op: MemoryModelOp,
+    },
     /// Ingest memory-proposals.json files from a stage folder or a file.
     Ingest {
         /// A proposals file, or a folder scanned for memory-proposals.json.
@@ -261,4 +281,10 @@ pub enum MemoryOp {
         #[command(flatten)]
         project: ProjectArg,
     },
+}
+
+#[derive(Subcommand)]
+pub enum MemoryModelOp {
+    /// Print the model folder, whether it is installed, its vector size and the chunks embedded.
+    Status,
 }

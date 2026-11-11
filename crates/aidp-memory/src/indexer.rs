@@ -1,6 +1,8 @@
 //! Incremental indexer: walks the sources, re-chunks changed files, drops vanished ones.
 
 use crate::chunking::{csharp::chunk_csharp, markdown::chunk_markdown};
+use crate::embedder::Embedder;
+use crate::embedding_index::embed_pending;
 use crate::error::{MemoryError, Result};
 use crate::models::constants::limits::MAX_FILE_BYTES;
 use crate::models::constants::paths::{
@@ -39,11 +41,21 @@ struct StoredFile {
 /// Builds and refreshes the chunk index of a project.
 pub struct Indexer<'a> {
     store: &'a MemoryStore,
+    embedder: Option<&'a dyn Embedder>,
 }
 
 impl<'a> Indexer<'a> {
     pub fn new(store: &'a MemoryStore) -> Self {
-        Self { store }
+        Self {
+            store,
+            embedder: None,
+        }
+    }
+
+    /// Embeds new and changed chunks, and re-embeds those of another model, in the indexing transactions.
+    pub fn with_embedder(mut self, embedder: &'a dyn Embedder) -> Self {
+        self.embedder = Some(embedder);
+        self
     }
 
     /// Refreshes the requested sources of `project` and reports what changed.
@@ -78,8 +90,18 @@ impl<'a> Indexer<'a> {
                     &targets,
                     options.full,
                     &mut report,
-                )
+                )?;
+                if let Some(embedder) = self.embedder {
+                    report.embedded +=
+                        embed_pending(transaction, embedder, &project.key, Some(source))?;
+                }
+                Ok(())
             })?;
+        }
+        if let Some(embedder) = self.embedder {
+            report.embedded += self
+                .store
+                .write(|transaction| embed_pending(transaction, embedder, &project.key, None))?;
         }
         report.chunks = self.store.stats(&project.key)?.chunks;
         report.duration_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);

@@ -18,11 +18,12 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::OnceLock;
 
-const VIA_BM25: &str = "bm25";
+pub(crate) const VIA_BM25: &str = "bm25";
 const VIA_GRAPH: &str = "graph";
 const NAME_MATCH_SEEDS: usize = 3;
 const NAME_MATCH_SHARE: f64 = 0.6;
-const CHUNK_COLUMNS: &str = "c.id, c.source, c.path, c.line_start, c.line_end, c.title, c.text";
+pub(crate) const CHUNK_COLUMNS: &str =
+    "c.id, c.source, c.path, c.line_start, c.line_end, c.title, c.text";
 
 /// Anything that ranks indexed chunks for a query; a vector index can implement it later.
 pub trait Retriever {
@@ -170,17 +171,13 @@ impl<'a> Bm25Retriever<'a> {
     }
 }
 
-impl Retriever for Bm25Retriever<'_> {
-    fn search(&self, query: &SearchQuery) -> Result<Vec<Hit>> {
+impl Bm25Retriever<'_> {
+    /// Every BM25 and graph candidate matching the filters, best first, before the MMR pass.
+    pub(crate) fn ranked(&self, query: &SearchQuery) -> Result<Vec<Hit>> {
         let Some(expression) = match_expression(&query.text) else {
             return Ok(Vec::new());
         };
-        let pattern = match &query.path_glob {
-            Some(glob) => Some(glob::Pattern::new(glob).map_err(|error| {
-                crate::error::MemoryError::Invalid(format!("invalid --path glob: {error}"))
-            })?),
-            None => None,
-        };
+        let pattern = path_pattern(query)?;
         let limit = if pattern.is_some() {
             FILTERED_CANDIDATES
         } else {
@@ -192,12 +189,28 @@ impl Retriever for Bm25Retriever<'_> {
             hits.retain(|hit| pattern.matches(&hit.path));
         }
         hits.sort_by(|left, right| right.score.total_cmp(&left.score));
-        Ok(mmr::select(hits, query.k, MMR_LAMBDA))
+        Ok(hits)
+    }
+}
+
+impl Retriever for Bm25Retriever<'_> {
+    fn search(&self, query: &SearchQuery) -> Result<Vec<Hit>> {
+        Ok(mmr::select(self.ranked(query)?, query.k, MMR_LAMBDA))
+    }
+}
+
+/// The compiled `--path` glob of a query, if any.
+pub(crate) fn path_pattern(query: &SearchQuery) -> Result<Option<glob::Pattern>> {
+    match &query.path_glob {
+        Some(glob) => Ok(Some(glob::Pattern::new(glob).map_err(|error| {
+            crate::error::MemoryError::Invalid(format!("invalid --path glob: {error}"))
+        })?)),
+        None => Ok(None),
     }
 }
 
 /// How much a hit of this source and path counts against the others.
-fn source_weight(hit: &Hit) -> f64 {
+pub(crate) fn source_weight(hit: &Hit) -> f64 {
     let weight = SOURCE_WEIGHTS
         .iter()
         .find(|(source, _)| *source == hit.source)
@@ -218,7 +231,7 @@ fn keep_best(map: &mut HashMap<String, Hit>, hit: Hit) {
     }
 }
 
-fn hit_from_row(row: &Row, via: &str) -> rusqlite::Result<Hit> {
+pub(crate) fn hit_from_row(row: &Row, via: &str) -> rusqlite::Result<Hit> {
     let source: String = row.get(1)?;
     Ok(Hit {
         id: row.get(0)?,

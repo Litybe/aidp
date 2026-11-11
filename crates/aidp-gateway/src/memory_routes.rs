@@ -48,7 +48,9 @@ fn memory_failure(error: MemoryError) -> Reply {
         MemoryError::NotFound(_) => STATUS_NOT_FOUND,
         MemoryError::Conflict(_) => STATUS_CONFLICT,
         MemoryError::Invalid(_) | MemoryError::Json(_) => STATUS_BAD_REQUEST,
-        MemoryError::Io(_) | MemoryError::Database(_) => STATUS_INTERNAL,
+        MemoryError::Io(_) | MemoryError::Database(_) | MemoryError::Embedding(_) => {
+            STATUS_INTERNAL
+        }
     };
     failure(code, error)
 }

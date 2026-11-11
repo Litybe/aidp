@@ -16,6 +16,8 @@ pub enum MemoryError {
     Database(#[from] rusqlite::Error),
     #[error("{0}")]
     Json(#[from] serde_json::Error),
+    #[error("embedding model: {0}")]
+    Embedding(String),
 }
 
 /// Result of every fallible call of this crate.
@@ -27,7 +29,10 @@ impl HasErrorKind for MemoryError {
             MemoryError::NotFound(_) => ErrorKind::NotFound,
             MemoryError::Conflict(_) => ErrorKind::Conflict,
             MemoryError::Invalid(_) => ErrorKind::Config,
-            MemoryError::Io(_) | MemoryError::Database(_) | MemoryError::Json(_) => ErrorKind::Io,
+            MemoryError::Io(_)
+            | MemoryError::Database(_)
+            | MemoryError::Json(_)
+            | MemoryError::Embedding(_) => ErrorKind::Io,
         }
     }
 }

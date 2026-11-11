@@ -4,8 +4,9 @@
 and a store of durable lessons (`aidp memory`). One SQLite database holds both:
 `<AIDP_GATEWAY_DIR>/memory/memory.db` (WAL, one writer connection, versioned migrations in
 `crates/aidp-memory/migrations/`, `PRAGMA user_version` = number of applied migrations). Search is
-BM25 over FTS5 plus an expansion through the graphify code graph. There are no embeddings in v1; the
-`Retriever` trait is the seam where a vector index can be added without touching the CLI.
+BM25 over FTS5 plus an expansion through the graphify code graph. When a static-embedding model is
+installed (see [Embedding model](#embedding-model)), a brute-force cosine search over stored vectors
+is fused with it (hybrid retrieval); without a model, search stays BM25 only.
 
 ## Model
 
@@ -47,6 +48,15 @@ A query longer than 24 terms keeps its most telling ones: terms of its first lin
 identifiers (inner capital, underscore) 2 more, and each repetition 1 more. A mirrored ticket is
 searched as its `summary` then its body; its frontmatter is dropped.
 
+Hybrid retrieval, used automatically when the model is installed (`--lexical` forces BM25):
+
+- BM25 and graph candidates are ranked as below, and the vector side ranks every stored vector of
+  the same project (and `--source` filter) by cosine similarity with the query (at least 60
+  candidates, `5 x k`; 400 with `--path`; cosine under 0.05 is dropped).
+- The two ranked lists are fused by reciprocal rank fusion, `1 / (60 + rank)` per list; a hit found
+  by both is `via: hybrid`, a hit found by vectors only is `via: vector`.
+- The source weights below then multiply the fused score, followed by MMR and packing.
+
 1. BM25 candidates (at least 60, `5 x k`; 400 with a `--path` filter), each score multiplied by its
    source weight: `memory` 1.5, `bible` 1.2, `doc` and `code` 1, `knowledge` 0.9, `ticket` 0.7,
    `run` 0.4, and 0.5 more for a session journal (`/_journal/`).
@@ -59,18 +69,45 @@ searched as its `summary` then its body; its frontmatter is dropped.
    characters / 4). A hit that does not fit is skipped so a smaller one can enter; if the first hit
    alone is too big it is cut. Each excerpt carries its citation `path:L<start>-L<end>`.
 
+## Embedding model
+
+Vectors come from a [Model2Vec](https://github.com/MinishLab/model2vec) static-embedding model: the
+tokens of a text are looked up in an embedding matrix, mean-pooled and L2-normalised, in pure Rust
+(`model2vec-rs`, loaded from a local folder, no network, no `tokio`). The default model is
+`potion-multilingual-128M`, read from `<AIDP_GATEWAY_DIR>/memory/models/potion-multilingual-128M/`,
+which must hold `model.safetensors`, `tokenizer.json` and `config.json`. Code never downloads it;
+install it once by hand:
+
+```
+git clone https://huggingface.co/minishlab/potion-multilingual-128M <AIDP_GATEWAY_DIR>/memory/models/potion-multilingual-128M
+```
+
+(`git lfs` must be installed, the weights are an LFS file.) `aidp memory model status` prints the
+folder, whether it is complete, the vector size and the number of chunks embedded. Without the
+model, every command logs one warning and uses BM25 only.
+
+Vectors live in `chunk_vectors (chunk_id, model, dim, vector)`: one row per chunk, the vector an
+f32 little-endian blob, deleted with its chunk. Memories are indexed as `memory` chunks, so they
+have vectors too; no separate memory table is needed. The text embedded is `title
+text`, cut to 2 000
+characters. `rag index` embeds, by batches of 64 and in the indexing transaction, every chunk of the
+project that has no vector or whose vector comes from another model, so a model change is applied by
+the next `rag index`. A memory rewritten by `memory add/edit/...` has no vector until the next
+`rag index`; BM25 still finds it meanwhile.
+
 ## CLI
 
 All verbs take `--project <key-or-path>` (default: the current directory) and honour the global
 `--format`: `md` (alias of `text`, the default) or `json`.
 
 ```
-aidp rag index  [--project P] [--source bible,doc,code,run,ticket,knowledge] [--full]
-aidp rag search "<query>" [--project P] [--source ...] [--path <glob>] [--k 20] [--budget 1500]
+aidp rag index  [--project P] [--source bible,doc,code,run,ticket,knowledge] [--full] [--embed]
+aidp rag search "<query>" [--project P] [--source ...] [--path <glob>] [--k 20] [--budget 1500] [--lexical]
 aidp rag purge --key K
-aidp rag eval --cases <yaml> [--project P] [--k 5]
-aidp memory recall "<question>" [--project P] [--route R] [--budget 1500]
-aidp memory context [--project P] [--issue GH-214] [--route code|art|map|doc] [--stage id] [--budget 2000]
+aidp rag eval --cases <yaml> [--project P] [--k 5] [--lexical]
+aidp memory recall "<question>" [--project P] [--route R] [--budget 1500] [--lexical]
+aidp memory context [--project P] [--issue GH-214] [--route code|art|map|doc] [--stage id] [--budget 2000] [--lexical]
+aidp memory model status
 aidp memory add --kind K --title T --text X [--route R] [--path G]... [--tag T]... [--ref issue:GH-12]...
                 [--status proposed|active] [--confidence 0.7] [--supersedes M-3]
 aidp memory list [--status S] [--kind K] [--q words]
@@ -81,7 +118,10 @@ aidp memory gc
 aidp memory ingest <folder-or-file>
 ```
 
-`rag index` prints `{ indexed, updated, removed, unchanged, chunks, durationMs, skippedSources }`.
+`rag index` prints `{ indexed, updated, removed, unchanged, chunks, embedded, durationMs, skippedSources }`.
+It embeds automatically when the model is installed; `--embed` makes a missing model an error (exit 7).
+`memory model status` prints `{ model, path, present, dim, embeddedChunks, staleChunks, totalChunks }`
+(`staleChunks`: vectors of another model, re-embedded by the next `rag index`).
 `run`, `ticket` and `knowledge` need a vault (`--vault`, `AIDP_VAULT`, or auto-detected); without
 one they are listed in `skippedSources`. `rag search --format json` prints
 `[{ id, source, path, lines, citation, title, score, via, text }]`.
@@ -222,6 +262,10 @@ few point lookups, and loads `graph.json` once per process (a few MB). `memory c
 
 `MemoryStore::open_in(gateway_dir)`, `Indexer::new(&store).index(&ProjectRef, &IndexOptions)`,
 `Bm25Retriever::new(&store, Some(project_root))` implementing `Retriever::search(&SearchQuery)`,
+`HybridRetriever::new(&store, Some(project_root), Box<dyn Embedder>)` implementing it too,
+`Indexer::new(&store).with_embedder(&embedder)`, the `Embedder` trait (`model_id`, `dim`, `embed`) with
+`Model2VecEmbedder::load(dir)`, `load_default_embedder(gateway_dir)` (`None` plus one warning when the model is
+absent) and `model_status`,
 `pack(hits, budget)` and `render_markdown(&packed)`, `MemoryManager::new(&store)` with `add`, `get`,
 `list`, `edit`, `approve`, `archive`, `merge`, `gc`, `context(&ContextRequest, &dyn Retriever)` and
 `ingest`, `resolve_project(arg, gateway_dir, cwd)`. The crate reads no environment variable and

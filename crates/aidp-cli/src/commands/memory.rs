@@ -1,5 +1,5 @@
 use super::CommandOutput;
-use crate::args::memory::{MemoryOp, ProjectArg, RagOp};
+use crate::args::memory::{MemoryModelOp, MemoryOp, ProjectArg, RagOp};
 use crate::ctx::Ctx;
 use crate::models::hit_view::HitView;
 use aidp_core::{ExitStatus, Format};
@@ -8,9 +8,10 @@ use aidp_memory::models::memory_filter::MemoryFilter;
 use aidp_memory::models::memory_patch::MemoryPatch;
 use aidp_memory::models::memory_ref::MemoryRef;
 use aidp_memory::{
-    is_registered, pack, render_markdown, resolve_project, Bm25Retriever, ContextRequest,
-    IndexOptions, IndexRoot, Indexer, Memory, MemoryError, MemoryKind, MemoryManager, MemoryStatus,
-    MemoryStore, NewMemory, ProjectRef, RefType, Retriever, Route, SearchQuery, Source,
+    is_registered, load_default_embedder, model_status, pack, render_markdown, resolve_project,
+    Bm25Retriever, ContextRequest, HybridRetriever, IndexOptions, IndexRoot, Indexer, Memory,
+    MemoryError, MemoryKind, MemoryManager, MemoryStatus, MemoryStore, NewMemory, ProjectRef,
+    RefType, Retriever, Route, SearchQuery, Source,
 };
 use std::path::PathBuf;
 
@@ -21,9 +22,12 @@ const TICKET_EXTENSION: &str = "md";
 const REF_SEPARATOR: char = ':';
 const NO_RESULT: &str = "Aucun resultat.";
 const NO_MEMORY: &str = "Aucune memoire.";
+const MODEL_REQUIRED: &str =
+    "--embed needs the embedding model; install it under the memory models folder (see `aidp memory model status`)";
 const ISSUE_NOT_MIRRORED: &str = "issue not found in the ticket mirror; searching without its text";
 
 pub(super) struct Opened {
+    pub(super) gateway: PathBuf,
     pub(super) store: MemoryStore,
     pub(super) project: ProjectRef,
     pub(super) known_root: bool,
@@ -36,6 +40,7 @@ pub fn run_rag(ctx: &Ctx, op: RagOp) -> anyhow::Result<CommandOutput> {
             project,
             source,
             full,
+            embed,
         } => {
             let opened = open(ctx, &project, true)?;
             let options = IndexOptions {
@@ -43,7 +48,15 @@ pub fn run_rag(ctx: &Ctx, op: RagOp) -> anyhow::Result<CommandOutput> {
                 full,
                 extra_roots: extra_roots(ctx, &opened.project),
             };
-            let report = Indexer::new(&opened.store).index(&opened.project, &options)?;
+            let embedder = load_default_embedder(&opened.gateway);
+            if embed && embedder.is_none() {
+                return Err(MemoryError::Invalid(MODEL_REQUIRED.to_string()).into());
+            }
+            let mut indexer = Indexer::new(&opened.store);
+            if let Some(embedder) = embedder.as_deref() {
+                indexer = indexer.with_embedder(embedder);
+            }
+            let report = indexer.index(&opened.project, &options)?;
             Ok(CommandOutput::json(
                 Some(Format::JsonCompact),
                 serde_json::to_value(report)?,
@@ -56,9 +69,10 @@ pub fn run_rag(ctx: &Ctx, op: RagOp) -> anyhow::Result<CommandOutput> {
             path,
             k,
             budget,
+            lexical,
         } => {
             let opened = open(ctx, &project, false)?;
-            let retriever = retriever(&opened);
+            let retriever = retriever(&opened, lexical);
             let mut request = SearchQuery::new(opened.project.key.clone(), query);
             request.sources = parse_sources(source.as_deref())?;
             request.path_glob = path;
@@ -76,7 +90,12 @@ pub fn run_rag(ctx: &Ctx, op: RagOp) -> anyhow::Result<CommandOutput> {
             }
             Ok(CommandOutput::text(render_markdown(&packed).trim_end()))
         }
-        RagOp::Eval { cases, project, k } => {
+        RagOp::Eval {
+            cases,
+            project,
+            k,
+            lexical,
+        } => {
             let opened = open(ctx, &project, false)?;
             let content = aidp_core::text::read_text_lenient(ctx.absolute(&cases))?;
             let mut parsed = aidp_memory::eval::parse_cases(&content)?;
@@ -96,7 +115,7 @@ pub fn run_rag(ctx: &Ctx, op: RagOp) -> anyhow::Result<CommandOutput> {
             let manager = MemoryManager::new(&opened.store);
             let report = aidp_memory::eval::evaluate(
                 &manager,
-                &retriever(&opened),
+                retriever(&opened, lexical).as_ref(),
                 &opened.project.key,
                 &parsed,
                 k,
@@ -152,6 +171,7 @@ fn synced_project(op: &MemoryOp) -> Option<ProjectArg> {
         MemoryOp::List { .. }
         | MemoryOp::Show { .. }
         | MemoryOp::Sync { .. }
+        | MemoryOp::Model { .. }
         | MemoryOp::Hook { .. } => None,
     }
 }
@@ -194,13 +214,15 @@ fn dispatch_memory(ctx: &Ctx, op: MemoryOp) -> anyhow::Result<CommandOutput> {
             project,
             route,
             budget,
+            lexical,
         } => {
             let opened = open(ctx, &project, false)?;
             let mut request = ContextRequest::new(opened.project.key.clone());
             request.issue_text = Some(query);
             request.route = route.as_deref().map(Route::parse).transpose()?;
             request.budget_tokens = budget;
-            let block = MemoryManager::new(&opened.store).context(&request, &retriever(&opened))?;
+            let block = MemoryManager::new(&opened.store)
+                .context(&request, retriever(&opened, lexical).as_ref())?;
             if wants_json(ctx) {
                 return Ok(CommandOutput::json(
                     ctx.format(),
@@ -217,6 +239,36 @@ fn dispatch_memory(ctx: &Ctx, op: MemoryOp) -> anyhow::Result<CommandOutput> {
             session,
             project,
         } => super::memory_hook::distill(ctx, &journal, &session, &project),
+        MemoryOp::Model { op } => match op {
+            MemoryModelOp::Status => {
+                let gateway = aidp_gateway::paths::state_dir()?;
+                let store = MemoryStore::open_in(&gateway)?;
+                let status = model_status(&store, &gateway)?;
+                if wants_json(ctx) {
+                    return Ok(CommandOutput::json(
+                        ctx.format(),
+                        serde_json::to_value(&status)?,
+                    ));
+                }
+                Ok(CommandOutput::text(format!(
+                    "modele: {}
+chemin: {}
+installe: {}
+dimension: {}
+chunks vectorises: {} / {}
+chunks d'un autre modele: {}",
+                    status.model,
+                    status.path.display(),
+                    if status.present { "oui" } else { "non" },
+                    status
+                        .dim
+                        .map_or_else(|| "inconnue".to_string(), |dim| dim.to_string()),
+                    status.embedded_chunks,
+                    status.total_chunks,
+                    status.stale_chunks,
+                )))
+            }
+        },
         MemoryOp::Sync { project } => {
             let opened = open(ctx, &project, false)?;
             let dir = notes_dir(ctx, &opened).ok_or_else(|| {
@@ -238,6 +290,7 @@ fn dispatch_memory(ctx: &Ctx, op: MemoryOp) -> anyhow::Result<CommandOutput> {
             route,
             stage,
             budget,
+            lexical,
         } => {
             let opened = open(ctx, &project, false)?;
             let mut request = ContextRequest::new(opened.project.key.clone());
@@ -256,7 +309,7 @@ fn dispatch_memory(ctx: &Ctx, op: MemoryOp) -> anyhow::Result<CommandOutput> {
                 request.issue = Some(issue);
             }
             let manager = MemoryManager::new(&opened.store);
-            let block = manager.context(&request, &retriever(&opened))?;
+            let block = manager.context(&request, retriever(&opened, lexical).as_ref())?;
             let output = if wants_json(ctx) {
                 CommandOutput::json(ctx.format(), serde_json::to_value(&block)?)
             } else {
@@ -427,16 +480,20 @@ pub(super) fn open(ctx: &Ctx, argument: &ProjectArg, strict: bool) -> anyhow::Re
     };
     Ok(Opened {
         store: MemoryStore::open_in(&gateway)?,
+        gateway,
         project,
         known_root,
     })
 }
 
-fn retriever(opened: &Opened) -> Bm25Retriever<'_> {
-    Bm25Retriever::new(
-        &opened.store,
-        opened.known_root.then(|| opened.project.root.clone()),
-    )
+fn retriever(opened: &Opened, lexical: bool) -> Box<dyn Retriever + '_> {
+    let root = opened.known_root.then(|| opened.project.root.clone());
+    if !lexical {
+        if let Some(embedder) = load_default_embedder(&opened.gateway) {
+            return Box::new(HybridRetriever::new(&opened.store, root, embedder));
+        }
+    }
+    Box::new(Bm25Retriever::new(&opened.store, root))
 }
 
 fn wants_json(ctx: &Ctx) -> bool {

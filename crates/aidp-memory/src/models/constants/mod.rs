@@ -1,5 +1,6 @@
 //! Named constants for this crate, one file per concept.
 
+pub mod embedding;
 pub mod limits;
 pub mod notes;
 pub mod paths;

@@ -14,6 +14,8 @@ pub struct IndexReport {
     pub unchanged: usize,
     /// Chunks of the project after the pass.
     pub chunks: usize,
+    /// Chunks embedded during the pass.
+    pub embedded: usize,
     pub duration_ms: u64,
     /// Requested sources that have no directory to read.
     pub skipped_sources: Vec<String>,

@@ -43,6 +43,8 @@ ureq = { version = "2", features = ["json", "native-certs"] }
 url = "2"
 chrono = { version = "0.4", features = ["serde"] }
 tracing = "0.1"
+# Static embeddings, loaded from a local folder only: no hub download, no tokio.
+model2vec-rs = { version = "0.4.0", default-features = false, features = ["fancy-regex", "local-only"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 tracing-appender = "0.2"
 # Test-only dependencies (LOC-12). Never referenced from a [dependencies] section.
