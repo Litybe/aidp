@@ -302,14 +302,20 @@ A game ticket goes through two flows (decision of 2026-11-08, contract C13).
 - **Dev lane**: the flow of the route (`flow:` in `routing.yaml`: `game-code`, `game-art`, `game-map`). Default workspace
   (a worktree per ticket), several runs in parallel up to `dispatcher.slots` (default 3). Its last steps are
   `ticket.to_test` then `worktree.remove`, and the run ends `done` with the ticket still `in-progress`: the issue
-  carries the label `aidp:to-test` and the ticket the phase `to-test`. No Unity editor is open on a worktree, so the
-  dev stages run no compile gate and no test (`verification.compile = "deferred"`).
-- **Test lane**: the `test_flow:` of the same route (`game-test-code`, `game-test-art`, `game-test-map`),
-  `workspace: project`: the test checkout of the project (see below), where the editor is open, with the
-  `unity-editor` resource. `dispatcher.test_slots` (default 1) test flows at a time per project. The dispatcher starts the oldest
-  `to-test` issue first (a manual start promotes one ahead), as soon as the lane of its project is free. A test flow
-  counts in the test lane while it holds, or waits for, the checkout; once it ran `git.restore` (the merge approval
-  is pending) it no longer does. It never takes a dev slot. Pause, budget and night mode apply to both lanes.
+  carries the label `aidp:to-test` and the ticket the phase `to-test`. No Unity editor is open on a worktree: the
+  `code` route verifies headless there (Unity in batchmode, compile gate C1 and EditMode suite C8, never PlayMode;
+  `templates/recipes/unity-verify.md` of the skill); the `art` and `map` dev stages run no compile gate and no test.
+- **Test lane**: the `test_flow:` of the same route. `game-test-code` (decision of 2026-11-09: PlayMode is manual)
+  runs in the default workspace, a worktree of its own, with no editor and no `unity-editor` resource: headless
+  `unity-test` ⇄ `unity-fix`, PR ready, label `awaiting-merge`, worktree removed, `done`; the human plays the PlayMode
+  check-list of the PR comment and merges on GitHub, and the dispatcher moves the ticket to `done` when it sees the
+  merged PR. Such a run occupies a dev slot (`dispatcher.slots`), not the `test_slots` lane. `game-test-art` and
+  `game-test-map` keep `workspace: project`: the test checkout of the project (see below), where the editor is open,
+  with the `unity-editor` resource. `dispatcher.test_slots` (default 1) such test flows at a time per project. The
+  dispatcher starts the oldest `to-test` issue first (a manual start promotes one ahead), as soon as the lane of its
+  project is free. A project test flow counts in the test lane while it holds, or waits for, the checkout; once it
+  ran `git.restore` (the merge approval is pending) it no longer does. It never takes a dev slot. Pause, budget and
+  night mode apply to both lanes.
 
 **Test checkout.** A project may have a `testCheckout` (absolute path of a dedicated clone of the same repository,
 for example on an SSD) in the registry `projects.json`. Set it with `aidp gateway projects test-checkout <project id>
