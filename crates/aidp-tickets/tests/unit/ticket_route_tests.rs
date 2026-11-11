@@ -35,3 +35,11 @@ fn an_unknown_route_value_falls_through() {
     let ticket = json!({ "route": "audio", "template": "dev-unity" });
     assert_eq!(route_of_value(&ticket), Some(BudgetRoute::Code));
 }
+
+#[test]
+fn the_stage_templates_of_the_game_flows_have_a_route() {
+    assert_eq!(route_of_template("art-produce"), Some(BudgetRoute::Art));
+    assert_eq!(route_of_template("art-fix"), Some(BudgetRoute::Art));
+    assert_eq!(route_of_template("unity-implement"), Some(BudgetRoute::Code));
+    assert_eq!(route_of_template("unity-review"), Some(BudgetRoute::Code));
+}

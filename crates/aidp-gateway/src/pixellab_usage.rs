@@ -3,8 +3,8 @@
 //! The daemon never calls Pixellab: it only reads what the stages recorded.
 
 use crate::models::constants::pixellab::{
-    BALANCE_KEYS, BALANCE_MAX_DEPTH, BALANCE_TTL, MAX_RUNS_PER_TICKET, MAX_STAGE_DEPTH,
-    PIPELINES_DIR, USAGE_FILE,
+    BALANCE_KEYS, BALANCE_MAX_DEPTH, BALANCE_TTL, GENERATIONS_REMAINING_LABEL, MAX_RUNS_PER_TICKET,
+    MAX_STAGE_DEPTH, PIPELINES_DIR, USAGE_FILE,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -21,12 +21,26 @@ pub struct PixellabUsageFile {
     pub balance_before: Option<Value>,
     #[serde(default)]
     pub balance_after: Option<Value>,
-    #[serde(default)]
+    /// Generations the stage spent; stages write fractions (`10.1`), rounded to whole ones here.
+    #[serde(default, deserialize_with = "whole_generations")]
     pub generations: u32,
+    /// One entry per job: a bare id, or an object (`id`, `tool`, `status`, `generations`, `note`).
     #[serde(default)]
-    pub jobs: Vec<String>,
+    pub jobs: Vec<Value>,
     #[serde(default)]
     pub recorded_at: Option<String>,
+}
+
+fn whole_generations<'de, D>(deserializer: D) -> Result<u32, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let amount = Option::<f64>::deserialize(deserializer)?.unwrap_or(0.0);
+    Ok(if amount.is_finite() && amount > 0.0 {
+        amount.round().min(f64::from(u32::MAX)) as u32
+    } else {
+        0
+    })
 }
 
 /// What the art stages of one run used.
@@ -63,6 +77,22 @@ pub struct BalanceSnapshot {
     pub run_id: String,
 }
 
+/// The number following `label` in a text balance (`generations_remaining: 1436.60`).
+fn labelled_number(text: &str, label: &str) -> Option<f64> {
+    let start = text.to_ascii_lowercase().find(label)? + label.len();
+    number_in(&text[start..])
+}
+
+/// A text balance as `get_balance` answers it: `credits: $0.00; generations_remaining: 1436.60; ...`.
+/// A subscription spends its generations first, so they count while any remain; the first
+/// number (the pay-as-you-go credits) only stands in when there are none.
+fn text_balance(text: &str) -> Option<f64> {
+    match labelled_number(text, GENERATIONS_REMAINING_LABEL) {
+        Some(left) if left > 0.0 => Some(left),
+        left => number_in(text).or(left),
+    }
+}
+
 fn number_in(text: &str) -> Option<f64> {
     let start = text.find(|c: char| c.is_ascii_digit())?;
     let tail = &text[start..];
@@ -75,7 +105,7 @@ fn number_in(text: &str) -> Option<f64> {
 fn amount_at(value: &Value, depth: usize) -> Option<f64> {
     match value {
         Value::Number(number) => number.as_f64(),
-        Value::String(text) => number_in(text),
+        Value::String(text) => text_balance(text),
         Value::Object(map) if depth < BALANCE_MAX_DEPTH => {
             for key in BALANCE_KEYS {
                 let found = map

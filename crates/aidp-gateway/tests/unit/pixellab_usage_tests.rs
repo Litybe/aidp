@@ -174,3 +174,42 @@ fn the_balance_report_compares_the_balance_with_the_reserve() {
     assert_eq!(report["belowReserve"], true);
     assert_eq!(report["runId"], "run-1");
 }
+
+#[test]
+fn a_text_balance_counts_the_subscription_generations_not_the_empty_credits() {
+    let text = "credits: $0.00; generations_remaining: 1436.60; generations_used: 563.40; generations_total: 2000; subscription: active (Tier 1: Pixel Apprentice); generations_reset: 2026-12-05";
+    assert_eq!(balance_amount(&json!(text)), Some(1436.6));
+    assert_eq!(
+        balance_amount(&json!("credits: $4.50; generations_remaining: 0.00")),
+        Some(4.5)
+    );
+}
+
+#[test]
+fn a_stage_file_with_job_objects_and_fractional_generations_is_read() {
+    let vault = TempWorkspace::new("pixellab-real");
+    let run_dir = vault.path().join("run-1");
+    let before = "credits: $0.00; generations_remaining: 1446.70; generations_total: 2000";
+    let after = "credits: $0.00; generations_remaining: 1436.60; generations_total: 2000";
+    write_usage(
+        &run_dir,
+        "generate_pixellab",
+        json!({
+            "balanceBefore": before,
+            "balanceAfter": after,
+            "generations": 10.1,
+            "jobs": [
+                { "id": "a", "tool": "edit_image_pro_flash", "status": "completed", "generations": 5 },
+                { "id": "b", "tool": "reduce_colors", "status": "completed", "generations": 0.1 }
+            ],
+            "recordedAt": "2026-11-10T14:40:00Z",
+        }),
+    );
+    let run = aggregate_run("run-1", &run_dir);
+    assert_eq!(run.stages, 1);
+    assert_eq!(run.generations, 10);
+    assert_eq!(run.jobs, 2);
+    assert_eq!(run.balance_before, Some(1446.7));
+    assert_eq!(run.balance_after, Some(1436.6));
+    assert!((run.spent.unwrap() - 10.1).abs() < 1e-6);
+}
