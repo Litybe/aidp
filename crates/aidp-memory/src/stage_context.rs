@@ -1,6 +1,6 @@
 //! The knowledge block of a pipeline stage, built when the pipeline is compiled.
 
-use crate::agent_roles::{domains_for, role_of};
+use crate::agent_roles::{domains_for_route, role_of};
 use crate::context::{issue_query_text, ticket_route};
 use crate::embedder::Embedder;
 use crate::error::Result;
@@ -127,7 +127,7 @@ impl KnowledgeContextProvider {
             .join(STAGE_QUERY_SEPARATOR),
         );
         context.budget_tokens = request.budget_tokens;
-        context.domains = domains_for(&request.agent_type);
+        context.domains = domains_for_route(&request.agent_type, context.route);
         context.agent_type = Some(request.agent_type.clone());
         let block = MemoryManager::new(&store).context(&context, retriever.as_ref())?;
         let markdown = demote_headings(block.markdown.trim());

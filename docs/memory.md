@@ -104,11 +104,15 @@ source: skill:unity-csharp-dev
   (`pixel-art-director`, `pixel-artist`, `pixel-fixer`, `pixel-reviewer`): `pixel-art`,
   `pixel-animation`, `tooling`; `pixel-animator`: `pixel-animation`, `pixel-art`, `tooling`;
   `unity-issue-implementer`, `unity-review-fixer`, `unity-pr-reviewer`: `unity`, `csharp`,
-  `mechanics`; `unity-playtester`: `mechanics`, `unity`, `level-design`; map and level agents
-  (`map-designer`, `map-architect`, `map-builder`, `map-reviewer`, `level-designer`): `level-design`,
-  `rooms`, `mechanics`, `tooling`. `analyzer`, `planner`, `reviewer`, `executor` and unknown agents
-  read every domain. The table is `AGENT_ROLES` in `models/constants/knowledge.rs`; it also gives the
-  route `memory context --agent-type` uses when none is given.
+  `mechanics`; `unity-playtester`: `mechanics`, `unity`, `level-design`. `analyzer`, `planner`,
+  `reviewer`, `executor` and unknown agents have no role of their own: with a known route
+  (`settings.knowledge.route`, the ticket route or `--route`) they read the domains of the route,
+  else every domain. Route domains: `code` `unity`, `csharp`, `mechanics`, `game-design`; `art`
+  `pixel-art`, `pixel-animation`, `tooling`, `game-design`; `map` `level-design`, `rooms`,
+  `mechanics`, `tooling`, `game-design`; `doc` `game-design`, `lore`, `mechanics`, `rooms`;
+  `tooling` `tooling`. The role table is `AGENT_ROLES` in `models/constants/knowledge.rs`, the route
+  table is `Route::domains`; the role table also gives the route `memory context --agent-type` uses
+  when none is given. An explicit `--domain` always wins.
 
 ### Glossary
 

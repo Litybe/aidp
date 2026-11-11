@@ -61,3 +61,20 @@ reindexed.
 New dependency `model2vec-rs` (hakari regenerated, `cargo tree -i tokio` stays empty). Retrieval
 quality is measured with `aidp rag eval`; cases are added for every domain. Templates drop the copied
 C10 text once they enable `settings.knowledge` (skill raises `min_aidp_version`).
+
+## As built
+
+- CLI: `aidp memory inbox list|approve <name>|reject <name>` (reject moves to `_inbox/_rejected/`,
+  nothing is deleted); `aidp memory ingest-knowledge <file|dir>` ingests a `knowledge-proposals.json`;
+  `aidp memory model status` reports the embedding model. All need a vault.
+- An update or supersede that rewrites a note first copies the previous version to
+  `<vault>/Knowledge/_history/` (never indexed).
+- Catch-up: at start the daemon indexes the runs that ended while it was down, found through the
+  `native-run.json` of each run.
+- Protected domains `lore`, `game-design`, `rooms`: any add, update or supersede goes to the inbox.
+- Domain narrowing: a specific role (pixel, unity) keeps its domain table; a generic agent
+  (`analyzer`, `planner`, `reviewer`, `executor`, unknown) reads the domains of its route (`code`,
+  `art`, `map`, `doc`, `tooling`), else every domain. `Route::domains` holds the route table; the
+  non-existent map agents are gone from the role table.
+- Embedding: `model2vec-rs` with the `wasm` feature, so the build needs no C++ toolchain or
+  libstdc++.

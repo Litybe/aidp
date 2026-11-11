@@ -40,20 +40,6 @@ fn unity_agents_read_code_domains() {
 }
 
 #[test]
-fn map_agents_read_level_domains() {
-    assert_eq!(
-        domains_for("map-designer"),
-        [
-            Domain::LevelDesign,
-            Domain::Rooms,
-            Domain::Mechanics,
-            Domain::Tooling
-        ]
-    );
-    assert_eq!(role_of("map-designer").unwrap().route, Some(Route::Map));
-}
-
-#[test]
 fn generic_and_unknown_agents_read_everything() {
     for agent in [
         "analyzer",
@@ -106,4 +92,74 @@ fn domain_spellings_are_kebab_case() {
     );
     assert_eq!(Domain::ALL.len(), 10);
     assert!(Domain::parse("cooking").is_err());
+}
+
+#[test]
+fn generic_agents_follow_the_route() {
+    for agent in ["analyzer", "planner", "reviewer", "executor", "who-knows"] {
+        assert_eq!(
+            domains_for_route(agent, Some(Route::Code)),
+            [
+                Domain::Unity,
+                Domain::Csharp,
+                Domain::Mechanics,
+                Domain::GameDesign
+            ],
+            "{agent}"
+        );
+    }
+    assert_eq!(
+        domains_for_route("executor", Some(Route::Map)),
+        [
+            Domain::LevelDesign,
+            Domain::Rooms,
+            Domain::Mechanics,
+            Domain::Tooling,
+            Domain::GameDesign
+        ]
+    );
+    assert_eq!(
+        domains_for_route("executor", Some(Route::Art)),
+        [
+            Domain::PixelArt,
+            Domain::PixelAnimation,
+            Domain::Tooling,
+            Domain::GameDesign
+        ]
+    );
+    assert_eq!(
+        domains_for_route("executor", Some(Route::Doc)),
+        [
+            Domain::GameDesign,
+            Domain::Lore,
+            Domain::Mechanics,
+            Domain::Rooms
+        ]
+    );
+    assert_eq!(
+        domains_for_route("executor", Some(Route::Tooling)),
+        [Domain::Tooling]
+    );
+    assert!(domains_for_route("executor", None).is_empty());
+}
+
+#[test]
+fn specific_roles_ignore_the_route() {
+    assert_eq!(
+        domains_for_route("pixel-artist", Some(Route::Code)),
+        domains_for("pixel-artist")
+    );
+}
+
+#[test]
+fn narrow_by_route_keeps_explicit_and_agentless_domains() {
+    assert_eq!(
+        narrow_by_route(vec![Domain::Lore], Some("executor"), Some(Route::Code)),
+        [Domain::Lore]
+    );
+    assert!(narrow_by_route(Vec::new(), None, Some(Route::Code)).is_empty());
+    assert_eq!(
+        narrow_by_route(Vec::new(), Some("executor"), Some(Route::Tooling)),
+        [Domain::Tooling]
+    );
 }

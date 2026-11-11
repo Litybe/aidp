@@ -4,7 +4,7 @@ use crate::args::memory::{MemoryModelOp, MemoryOp, ProjectArg, RagOp};
 use crate::ctx::Ctx;
 use crate::models::hit_view::HitView;
 use aidp_core::{ExitStatus, Format};
-use aidp_memory::agent_roles::{parse_domains, role_of};
+use aidp_memory::agent_roles::{narrow_by_route, parse_domains, role_of};
 use aidp_memory::glossary;
 use aidp_memory::models::constants::paths::NOTES_DIR;
 use aidp_memory::models::constants::schema::GLOBAL_PROJECT;
@@ -334,6 +334,11 @@ chunks d'un autre modele: {}",
                     .and_then(role_of)
                     .and_then(|role| role.route);
             }
+            request.domains = narrow_by_route(
+                std::mem::take(&mut request.domains),
+                request.agent_type.as_deref(),
+                request.route,
+            );
             let manager = MemoryManager::new(&opened.store);
             let block = manager.context(&request, retriever(&opened, lexical).as_ref())?;
             let output = if wants_json(ctx) {

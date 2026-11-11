@@ -38,13 +38,6 @@ const UNITY_AGENTS: &[&str] = &[
     "unity-review-fixer",
     "unity-pr-reviewer",
 ];
-const MAP_AGENTS: &[&str] = &[
-    "map-designer",
-    "map-architect",
-    "map-builder",
-    "map-reviewer",
-    "level-designer",
-];
 
 /// Domains and route of each known agent type; an agent absent here sees every domain.
 pub const AGENT_ROLES: &[AgentRole] = &[
@@ -67,16 +60,6 @@ pub const AGENT_ROLES: &[AgentRole] = &[
         names: &["unity-playtester"],
         domains: &[Domain::Mechanics, Domain::Unity, Domain::LevelDesign],
         route: Some(Route::Code),
-    },
-    AgentRole {
-        names: MAP_AGENTS,
-        domains: &[
-            Domain::LevelDesign,
-            Domain::Rooms,
-            Domain::Mechanics,
-            Domain::Tooling,
-        ],
-        route: Some(Route::Map),
     },
     AgentRole {
         names: &["analyzer", "planner", "reviewer", "executor"],
