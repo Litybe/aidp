@@ -1058,12 +1058,14 @@ fn build_doctor(
 ) -> Arc<crate::doctor::Doctor> {
     use crate::models::constants::doctor::{FIRST_TICK_DELAY, TICK_INTERVAL};
     let vault = config.vault_root.clone();
+    let settings: crate::doctor::ports::DoctorSettings =
+        Arc::new(move || aidp_tickets::config::load(&vault).doctor);
     let unity_projects = projects.clone();
     let unity_engine = Arc::downgrade(engine);
     crate::doctor::Doctor::new(crate::doctor::DoctorDeps {
         engine: engine.clone(),
         runs: Arc::new(crate::doctor::ports::NativeDoctorRuns(native_runs.clone())),
-        settings: Arc::new(move || aidp_tickets::config::load(&vault).doctor),
+        settings: settings.clone(),
         state_dir: config.state_dir.clone(),
         unity: Some(Arc::new(move |project_id: &str| {
             let project = unity_projects.get(project_id)?;
@@ -1074,25 +1076,13 @@ fn build_doctor(
             ))
         })),
         unity_modals: Arc::new(crate::doctor::ports::NoUnityModals),
-        harness_repos: harness_repos(skill_root()),
+        harness_repos: crate::doctor::harness_repos::resolver(
+            settings,
+            std::env::var_os(crate::models::constants::doctor::ENV_SOURCE_ROOT).map(PathBuf::from),
+            skill_root(),
+        ),
         first_delay: FIRST_TICK_DELAY,
         interval: TICK_INTERVAL,
-    })
-}
-
-/// Local clones of the harness repositories: the skill's root, and the daemon's sources named by
-/// `AIDP_SOURCE_ROOT`. A repository without a clone gets no pull request from the doctor.
-fn harness_repos(skill_root: Option<PathBuf>) -> crate::doctor::ports::HarnessRepos {
-    use crate::models::constants::doctor::HARNESS_REPOS;
-    let source = std::env::var_os("AIDP_SOURCE_ROOT").map(PathBuf::from);
-    Arc::new(move |repo: &str| {
-        if repo == HARNESS_REPOS[0] {
-            source.clone()
-        } else if repo == HARNESS_REPOS[1] {
-            skill_root.clone()
-        } else {
-            None
-        }
     })
 }
 

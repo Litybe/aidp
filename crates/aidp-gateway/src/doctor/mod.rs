@@ -10,6 +10,7 @@ pub mod actions_git;
 pub mod converge;
 pub mod detect;
 pub mod evidence;
+pub mod harness_repos;
 pub mod http_routes;
 pub mod policy;
 pub mod ports;

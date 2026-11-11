@@ -171,7 +171,7 @@ The agent proposes; the daemon decides and executes.
 | `update_pr_branch` | `gh pr update-branch N --repo R` (merge, GitHub's default) | A PR number and repository (`params.pr`, `params.repo`, else the flow's `pr.json`); `rebase` or `force` in the params is refused. |
 | `release_unity_lock` | Frees `unity-editor:<project>` (`params.resource` to name another) | Someone holds it and the holder's flow is terminal, or is live with an editor heartbeat silent for over `doctor.stuck_minutes`. |
 | `create_bug_ticket` | Raises a bug issue under the ticket with `bug.create` (`aidp flow bug-create KEY`): same marker `<!-- aidp:bug parent=… base=… -->`, same cap of 3 bugs per parent, the parent waits while the bug is open. | The category is `product_bug` and the incident has a ticket. A parent that already holds 3 bugs: `refused`. |
-| `open_harness_pr` | Opens a pull request for a harness patch: temporary worktree from `origin/main` of `Litybe/aidp` or `Litybe/aidp-skill` (named by `params.repo`, else by the paths of the patch), patch applied, branch `doctor/<incident>` pushed (no force), `gh pr create`. Never a merge, never a `gamedev/*` branch. | A `proposed_patch` that names files inside the repository, a local clone (`AIDP_SOURCE_ROOT` for `Litybe/aidp`, the skill root for `Litybe/aidp-skill`), and no PR already open for the incident (one per incident). A patch that does not apply: nothing is pushed, the note says so, the incident is `needs_human`. |
+| `open_harness_pr` | Opens a pull request for a harness patch: temporary worktree from `origin/main` of `Litybe/aidp`, `Litybe/aidp-skill`, `Litybe/aidp-studio`, `Litybe/aidp-unity` or a repository of `doctor.harness_repos` (named by `params.repo`, else inferred from the paths: `crates/` `docs/` for aidp, `templates/` `agents/` `skills/` for aidp-skill; studio and unity need `params.repo`), patch applied, branch `doctor/<incident>` pushed (no force), `gh pr create`. Never a merge, never a `gamedev/*` branch. | A `proposed_patch` that names files inside the repository, a verified local clone (`doctor.harness_repos`, else `AIDP_SOURCE_ROOT` for `Litybe/aidp` and the skill root for `Litybe/aidp-skill`), and no PR already open for the incident (one per incident). A patch that does not apply: nothing is pushed, the note says so, the incident is `needs_human`. |
 | `dismiss_unity_modal` | Closes the modal window that blocks the project's Unity editor through the Unity channel, then resumes the step as `retry_step` does. | The editor of the project is already open and its heartbeat is silent past its limit. The doctor never opens Unity. The default daemon has no channel to the editor's main thread (`NoUnityModals`): the action is then `refused`. |
 | `extend_unity_wait` | Resumes the step with the compile gate waiting `3` times longer (wait and heartbeat tolerance, `aidp flow unity-refresh --wait-multiplier 3`), for that flow run only. | The current step is a `unity.refresh` step, failed or waiting. |
 | `mark_step_passed` | `mark-passed` of the step, as `doctor`. | A failed step (not rejected by a human) whose id or action contains `report` or `verdict`; never a `human` or `gh.merge` step; the ticket has a PR; `params.recheck` is `clean`; confidence 0.7. |
@@ -282,6 +282,13 @@ doctor:
   max_budget_raise: 0            # times `nudge_budget` may lift a ticket's token ceiling per 24 h (0: never)
   prune_worktree_hours: 24       # hours a terminal flow keeps its worktree before `prune_worktrees`
   fallback_model: sonnet         # model of `retry_with_fallback`; unset: that action is refused
+  harness_repos:                 # local clone of each repo `open_harness_pr` may target (wins over the environment)
+    Litybe/aidp: D:\AIDP\srcidp
+    Litybe/aidp-skill: D:\AIDP\skill
+    Litybe/aidp-studio: D:\AIDP\srcidp-studio
+    Litybe/aidp-unity: D:\AIDP\srcidp-unity
 ```
+
+`harness_repos` maps `owner/name` to a local clone. Allowed repositories: `Litybe/aidp` (clone from `AIDP_SOURCE_ROOT`), `Litybe/aidp-skill` (the skill root), `Litybe/aidp-studio`, `Litybe/aidp-unity` and every key of `harness_repos`; the name matches without regard to case. A clone is used only if it is a git repository whose `origin` is the GitHub URL (https or ssh) of that repository; otherwise the daemon logs a warning with the reason and the action is refused with `no local clone`.
 
 Incidents are kept in `<state dir>/doctor/incidents.json` (`~/.aidp/gateway/doctor/`).

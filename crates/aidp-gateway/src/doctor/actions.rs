@@ -13,10 +13,10 @@ use crate::flows::FlowEngine;
 use crate::models::constants::doctor::{
     AIDP_LABEL, AIDP_TICKET, DOCTOR_ACTOR, FORBIDDEN_BRANCH_PREFIX, GH_PROGRAM, GH_REPO_FLAG,
     GH_UPDATE_BRANCH, HARNESS_AUTHOR, HARNESS_BASE, HARNESS_BRANCH_PREFIX, HARNESS_REMOTE,
-    HARNESS_REPOS, PARAM_CRITERION, PARAM_DEFECT, PARAM_DEFECT_FILE, PARAM_FILES,
-    PARAM_HARNESS_REPO, PARAM_PR, PARAM_REPO, PARAM_RESOURCE, PARAM_STEP, PARAM_SUMMARY,
-    PROTECTED_BRANCHES, REBASE_PARAMS, RESTORE_COMMIT_PREFIX, STATE_READY, STATE_TO_TEST,
-    WORKTREES_DIR,
+    HARNESS_REPO_AIDP, HARNESS_REPO_SKILL, PARAM_CRITERION, PARAM_DEFECT, PARAM_DEFECT_FILE,
+    PARAM_FILES, PARAM_HARNESS_REPO, PARAM_PR, PARAM_REPO, PARAM_RESOURCE, PARAM_STEP,
+    PARAM_SUMMARY, PROTECTED_BRANCHES, REBASE_PARAMS, RESTORE_COMMIT_PREFIX, STATE_READY,
+    STATE_TO_TEST, WORKTREES_DIR,
 };
 use crate::models::constants::flow_actions::{
     ACTION_GH_MERGE, PLACEHOLDER_KEY_ARG, VERB_FLOW, VERB_FLOW_BUG_REARM, WITH_ALLOW_EXTRA,
@@ -797,15 +797,15 @@ fn rearm_cap(target: &ActionTarget<'_>, ticket: &str) -> Result<bool, String> {
 /// The repository a patch targets: the diagnosis names it, else its paths tell.
 fn harness_repo(target: &ActionTarget<'_>, patch: &str) -> Option<String> {
     if let Some(named) = text_param(target, PARAM_HARNESS_REPO) {
-        return HARNESS_REPOS.contains(&named.as_str()).then_some(named);
+        return crate::doctor::harness_repos::canonical_repo(&named, target.settings);
     }
     let paths = patch_paths(patch);
     let all = |prefix: &str| !paths.is_empty() && paths.iter().all(|path| path.starts_with(prefix));
     if all("crates/") || all("docs/") {
-        return Some(HARNESS_REPOS[0].to_string());
+        return Some(HARNESS_REPO_AIDP.to_string());
     }
     if all("templates/") || all("agents/") || all("skills/") {
-        return Some(HARNESS_REPOS[1].to_string());
+        return Some(HARNESS_REPO_SKILL.to_string());
     }
     None
 }
