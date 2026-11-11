@@ -1006,6 +1006,57 @@ instead of millions below one million tokens; the window clause is left out when
 is `null`), and for one run by `aidp_gateway::ticket_cost::run_footer(&[StageRow], Option<f64>)`.
 `aidp cost ticket <key> --format footer` prints it.
 
+### `GET /api/tickets/costs[?keys=GH-1,GH-2]`
+
+The dollars and the tokens of every ticket in one call, for a board that shows a cost on each card
+(`ticket_cost::ticket_totals`, computed from the sessions in memory in a single pass, no vault
+walk). The body is an object keyed by ticket key:
+
+```json
+{
+  "GH-12": { "costUsd": 1.84, "totals": { "totalTokens": 1200000 } },
+  "GH-13": { "costUsd": null, "totals": { "totalTokens": 0 } }
+}
+```
+
+`costUsd` and `totals.totalTokens` are the numbers of `GET /api/tickets/:key/cost` for the same key
+(`costUsd` is `null`, not omitted, while no session of the ticket has a price). Without `keys` the
+answer holds every ticket with a session and every ticket note (archived ones included); with `keys`
+(comma-separated) it holds only those, and a key no session and no note knows is left out instead
+of answering `404`. Never read-only restricted (a `GET`).
+
+### Read latency
+
+The cost, usage and Pixellab routes (`/api/usage`, `/api/tickets/:key/cost`, `/api/pixellab/balance`)
+read `vault_index`, an in-memory index of `<vault>/Pipelines/<repo>/<ticket>/<run>/`: per run its
+route, its stage rows and its Pixellab usage and balance. The daemon builds it at startup on a
+background thread, then refreshes it incrementally on a background thread when a read finds it older
+than 15 s (a run is read again only when its `run-state.json` or its directory changed) and on
+`run.started`, `run.stage_changed` and `run.ended`. The ticket ceilings (`budget.per_ticket`,
+`budget.pixellab.per_ticket`) read the runs of the ticket again before they decide.
+
+The index is persisted in SQLite, `<gateway dir>/memory/vault-index.sqlite` (next to `memory.db`, WAL,
+`PRAGMA user_version` checked: another version drops and rebuilds it). One row per run keyed by its
+directory (repo, ticket, run id, route, the `run-state.json` size and mtime and the directory mtime
+that decide staleness, Pixellab usage, newest balance) and one row per stage row. At startup the
+daemon loads it at once, so the routes answer from it without walking the vault, then runs the
+incremental refresh in the background: it stats each run, reads again only the changed ones, and
+writes the changed runs and deletes the vanished ones in one transaction. Reads stay on the
+in-memory index; SQLite is only its persistence. The run files remain the source of truth (the
+`aidp` CLI writes them from other processes) and the database is a cache: if it cannot be opened it
+is deleted and recreated, and if that fails the daemon logs a warning and keeps the in-memory
+behaviour. Response shapes do not change.
+
+`GET /api/worktrees`, `GET /api/tickets/:key/pr`, `GET /api/catalog/templates|flows[/:id]`,
+`GET /api/memory` and `GET /api/unity/status` are served stale-while-revalidate (`swr_cache.rs`): the
+last answer comes back at once and, once older than its TTL (worktrees 20 s, ticket pull request
+30 s, catalogue 30 s, memory 10 s, Unity processes 5 s), a background thread computes the next one.
+Only the first read after startup waits for `git`, `gh` or the disk. A write (`POST /api/worktrees/*`,
+a catalogue or memory write, a memory event, a PR webhook) drops the cached answers, and
+`?refresh=1` on `GET /api/tickets/:key/pr` reads again now. `GET /api/prs` keeps its inbox cache
+(120 s TTL, persisted snapshot served stale); the GitHub quota handling is unchanged, no route asks
+`gh` more often than before.
+
 ### `GET /api/cost/anomalies`
 
 Flags the tickets whose token total is an outlier among all tickets with a session (modified z-score

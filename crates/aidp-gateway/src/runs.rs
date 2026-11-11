@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
 
-const RUN_STATE_FILE: &str = "run-state.json";
+pub(crate) const RUN_STATE_FILE: &str = "run-state.json";
 const PIPELINES_DIR: &str = "Pipelines";
 const GENERATED_PREFIX: char = '_';
 const MATCH_BY_RUN_ID: &str = "run_id";

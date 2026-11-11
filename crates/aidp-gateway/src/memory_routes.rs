@@ -385,6 +385,46 @@ fn reindex(scope: &Scope, body: &Value) -> Reply {
     }
 }
 
+/// The cache key of a listing: the project and the sorted filters.
+fn listing_key(project: &str, query: &HashMap<String, String>) -> String {
+    let mut filters: Vec<String> = query
+        .iter()
+        .filter(|(name, _)| name.as_str() != QUERY_PROJECT)
+        .map(|(name, value)| format!("{name}={value}"))
+        .collect();
+    filters.sort();
+    format!("{project}?{}", filters.join("&"))
+}
+
+/// `GET /api/memory`, answered from the stale-while-revalidate cache of the app.
+fn cached_list(app: &App, requested: Option<&str>, query: &HashMap<String, String>) -> Reply {
+    let project = match resolve_project(app, requested) {
+        Ok(project) => project,
+        Err(reply) => return reply,
+    };
+    let key = listing_key(&project.name, query);
+    let (hub, project_ref, filters) = (
+        app.memory.clone(),
+        MemoryHub::project_ref(&project),
+        query.clone(),
+    );
+    app.route_caches
+        .memory
+        .get(key, move || {
+            let store = hub.store().map_err(memory_failure)?;
+            let scope = Scope {
+                hub,
+                store,
+                project: project_ref,
+            };
+            match list(&scope, &filters) {
+                reply if reply.0 == STATUS_OK => Ok(reply),
+                reply => Err(reply),
+            }
+        })
+        .unwrap_or_else(|reply| reply)
+}
+
 /// Answers the `/api/memory` and `/api/rag` routes; `None` for any other path.
 pub fn handle(
     app: &App,
@@ -415,6 +455,14 @@ pub fn handle(
         .map(String::as_str)
         .or_else(|| body.get(QUERY_PROJECT).and_then(Value::as_str))
         .filter(|name| !name.is_empty());
+    if *head == MEMORY_SEGMENT {
+        if *method == Method::Get && rest.is_empty() {
+            return Some(cached_list(app, requested, query));
+        }
+        if *method != Method::Get {
+            app.route_caches.memory.clear();
+        }
+    }
     let scope = match scope(app, requested) {
         Ok(scope) => scope,
         Err(reply) => return Some(reply),

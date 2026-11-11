@@ -1,7 +1,8 @@
 //! The incidents of the doctor, persisted under `<state dir>/doctor/incidents.json`.
 
 use crate::models::constants::doctor::{
-    ACTION_KEY_SUFFIX, ATTEMPT_WINDOW_MS, DOCTOR_DIR, INCIDENTS_FILE, MAX_ACTIONS_PER_INCIDENT,
+    ACTION_KEY_SUFFIX, ATTEMPT_WINDOW_MS, BUDGET_RAISED_NOTE, DOCTOR_DIR, INCIDENTS_FILE,
+    MAX_ACTIONS_PER_INCIDENT,
 };
 use crate::models::enums::{DoctorAction, DoctorIncidentStatus, DoctorTrigger};
 use crate::models::{DoctorActionOutcome, DoctorCandidate, DoctorIncident};
@@ -81,6 +82,8 @@ impl IncidentStore {
             shared_pattern: None,
             affected: Vec::new(),
             rearmed_ms: None,
+            investigations: 0,
+            investigation_failures: 0,
         };
         incidents.push(incident.clone());
         self.persist(&incidents);
@@ -129,7 +132,28 @@ impl IncidentStore {
             .iter()
             .filter(|incident| incident.candidate.ticket == ticket)
             .filter(|incident| incident.candidate.trigger != DoctorTrigger::BugsNotConverging)
-            .filter_map(|incident| incident.investigated_ms)
+            .filter_map(|incident| {
+                incident
+                    .investigated_ms
+                    .map(|at| (at, incident.investigations.max(1)))
+            })
+            .filter(|(at, _)| now_ms - at < ATTEMPT_WINDOW_MS)
+            .map(|(_, investigations)| investigations as usize)
+            .sum()
+    }
+
+    /// Ticket ceiling raises `nudge_budget` made for ticket `ticket` in the 24 hours before `now_ms`.
+    pub fn budget_raises(&self, ticket: &str, now_ms: i64) -> usize {
+        lock(&self.incidents)
+            .iter()
+            .filter(|incident| incident.candidate.ticket == ticket)
+            .flat_map(|incident| incident.actions.iter())
+            .filter(|done| {
+                done.action == DoctorAction::NudgeBudget
+                    && done.ok
+                    && done.detail.contains(BUDGET_RAISED_NOTE)
+            })
+            .filter_map(|done| crate::doctor::detect::millis_of(&done.at))
             .filter(|at| now_ms - at < ATTEMPT_WINDOW_MS)
             .count()
     }

@@ -20,6 +20,7 @@ aidp-tickets = { path = "../aidp-tickets" }
 aidp-memory = { path = "../aidp-memory" }
 aidp-flows = { path = "../aidp-flows" }
 serde.workspace = true
+rusqlite.workspace = true
 jsonschema.workspace = true
 serde_json.workspace = true
 base64 = "0.22"

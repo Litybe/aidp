@@ -35,6 +35,7 @@ fn environment<'a>(processes: &'a dyn ProcessSource, timeout_millis: u64) -> Env
         processes,
         timeout: Duration::from_millis(timeout_millis),
         poll: Duration::from_millis(10),
+        wait_multiplier: 1,
     }
 }
 
@@ -149,13 +150,27 @@ fn heartbeat_staleness_depends_on_the_state() {
     let reloading = json!({ "at": "2026-11-09T10:00:00Z", "state": "reloading" });
     let long_reload = json!({ "at": "2026-11-09T09:50:00Z", "state": "reloading" });
 
-    assert_eq!(stale_heartbeat_age(&fresh, now), None);
-    assert_eq!(stale_heartbeat_age(&importing, now), None);
-    assert_eq!(stale_heartbeat_age(&stale, now), Some(420));
-    assert_eq!(stale_heartbeat_age(&reloading, now), None);
-    assert_eq!(stale_heartbeat_age(&long_reload, now), Some(660));
-    assert_eq!(stale_heartbeat_age(&Value::Null, now), None);
-    assert_eq!(stale_heartbeat_age(&json!({ "at": "garbage" }), now), None);
+    assert_eq!(stale_heartbeat_age_scaled(&fresh, now, 1), None);
+    assert_eq!(stale_heartbeat_age_scaled(&importing, now, 1), None);
+    assert_eq!(stale_heartbeat_age_scaled(&stale, now, 1), Some(420));
+    assert_eq!(stale_heartbeat_age_scaled(&reloading, now, 1), None);
+    assert_eq!(stale_heartbeat_age_scaled(&long_reload, now, 1), Some(660));
+    assert_eq!(stale_heartbeat_age_scaled(&Value::Null, now, 1), None);
+    assert_eq!(
+        stale_heartbeat_age_scaled(&json!({ "at": "garbage" }), now, 1),
+        None
+    );
+}
+
+#[test]
+fn a_longer_wait_stretches_the_heartbeat_tolerance() {
+    let now = chrono::DateTime::parse_from_rfc3339("2026-11-09T10:01:00Z")
+        .unwrap()
+        .with_timezone(&chrono::Utc);
+    let stale = json!({ "at": "2026-11-09T09:54:00Z", "state": "compiling" });
+
+    assert_eq!(stale_heartbeat_age_scaled(&stale, now, 1), Some(420));
+    assert_eq!(stale_heartbeat_age_scaled(&stale, now, 3), None);
 }
 
 #[test]

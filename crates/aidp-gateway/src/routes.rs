@@ -42,5 +42,7 @@ pub const TICKET_FLOW_SEGMENT: &str = "flow";
 pub const FLOWS: &str = "/api/flows";
 /// Segment of a ticket's cost route, under `/api/tickets/:key/`.
 pub const TICKET_COST_SEGMENT: &str = "cost";
+/// Segment of the all-tickets cost route, `/api/tickets/costs`.
+pub const TICKET_COSTS_SEGMENT: &str = "costs";
 /// Cost anomalies route.
 pub const COST_ANOMALIES: &str = "/api/cost/anomalies";

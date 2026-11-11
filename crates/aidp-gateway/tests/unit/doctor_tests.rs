@@ -49,6 +49,8 @@ fn incident() -> DoctorIncident {
         shared_pattern: None,
         affected: Vec::new(),
         rearmed_ms: None,
+        investigations: 0,
+        investigation_failures: 0,
     }
 }
 

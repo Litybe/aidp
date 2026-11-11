@@ -45,7 +45,10 @@ pub fn run(ctx: &Ctx, op: Op) -> anyhow::Result<CommandOutput> {
         Op::GitBranch { key } => git_branch(ctx, &key),
         Op::GitCheckout { key } => checkout::git_checkout(ctx, &key),
         Op::GitRestore { key } => checkout::git_restore(ctx, &key),
-        Op::UnityRefresh { timeout } => unity_refresh::unity_refresh(&ctx.workspace(), timeout),
+        Op::UnityRefresh {
+            timeout,
+            wait_multiplier,
+        } => unity_refresh::unity_refresh(&ctx.workspace(), timeout, wait_multiplier),
         Op::GitPush { branch } => git_push(ctx, branch.as_deref()),
         Op::BugCreate {
             key,

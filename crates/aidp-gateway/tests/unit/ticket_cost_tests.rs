@@ -356,3 +356,44 @@ fn anomalies_need_three_tickets() {
     assert_eq!(report.status, "insufficient_data");
     assert_eq!(report.n, 2);
 }
+
+#[test]
+fn a_targetless_run_session_takes_its_ticket_from_the_vault_run_folder() {
+    let mut doctor = session(
+        "d",
+        None,
+        "diagnose",
+        "2026-11-06T10:00:00.000Z",
+        (1, 1, 0, 0),
+    );
+    doctor.origin =
+        serde_json::from_value(json!({ "kind": "run", "ref": "20261110-223007-31f4" })).unwrap();
+    doctor.cwd = r"\?\D:\AIDP\Vault\Pipelines\PixelHood\GH-227\doctor\case_0".to_string();
+    assert_eq!(ticket_of(&doctor), Some("GH-227"));
+    doctor.cwd = r"\?\D:\CLAUDE_UNITY\game".to_string();
+    assert_eq!(ticket_of(&doctor), None);
+}
+
+#[test]
+fn ticket_cost_prices_the_sessions_in_dollars() {
+    let mut recorded = session(
+        "a",
+        Some(TICKET),
+        "implement",
+        "2026-11-06T10:00:00.000Z",
+        (10, 5, 0, 0),
+    );
+    recorded.cost_usd = Some(1.5);
+    let priced = session(
+        "b",
+        Some(TICKET),
+        "review",
+        "2026-11-06T11:00:00.000Z",
+        (1_000_000, 0, 0, 0),
+    );
+    let cost = ticket_cost(TICKET, &[recorded.clone()], &[], None, None);
+    assert_eq!(cost.cost_usd, Some(1.5));
+    let cost = ticket_cost(TICKET, &[recorded, priced], &[], None, None);
+    assert!(cost.cost_usd.unwrap() > 1.5);
+    assert_eq!(ticket_cost(OTHER, &[], &[], None, None).cost_usd, None);
+}

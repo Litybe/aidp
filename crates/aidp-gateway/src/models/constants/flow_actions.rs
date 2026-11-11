@@ -50,6 +50,8 @@ pub const FLAG_EXPECTED_HEAD_SHA: &str = "--expected-head-sha";
 /// `aidp gh pr-merge` reports a conflict with the base as an output instead of failing.
 pub const FLAG_REPORT_CONFLICT: &str = "--report-conflict";
 pub const FLAG_BRANCH: &str = "--branch";
+/// `aidp flow unity-refresh` flag stretching the compile wait and the heartbeat tolerance.
+pub const FLAG_WAIT_MULTIPLIER: &str = "--wait-multiplier";
 pub const FLAG_DRAFT: &str = "--draft";
 pub const FLAG_COST_FOOTER: &str = "--cost-footer";
 pub const FLAG_REPORT_FILE: &str = "--report-file";

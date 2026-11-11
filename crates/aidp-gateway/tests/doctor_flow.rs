@@ -15,7 +15,7 @@ use aidp_core::id::SystemIdGen;
 use aidp_core::process_runner::{OsProcessRunner, ProcessRunner, ProcessSpec, SpawnedChild};
 use aidp_flows::{FlowDef, FlowState, FlowStatus};
 use aidp_gateway::bus::Bus;
-use aidp_gateway::doctor::ports::{DoctorRuns, HarnessRepos, NativeDoctorRuns};
+use aidp_gateway::doctor::ports::{DoctorRuns, HarnessRepos, NativeDoctorRuns, NoUnityModals};
 use aidp_gateway::doctor::{Doctor, DoctorDeps};
 use aidp_gateway::flows::executor::Ports;
 use aidp_gateway::flows::lock::SessionLock;
@@ -343,6 +343,7 @@ pub(crate) fn world_full(
         state_dir,
         harness_repos,
         unity: None,
+        unity_modals: Arc::new(NoUnityModals),
         first_delay: Duration::ZERO,
         interval: Duration::from_secs(3600),
     });
@@ -393,6 +394,18 @@ impl DoctorRuns for ExtraRuns {
 
     fn resume(&self, run_id: &str) -> anyhow::Result<()> {
         self.inner.resume(run_id)
+    }
+
+    fn cancel_sessions(&self, run_id: &str) -> anyhow::Result<usize> {
+        self.inner.cancel_sessions(run_id)
+    }
+
+    fn resume_from_stage(&self, run_id: &str, stage: &str) -> anyhow::Result<()> {
+        self.inner.resume_from_stage(run_id, stage)
+    }
+
+    fn set_model(&self, run_id: &str, model: &str) -> anyhow::Result<()> {
+        self.inner.set_model(run_id, model)
     }
 }
 
@@ -687,6 +700,45 @@ fn the_ticket_cap_stops_investigations_after_two_a_day() {
     assert_eq!(investigations, 2);
 }
 
+#[test]
+fn a_failed_investigation_gets_one_more_after_the_delay_and_the_second_failure_is_final() {
+    let mut first_failure = stale_incident(KEY);
+    first_failure.candidate.id = format!("{KEY}/{IMPLEMENT}@0");
+    first_failure.candidate.trigger = DoctorTrigger::FlowFailed;
+    first_failure.candidate.step = Some(IMPLEMENT.to_string());
+    first_failure.candidate.run_id = None;
+    first_failure.status = DoctorIncidentStatus::InvestigationFailed;
+    first_failure.investigations = 1;
+    first_failure.investigation_failures = 1;
+    first_failure.next_attempt_ms = Some(1);
+    let world = world_full(
+        "doctor-investigation-retry",
+        Investigation::Broken,
+        SESSIONS_OF_A_REJECTED_REPLY,
+        MALFORMED_REPLY,
+        &[first_failure],
+    );
+    world.start();
+    world.wait_flow(FlowStatus::Failed);
+
+    let closed = world.investigate();
+    assert_eq!(
+        closed.status,
+        DoctorIncidentStatus::InvestigationFailed,
+        "{closed:?}"
+    );
+    assert_eq!(closed.investigation_failures, 2, "{closed:?}");
+    assert_eq!(closed.next_attempt_ms, None);
+    for _ in 0..3 {
+        world.doctor.tick();
+    }
+    assert_eq!(doctor_runs(&world), 1);
+    assert_eq!(
+        world.incident().status,
+        DoctorIncidentStatus::InvestigationFailed
+    );
+}
+
 fn stale_incident(key: &str) -> DoctorIncident {
     DoctorIncident {
         candidate: DoctorCandidate {
@@ -718,6 +770,8 @@ fn stale_incident(key: &str) -> DoctorIncident {
         shared_pattern: None,
         affected: Vec::new(),
         rearmed_ms: None,
+        investigations: 0,
+        investigation_failures: 0,
     }
 }
 

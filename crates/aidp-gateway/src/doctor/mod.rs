@@ -5,12 +5,15 @@
 //! calls the flow engine.
 
 pub mod actions;
+pub mod actions_flow;
+pub mod actions_git;
 pub mod converge;
 pub mod detect;
 pub mod evidence;
 pub mod http_routes;
 pub mod policy;
 pub mod ports;
+pub mod preconditions;
 pub mod store;
 pub mod transient;
 
@@ -22,9 +25,10 @@ use crate::flows::FlowEngine;
 use crate::models::constants::doctor::{
     AIDP_COMMENT, AIDP_TICKET, ATTEMPT_WINDOW_MS, BODY_FILE_FLAG, BUG_HISTORY_FILE, COMMENT_FILE,
     DIAGNOSIS_FILE, DOCTOR_ACTOR, DOCTOR_DIR, DOCTOR_LOOP, DOCTOR_TEMPLATE, EVENT_DOCTOR_INCIDENT,
-    EVIDENCE_DIR, INPUT_BUNDLE, INPUT_FEATURE, INPUT_INCIDENT, MAX_ACTIONS_PER_INCIDENT,
-    MAX_TRANSIENT_RETRIES_PER_TICKET, OBSOLETE_NOTE, PARAM_PATTERN, PR_LAG_FILE, REPORT_FILE,
-    REPORT_MAX_BYTES, SHARED_PATTERNS_FILE, SLICE, TEST_INFRA_FILE, TEST_TEMPLATE_FRAGMENT,
+    EVIDENCE_DIR, INPUT_BUNDLE, INPUT_FEATURE, INPUT_INCIDENT, INVESTIGATION_RETRY_DELAY_MS,
+    MAX_ACTIONS_PER_INCIDENT, MAX_INVESTIGATION_FAILURES, MAX_TRANSIENT_RETRIES_PER_TICKET,
+    OBSOLETE_NOTE, PARAM_PATTERN, PR_LAG_FILE, REPORT_FILE, REPORT_MAX_BYTES, SHARED_PATTERNS_FILE,
+    SLICE, TEST_INFRA_FILE, TEST_TEMPLATE_FRAGMENT,
 };
 use crate::models::constants::flow_facts::LIVE_STATUS_TIMEOUT;
 use crate::models::enums::native_run_status::NativeRunStatus;
@@ -46,7 +50,7 @@ use aidp_tickets::store::TicketStore;
 use converge::{Git, ReportText};
 use detect::DetectInput;
 use policy::Decision;
-use ports::{DoctorRuns, DoctorSettings, HarnessRepos, UnityProbe};
+use ports::{DoctorRuns, DoctorSettings, HarnessRepos, UnityModals, UnityProbe};
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -61,6 +65,7 @@ const BODY_FILE_INPUT: &str = "body_file";
 const ALL_GATES: &str = "*";
 const FEATURE_PREFIX: &str = "doctor-";
 const NONE_TEXT: &str = "-";
+const INVESTIGATION_RETRY_NOTE: &str = "the first investigation failed: a second one starts";
 /// Largest stage file read to look for a passing fault.
 const REPLY_MAX_BYTES: u64 = 64 * 1024;
 const PIPELINES_DIR: &str = "Pipelines";
@@ -72,6 +77,8 @@ pub struct DoctorDeps {
     pub settings: DoctorSettings,
     pub state_dir: PathBuf,
     pub unity: Option<UnityProbe>,
+    /// The channel to the modal windows of the Unity editor.
+    pub unity_modals: Arc<dyn UnityModals>,
     /// Local clone of each harness repository, for `open_harness_pr`.
     pub harness_repos: HarnessRepos,
     /// Pause before the first pass of the thread, so the daemon finishes starting.
@@ -170,11 +177,41 @@ impl Doctor {
                 );
             }
         }
+        self.reopen_failed_investigations(&candidates);
         if let Some(open) = self.store.investigating() {
             self.follow(&open);
         }
         if self.store.investigating().is_none() {
             self.start_next(&settings, &candidates);
+        }
+    }
+
+    /// An incident whose first investigation failed gets one more once the delay passed, while its
+    /// failure is still live; a second failure stays final. The cap per ticket still applies.
+    fn reopen_failed_investigations(&self, candidates: &[DoctorCandidate]) {
+        let now_ms = self.now_ms();
+        for incident in self.store.all() {
+            let retry_due = incident.status == DoctorIncidentStatus::InvestigationFailed
+                && incident.investigation_failures < MAX_INVESTIGATION_FAILURES
+                && incident
+                    .next_attempt_ms
+                    .is_some_and(|not_before| now_ms >= not_before);
+            let live = candidates
+                .iter()
+                .any(|candidate| candidate.id == incident.candidate.id);
+            if !(retry_due && live) {
+                continue;
+            }
+            let id = incident.candidate.id.clone();
+            let updated = self.store.update(&id, &self.now(), |row| {
+                row.status = DoctorIncidentStatus::Detected;
+                row.investigation_run_id = None;
+                row.next_attempt_ms = None;
+                row.note = Some(INVESTIGATION_RETRY_NOTE.to_string());
+            });
+            if let Some(updated) = updated {
+                self.announce(&updated, INVESTIGATION_RETRY_NOTE);
+            }
         }
     }
 
@@ -418,7 +455,14 @@ impl Doctor {
         let next = if ticket_retries >= MAX_TRANSIENT_RETRIES_PER_TICKET {
             None
         } else {
-            policy::next_rung(&incident.actions, diagnosis.category, test_lane)
+            policy::next_rung_with(
+                &incident.actions,
+                diagnosis.category,
+                test_lane,
+                policy::RungOptions {
+                    fallback_model: self.settings().fallback_model.is_some(),
+                },
+            )
         };
         let Some(action) = next else {
             let note = format!(
@@ -492,6 +536,10 @@ impl Doctor {
             rearm_allowed: !self
                 .store
                 .rearmed_recently(&incident.candidate.ticket, now_ms),
+            settings: &settings,
+            unity: self.deps.unity.as_ref(),
+            unity_modals: &self.deps.unity_modals,
+            budget_raises: self.store.budget_raises(&incident.candidate.ticket, now_ms),
         };
         let mut result = actions::execute(&target, action);
         let pr_url = match &result {
@@ -590,6 +638,8 @@ impl Doctor {
                     row.status = DoctorIncidentStatus::Investigating;
                     row.investigation_run_id = Some(run_id.clone());
                     row.investigated_ms = Some(now_ms);
+                    row.investigations += 1;
+                    row.next_attempt_ms = None;
                     row.bundle = Some(bundle.to_string_lossy().to_string());
                     row.note = None;
                 });
@@ -598,8 +648,10 @@ impl Doctor {
                 }
             }
             Err(error) => {
-                self.store
-                    .update(&id, &self.now(), |row| row.investigated_ms = Some(now_ms));
+                self.store.update(&id, &self.now(), |row| {
+                    row.investigated_ms = Some(now_ms);
+                    row.investigations += 1;
+                });
                 self.close(
                     &id,
                     DoctorIncidentStatus::InvestigationFailed,
@@ -944,7 +996,15 @@ impl Doctor {
                     .store
                     .get(id)
                     .is_some_and(|row| self.test_lane(&row.candidate));
-                policy::next_rung(&done, diagnosis.category, test_lane)
+                policy::next_rung_with(
+                    &done,
+                    diagnosis.category,
+                    test_lane,
+                    policy::RungOptions {
+                        fallback_model: self.settings().fallback_model.is_some(),
+                    },
+                )
+                .filter(|rung| diagnosis.confidence >= policy::required_confidence(*rung))
             } else {
                 None
             };
@@ -982,9 +1042,15 @@ impl Doctor {
         note: String,
         report: Option<String>,
     ) {
+        let now_ms = self.now_ms();
         let Some(closed) = self.store.update(id, &self.now(), |row| {
             row.status = status;
             row.note = Some(note.clone());
+            if status == DoctorIncidentStatus::InvestigationFailed {
+                row.investigation_failures += 1;
+                row.next_attempt_ms = (row.investigation_failures < MAX_INVESTIGATION_FAILURES)
+                    .then_some(now_ms + INVESTIGATION_RETRY_DELAY_MS);
+            }
         }) else {
             return;
         };

@@ -1,7 +1,5 @@
 //! Names and limits of the Pixellab usage aggregation.
 
-use std::time::Duration;
-
 /// File an art stage writes in its stage directory.
 pub const USAGE_FILE: &str = "pixellab-usage.json";
 /// Directory of the pipeline runs inside the vault.
@@ -22,7 +20,5 @@ pub const BALANCE_KEYS: [&str; 7] = [
 ];
 /// Object levels searched for a credit amount.
 pub const BALANCE_MAX_DEPTH: usize = 3;
-/// How long a vault scan for the last balance is remembered.
-pub const BALANCE_TTL: Duration = Duration::from_secs(20);
 /// Label of the subscription generations left in a text `get_balance` answer.
 pub const GENERATIONS_REMAINING_LABEL: &str = "generations_remaining";
