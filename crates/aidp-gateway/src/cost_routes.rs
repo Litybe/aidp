@@ -2,17 +2,17 @@
 //! Behind `GET /api/usage?groupBy=ticket|model|stage|route`, `GET /api/tickets/:key/cost`
 //! and `GET /api/cost/anomalies`.
 
+use crate::models::constants::pixellab::PIPELINES_DIR;
 use crate::models::constants::ticket_cost::{GROUP_ROUTE, GROUP_STAGE};
 use crate::sessions::{RateLimitInfo, SessionRecord};
-use crate::models::constants::pixellab::PIPELINES_DIR;
 use crate::ticket_cost::{
-    aggregate_contextual, anomalies, load_stage_rows, run_of, ticket_cost, ticket_of, AnomalyReport,
-    CostContext, TicketCost,
+    aggregate_contextual, anomalies, load_stage_rows, run_of, ticket_cost, ticket_of,
+    AnomalyReport, CostContext, TicketCost,
 };
 use crate::usage::{in_range, UsageReport};
+use aidp_tickets::models::enums::BudgetRoute;
 use aidp_tickets::store::TicketStore;
 use aidp_tickets::ticket_route::{route_of_template, route_of_ticket};
-use aidp_tickets::models::enums::BudgetRoute;
 use std::collections::HashMap;
 use std::path::Path;
 
@@ -32,7 +32,12 @@ fn run_dirs(vault: &Path, key: &str) -> Vec<(String, std::path::PathBuf)> {
         .filter_map(|repo| std::fs::read_dir(repo.path().join(key)).ok())
         .flat_map(|entries| entries.flatten())
         .filter(|entry| entry.path().is_dir())
-        .map(|entry| (entry.file_name().to_string_lossy().into_owned(), entry.path()))
+        .map(|entry| {
+            (
+                entry.file_name().to_string_lossy().into_owned(),
+                entry.path(),
+            )
+        })
         .collect();
     runs.sort_by(|a, b| b.0.cmp(&a.0));
     runs
@@ -94,7 +99,10 @@ fn run_routes(
         if last_ticket.as_ref().map(|(key, _)| *key) != Some(ticket) {
             last_ticket = Some((ticket, run_dirs(vault, ticket)));
         }
-        let dirs = last_ticket.as_ref().map(|(_, dirs)| dirs.as_slice()).unwrap_or(&[]);
+        let dirs = last_ticket
+            .as_ref()
+            .map(|(_, dirs)| dirs.as_slice())
+            .unwrap_or(&[]);
         if let Some(route) = dirs
             .iter()
             .find(|(id, _)| id == run)

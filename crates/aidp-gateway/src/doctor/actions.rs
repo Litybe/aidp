@@ -1,8 +1,11 @@
 //! The allowed actions, executed by the daemon after it checked their preconditions.
 //! None merges, approves, force-pushes, touches the game or the harness, or opens Unity.
 
+use crate::doctor::actions_flow;
+use crate::doctor::actions_git;
 use crate::doctor::converge::{self, Git};
-use crate::doctor::ports::{DoctorRuns, HarnessRepos};
+use crate::doctor::ports::{DoctorRuns, HarnessRepos, UnityModals, UnityProbe};
+use crate::doctor::preconditions;
 use crate::flows::executor::step_at_cursor;
 use crate::flows::facts;
 use crate::flows::registry::{FlowAction, SubprocessAction};
@@ -25,6 +28,7 @@ use crate::unity_lock::resource_key;
 use aidp_core::process_runner::ProcessSpec;
 use aidp_flows::models::constants::resource::UNITY_EDITOR;
 use aidp_flows::{ActionOutcome, StepKind, StepStatus};
+use aidp_tickets::config::DoctorConfig;
 use serde_json::Value;
 use std::collections::BTreeMap;
 use std::io::Read;
@@ -50,6 +54,14 @@ pub struct ActionTarget<'a> {
     pub harness_ticket: Option<&'a str>,
     /// False when the bug cap of the ticket was already re-armed in the last 24 hours.
     pub rearm_allowed: bool,
+    /// The `doctor:` settings in force.
+    pub settings: &'a DoctorConfig,
+    /// Reads the Unity status of a project, when the daemon has a project registry.
+    pub unity: Option<&'a UnityProbe>,
+    /// The channel to the modal windows of the Unity editor.
+    pub unity_modals: &'a Arc<dyn UnityModals>,
+    /// Ceiling raises the ticket already got in the last 24 hours.
+    pub budget_raises: usize,
 }
 
 use DoctorActionResult::{Done, Failed, Refused};
@@ -66,11 +78,24 @@ pub fn execute(target: &ActionTarget<'_>, action: DoctorAction) -> DoctorActionR
         DoctorAction::CreateBugTicket => create_bug_ticket(target),
         DoctorAction::OpenHarnessPr => open_harness_pr(target),
         DoctorAction::RestoreTestInfra => restore_test_infra(target),
+        DoctorAction::DismissUnityModal => actions_flow::dismiss_unity_modal(target),
+        DoctorAction::ExtendUnityWait => actions_flow::extend_unity_wait(target),
+        DoctorAction::MarkStepPassed => actions_flow::mark_step_passed(target),
+        DoctorAction::ReconcileStep => actions_flow::reconcile_step(target),
+        DoctorAction::NudgeBudget => actions_flow::nudge_budget(target),
+        DoctorAction::PruneWorktrees => actions_git::prune_worktrees(target),
+        DoctorAction::ResolveMetaConflict => actions_git::resolve_meta_conflict(target),
+        DoctorAction::RetryMergeStep => actions_flow::retry_merge_step(target),
+        DoctorAction::KillStaleSession => actions_flow::kill_stale_session(target),
+        DoctorAction::RetryFromStage => actions_flow::retry_from_stage(target),
+        DoctorAction::RetryWithFallback => actions_flow::retry_with_fallback(target),
+        DoctorAction::SkipOptionalStep => actions_flow::skip_optional_step(target),
+        DoctorAction::RebuildBranch => actions_git::rebuild_branch(target),
         DoctorAction::None => Done("nothing to do".to_string()),
     }
 }
 
-fn param<'a>(target: &'a ActionTarget<'_>, name: &str) -> Option<&'a Value> {
+pub(super) fn param<'a>(target: &'a ActionTarget<'_>, name: &str) -> Option<&'a Value> {
     target
         .diagnosis
         .params
@@ -78,7 +103,7 @@ fn param<'a>(target: &'a ActionTarget<'_>, name: &str) -> Option<&'a Value> {
         .filter(|value| !value.is_null())
 }
 
-fn text_param(target: &ActionTarget<'_>, name: &str) -> Option<String> {
+pub(super) fn text_param(target: &ActionTarget<'_>, name: &str) -> Option<String> {
     param(target, name).and_then(|value| match value {
         Value::String(text) => Some(text.clone()),
         Value::Number(number) => Some(number.to_string()),
@@ -88,7 +113,7 @@ fn text_param(target: &ActionTarget<'_>, name: &str) -> Option<String> {
 
 /// Retries the step of the incident (or the one named), never a human step. A step still
 /// running is reconciled first, so a run that ended is read before the retry.
-fn retry_step(target: &ActionTarget<'_>) -> DoctorActionResult {
+pub(super) fn retry_step(target: &ActionTarget<'_>) -> DoctorActionResult {
     let key = target.incident.candidate.key.as_str();
     let Some(step) =
         text_param(target, PARAM_STEP).or_else(|| target.incident.candidate.step.clone())
@@ -280,19 +305,38 @@ fn run_command(target: &ActionTarget<'_>, spec: &ProcessSpec) -> std::io::Result
     Ok(code)
 }
 
-/// Frees the Unity editor lock, only when its holder's flow is no longer active.
+/// The project of the incident: named by the incident, else the one of the flow's ticket.
+pub(super) fn project_id_of(target: &ActionTarget<'_>) -> Option<String> {
+    if let Some(id) = &target.incident.candidate.project_id {
+        return Some(id.clone());
+    }
+    let executor = target.engine.executor();
+    let (_, state) = executor.load(&target.incident.candidate.key).ok()?;
+    executor
+        .ports()
+        .sessions
+        .project_for(&state.ticket)
+        .map(|project| project.id)
+}
+
+/// The Unity status document of the incident's project, when the daemon can read it.
+pub(super) fn unity_status_of(target: &ActionTarget<'_>) -> Option<Value> {
+    let probe = target.unity?;
+    probe(&project_id_of(target)?)
+}
+
+/// The current time as the flow engine's clock gives it.
+pub(super) fn now_utc(target: &ActionTarget<'_>) -> chrono::DateTime<chrono::Utc> {
+    let millis = target.engine.executor().ports().clock.now_ms();
+    chrono::DateTime::from_timestamp_millis(millis).unwrap_or_default()
+}
+
+/// Frees the Unity editor lock, only when its holder's flow is no longer active, or is live but its
+/// editor heartbeat has been dead for over `stuck_minutes`.
 fn release_unity_lock(target: &ActionTarget<'_>) -> DoctorActionResult {
     let executor = target.engine.executor();
-    let resource = text_param(target, PARAM_RESOURCE).or_else(|| {
-        let project = match &target.incident.candidate.project_id {
-            Some(id) => id.clone(),
-            None => {
-                let (_, state) = executor.load(&target.incident.candidate.key).ok()?;
-                executor.ports().sessions.project_for(&state.ticket)?.id
-            }
-        };
-        Some(resource_key(UNITY_EDITOR, &project))
-    });
+    let resource = text_param(target, PARAM_RESOURCE)
+        .or_else(|| project_id_of(target).map(|project| resource_key(UNITY_EDITOR, &project)));
     let Some(resource) = resource else {
         return Refused("no Unity lock to name".to_string());
     };
@@ -300,14 +344,21 @@ fn release_unity_lock(target: &ActionTarget<'_>) -> DoctorActionResult {
     let Some(holder) = holder else {
         return Refused(format!("nobody holds {resource}"));
     };
-    if let Some(entry) = executor.store().index_get(&holder.flow_key) {
-        if !entry.status.is_terminal() {
-            return Refused(format!(
-                "the holder `{}` is {}, not terminal",
-                holder.flow_key,
-                entry.status.as_wire()
-            ));
-        }
+    let entry = executor.store().index_get(&holder.flow_key);
+    let holder_over = entry
+        .as_ref()
+        .is_none_or(|entry| entry.status.is_terminal());
+    let silence = unity_status_of(target)
+        .and_then(|status| preconditions::heartbeat_silence(&status, now_utc(target)));
+    let status = entry.map(|entry| entry.status.as_wire());
+    if let Err(reason) = preconditions::lock_release(
+        holder_over,
+        &holder.flow_key,
+        status,
+        silence,
+        target.settings.stuck_minutes,
+    ) {
+        return Refused(reason);
     }
     match executor.release_resource(&resource) {
         Some(released) => Done(format!("{resource} released from `{}`", released.flow_key)),
@@ -327,7 +378,7 @@ pub fn checkout_for(engine: &Arc<FlowEngine>, key: &str) -> Option<PathBuf> {
 }
 
 /// The strings of parameter `name`: a list, or one comma-separated text.
-fn list_param(target: &ActionTarget<'_>, name: &str) -> Vec<String> {
+pub(super) fn list_param(target: &ActionTarget<'_>, name: &str) -> Vec<String> {
     let items: Vec<String> = match param(target, name) {
         Some(Value::Array(items)) => items
             .iter()
@@ -779,7 +830,7 @@ fn unsafe_patch_path(path: &str) -> bool {
 }
 
 /// Runs `program args` in `cwd`; the trimmed stdout, or the error with stderr.
-fn run_in(
+pub(super) fn run_in(
     target: &ActionTarget<'_>,
     cwd: &Path,
     program: &str,

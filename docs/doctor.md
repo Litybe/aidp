@@ -86,11 +86,15 @@ repairs do not start an investigation, so they never consume `max_attempts_per_t
 
 An incident takes several actions, 3 at most, whoever proposed them, in this order:
 
-1. resumption (`retry_step`), twice at most;
-2. requeue, to the test lane (`requeue_to_test`) or the dev lane (`requeue_dev`) according to the
+1. the action built for the category (see [Categories and dedicated actions](#categories-and-dedicated-actions)),
+   when there is one;
+2. resumption (`retry_step`), twice at most;
+3. `retry_with_fallback`, for `api_overloaded` only, once the resumptions are spent and only when
+   `doctor.fallback_model` is set;
+4. requeue, to the test lane (`requeue_to_test`) or the dev lane (`requeue_dev`) according to the
    step (a project-checkout flow, or a step or template named for tests, is the test lane);
-3. bug ticket (`create_bug_ticket`), for a `product_bug` only, which goes first for that category;
-4. a human (`needs_human`): nothing else is left, or the three actions are spent.
+5. bug ticket (`create_bug_ticket`), for a `product_bug` only, which goes first for that category;
+6. a human (`needs_human`): nothing else is left, or the three actions are spent.
 
 A rung already taken is skipped. A `harness_defect` has no rung: it goes to `open_harness_pr` or to
 a human. An action fails or is refused: for a reversible action or a bug ticket the next rung runs
@@ -165,12 +169,25 @@ The agent proposes; the daemon decides and executes.
 | `requeue_dev` | `aidp ticket label KEY ready` | No active flow owns the ticket. |
 | `abort_dead_flow_and_requeue` | `abort` of the flow, then `to-test` for a project-checkout (test lane) flow, else `ready` | The flow is terminal (`failed`, `escalated` or `aborted`). |
 | `update_pr_branch` | `gh pr update-branch N --repo R` (merge, GitHub's default) | A PR number and repository (`params.pr`, `params.repo`, else the flow's `pr.json`); `rebase` or `force` in the params is refused. |
-| `release_unity_lock` | Frees `unity-editor:<project>` (`params.resource` to name another) | Someone holds it and the holder's flow is terminal. |
+| `release_unity_lock` | Frees `unity-editor:<project>` (`params.resource` to name another) | Someone holds it and the holder's flow is terminal, or is live with an editor heartbeat silent for over `doctor.stuck_minutes`. |
 | `create_bug_ticket` | Raises a bug issue under the ticket with `bug.create` (`aidp flow bug-create KEY`): same marker `<!-- aidp:bug parent=… base=… -->`, same cap of 3 bugs per parent, the parent waits while the bug is open. | The category is `product_bug` and the incident has a ticket. A parent that already holds 3 bugs: `refused`. |
 | `open_harness_pr` | Opens a pull request for a harness patch: temporary worktree from `origin/main` of `Litybe/aidp` or `Litybe/aidp-skill` (named by `params.repo`, else by the paths of the patch), patch applied, branch `doctor/<incident>` pushed (no force), `gh pr create`. Never a merge, never a `gamedev/*` branch. | A `proposed_patch` that names files inside the repository, a local clone (`AIDP_SOURCE_ROOT` for `Litybe/aidp`, the skill root for `Litybe/aidp-skill`), and no PR already open for the incident (one per incident). A patch that does not apply: nothing is pushed, the note says so, the incident is `needs_human`. |
+| `dismiss_unity_modal` | Closes the modal window that blocks the project's Unity editor through the Unity channel, then resumes the step as `retry_step` does. | The editor of the project is already open and its heartbeat is silent past its limit. The doctor never opens Unity. The default daemon has no channel to the editor's main thread (`NoUnityModals`): the action is then `refused`. |
+| `extend_unity_wait` | Resumes the step with the compile gate waiting `3` times longer (wait and heartbeat tolerance, `aidp flow unity-refresh --wait-multiplier 3`), for that flow run only. | The current step is a `unity.refresh` step, failed or waiting. |
+| `mark_step_passed` | `mark-passed` of the step, as `doctor`. | A failed step (not rejected by a human) whose id or action contains `report` or `verdict`; never a `human` or `gh.merge` step; the ticket has a PR; `params.recheck` is `clean`; confidence 0.7. |
+| `reconcile_step` | Reads again the state of the step whose run ended, without resuming it. | The current step is `running`. Still `running` afterwards: the action fails. |
+| `nudge_budget` | Evaluates the budget guard again and lets a step that waits for budget start. For a step held by the ticket's token ceiling it lifts the ceiling for that step (`ceiling raised`). | The step waits for budget (`waiting_external`, reason `budget`) or is held by `ticket-budget`. The raise needs `doctor.max_budget_raise` over 0 and fewer raises than that in 24 h for the ticket; otherwise `refused`. |
+| `prune_worktrees` | `git worktree remove` (never `--force`) of the worktrees of the project's flows that are over, then `git worktree prune`. | Each flow is terminal for over `doctor.prune_worktree_hours` (24), has no active run, and is not the incident's own flow; the main checkout is never touched. A dirty worktree stays. |
+| `resolve_meta_conflict` | Merges `origin/main` into the PR branch in a temporary worktree, keeps main's version of every Unity `.meta` both sides added, commits as `aidp-doctor`, pushes normally to the branch. | Every unmerged path is a `.meta` add/add; any other conflict aborts the merge and refuses. Never `main`, never a force. |
+| `retry_merge_step` | `retry` of the `gh.merge` step after the PR status was read again. | The current step is `gh.merge`, failed or waiting; the flow already holds a human approval (the doctor never approves); the live PR status says `mergeable`. Never a force. |
+| `kill_stale_session` | Cancels the orphan session of the step, then reconciles it. | The trigger is `step_stuck` and the step is `running`. |
+| `retry_from_stage` | Resumes the paused native run from `params.stage`; that stage and the later ones run again. | The run is paused and the stage is in its plan. |
+| `retry_with_fallback` | Sets the model of the run to `doctor.fallback_model`, then resumes the step. | The category is `api_overloaded`, the fallback model is set (none: `refused`), and `retry_step` already ran twice. |
+| `skip_optional_step` | `skip` of the step, as `doctor`. | The step is marked `optional: true` in the template, failed or waiting; never a `human` or `gh.merge` step. |
+| `rebuild_branch` | Replays the commits of the PR branch on `origin/main` in a temporary worktree and pushes the result to a new branch `doctor/rebuild/<incident>`. Touches no other branch and not the PR. | The branch holds 1 to 50 commits of its own and each applies cleanly; `main` and `gamedev/*` are refused. A human decides what to do with the new branch. |
 | `none` | Nothing. | |
 
-The doctor never merges a PR, approves a human step, force-pushes, edits the game's code or
+The doctor never merges a PR (`retry_merge_step` only runs again a merge a human already approved), approves a human step, force-pushes, edits the game's code or
 assets, edits or installs the harness on the machine (a harness patch only travels as a pull
 request for a human to review), generates, retouches or edits a sprite, or opens Unity.
 
@@ -205,6 +222,32 @@ ticket): one re-arm per parent per 24 h. After a restore or an update, a termina
 and the ticket goes back to the test lane to rerun the test; a flow still going is left alone. If
 the re-arm is refused, the fix and the rerun still happen.
 
+### Categories and dedicated actions
+
+A category with a dedicated action tries it first, before a resumption or a requeue.
+
+| Category | Dedicated action |
+|---|---|
+| `unity_modal_dialog` | `dismiss_unity_modal` |
+| `unity_reimport_not_frozen` | `extend_unity_wait` |
+| `false_failure` | `mark_step_passed` |
+| `run_ended_flow_running` | `reconcile_step` |
+| `budget_wait_silent` | `nudge_budget` |
+| `worktree_cap_saturated` | `prune_worktrees` |
+| `dead_flow_ownership` | `abort_dead_flow_and_requeue` |
+| `meta_add_add_conflict` | `resolve_meta_conflict` |
+| `rebase_conflict_only` | `update_pr_branch` |
+| `head_moved_before_merge` | `retry_merge_step` |
+
+The agent may also propose `kill_stale_session` (`step_stuck`), `retry_from_stage`,
+`skip_optional_step` and `rebuild_branch`; they have no category of their own.
+
+### Investigation retry
+
+An incident whose investigation failed (`investigation_failed`) gets one more investigation 15
+minutes later, while its failure is still live. It counts as a second investigation in
+`max_attempts_per_ticket`. A second failure is final.
+
 ## Report
 
 On every closing status the daemon:
@@ -236,6 +279,9 @@ doctor:
   stuck_minutes: 10              # a running step with no live run for this long is stuck
   max_attempts_per_ticket: 2     # investigations per ticket over 24 h (passing-fault repairs not counted)
   harness_ticket: GH-9           # issue that receives the bugs of a harness failure shared by several tickets
+  max_budget_raise: 0            # times `nudge_budget` may lift a ticket's token ceiling per 24 h (0: never)
+  prune_worktree_hours: 24       # hours a terminal flow keeps its worktree before `prune_worktrees`
+  fallback_model: sonnet         # model of `retry_with_fallback`; unset: that action is refused
 ```
 
 Incidents are kept in `<state dir>/doctor/incidents.json` (`~/.aidp/gateway/doctor/`).
