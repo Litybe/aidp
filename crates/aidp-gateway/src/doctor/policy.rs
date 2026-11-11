@@ -108,14 +108,49 @@ pub fn retry_delay_ms(retries_done: usize) -> i64 {
     }
 }
 
-/// The next rung of the escalation, in order: resumption, requeue (test or dev lane),
-/// then nothing: a human. A product bug goes straight to the bug ticket. A rung already taken is skipped
-/// except the resumption, which repeats up to its cap. `None` when no rung is left or the
-/// incident used its actions.
+/// What the escalation may use beyond the fixed rungs.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct RungOptions {
+    /// A fallback model is configured, so an overloaded provider may be tried on it.
+    pub fallback_model: bool,
+}
+
+/// The action built for a category: the first thing to try for it, before a resumption or a requeue.
+pub fn dedicated_action(category: DoctorCategory) -> Option<DoctorAction> {
+    match category {
+        DoctorCategory::FalseFailure => Some(DoctorAction::MarkStepPassed),
+        DoctorCategory::RunEndedFlowRunning => Some(DoctorAction::ReconcileStep),
+        DoctorCategory::UnityReimportNotFrozen => Some(DoctorAction::ExtendUnityWait),
+        DoctorCategory::UnityModalDialog => Some(DoctorAction::DismissUnityModal),
+        DoctorCategory::BudgetWaitSilent => Some(DoctorAction::NudgeBudget),
+        DoctorCategory::WorktreeCapSaturated => Some(DoctorAction::PruneWorktrees),
+        DoctorCategory::DeadFlowOwnership => Some(DoctorAction::AbortDeadFlowAndRequeue),
+        DoctorCategory::MetaAddAddConflict => Some(DoctorAction::ResolveMetaConflict),
+        DoctorCategory::RebaseConflictOnly => Some(DoctorAction::UpdatePrBranch),
+        DoctorCategory::HeadMovedBeforeMerge => Some(DoctorAction::RetryMergeStep),
+        _ => None,
+    }
+}
+
+/// The next rung of the escalation, in order: the action built for the category, resumption,
+/// the fallback model for an overloaded provider, requeue (test or dev lane), then nothing: a
+/// human. A product bug goes straight to the bug ticket. A rung already taken is skipped except
+/// the resumption, which repeats up to its cap. `None` when no rung is left or the incident used
+/// its actions.
 pub fn next_rung(
     done: &[DoctorActionOutcome],
     category: DoctorCategory,
     test_lane: bool,
+) -> Option<DoctorAction> {
+    next_rung_with(done, category, test_lane, RungOptions::default())
+}
+
+/// [`next_rung`] with the options the settings give.
+pub fn next_rung_with(
+    done: &[DoctorActionOutcome],
+    category: DoctorCategory,
+    test_lane: bool,
+    options: RungOptions,
 ) -> Option<DoctorAction> {
     if !may_act(done) {
         return None;
@@ -141,8 +176,19 @@ pub fn next_rung(
     ) {
         return None;
     }
+    if let Some(dedicated) = dedicated_action(category) {
+        if count(done, dedicated) == 0 {
+            return Some(dedicated);
+        }
+    }
     if count(done, DoctorAction::RetryStep) < MAX_TRANSIENT_RETRIES {
         return Some(DoctorAction::RetryStep);
+    }
+    if category == DoctorCategory::ApiOverloaded
+        && options.fallback_model
+        && count(done, DoctorAction::RetryWithFallback) == 0
+    {
+        return Some(DoctorAction::RetryWithFallback);
     }
     let requeue = if test_lane {
         DoctorAction::RequeueToTest
@@ -158,3 +204,7 @@ pub fn next_rung(
 #[cfg(test)]
 #[path = "../../tests/unit/doctor_policy_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "../../tests/unit/doctor_dedicated_tests.rs"]
+mod dedicated_tests;

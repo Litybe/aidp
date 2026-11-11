@@ -239,6 +239,11 @@ impl RunStore {
         })
     }
 
+    /// Sets the model the remaining stages of the run use.
+    pub fn set_model(&self, model: &str) -> anyhow::Result<()> {
+        self.update(|_, view| view.request.model = Some(model.to_string()))
+    }
+
     pub fn row_status(&self, name: &str) -> Option<NativeStageStatus> {
         lock(&self.inner).view.stage(name).map(|row| row.status)
     }

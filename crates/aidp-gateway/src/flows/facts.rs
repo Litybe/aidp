@@ -127,6 +127,20 @@ pub fn status_within(
     receiver.recv_timeout(timeout).ok().flatten()
 }
 
+/// A fresh read of the live status of the ticket's pull request, `None` past `timeout`.
+pub fn refresh_within(
+    source: Arc<dyn PrStatusSource>,
+    key: &str,
+    timeout: Duration,
+) -> Option<Value> {
+    let (sender, receiver) = mpsc::channel();
+    let key = key.to_string();
+    std::thread::spawn(move || {
+        let _ = sender.send(source.refresh(&key));
+    });
+    receiver.recv_timeout(timeout).ok().flatten()
+}
+
 fn insert_present(facts: &mut BTreeMap<String, Value>, name: &str, value: Option<Value>) {
     if let Some(value) = value.filter(|value| !value.is_null()) {
         facts.entry(name.to_string()).or_insert(value);

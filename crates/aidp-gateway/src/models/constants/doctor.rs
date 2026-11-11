@@ -192,3 +192,53 @@ pub const CAUSE_WORD_MIN_CHARS: usize = 4;
 pub const SAME_CAUSE_PERCENT: usize = 50;
 /// Placeholder when a `real_defect` summary lacks a field.
 pub const UNKNOWN_FIELD: &str = "inconnu";
+/// Times the Unity compile gate wait and its heartbeat tolerance are multiplied by after `extend_unity_wait`.
+pub const UNITY_WAIT_MULTIPLIER: u32 = 3;
+/// Heartbeat silence, in seconds, past which a Unity editor counts as blocked when its status gives no limit.
+pub const UNITY_HEARTBEAT_STALE_SECONDS: i64 = 300;
+/// Key of the editor object in the Unity status document.
+pub const UNITY_KEY_EDITOR: &str = "editor";
+/// Key of the running flag in the editor object.
+pub const UNITY_KEY_RUNNING: &str = "running";
+/// Key of the heartbeat in the editor object.
+pub const UNITY_KEY_HEARTBEAT: &str = "heartbeat";
+/// Key of the heartbeat time in the heartbeat object.
+pub const UNITY_KEY_HEARTBEAT_AT: &str = "at";
+/// Key of the silence limit the status gives, in seconds.
+pub const UNITY_KEY_STALE_AFTER: &str = "staleAfterSeconds";
+/// Fragments of a step id or action name that make a step a report or verdict step.
+pub const VERDICT_STEP_FRAGMENTS: [&str; 2] = ["report", "verdict"];
+/// Parameter of `mark_step_passed` telling the recheck of the evidence is clean.
+pub const PARAM_RECHECK: &str = "recheck";
+/// Value of `params.recheck` for a clean recheck.
+pub const RECHECK_CLEAN: &str = "clean";
+/// Parameter of `retry_from_stage` naming the stage.
+pub const PARAM_STAGE: &str = "stage";
+/// Value of the live PR status `mergeable` field for a pull request that merges.
+pub const PR_MERGEABLE: &str = "mergeable";
+/// Key of the mergeable state in the live PR status.
+pub const PR_KEY_MERGEABLE: &str = "mergeable";
+/// Note a `nudge_budget` detail carries when it lifted the ceiling of the ticket.
+pub const BUDGET_RAISED_NOTE: &str = "ceiling raised";
+/// Extension of a Unity metadata file.
+pub const META_EXTENSION: &str = ".meta";
+/// Prefix of the branch `rebuild_branch` pushes to.
+pub const REBUILD_BRANCH_PREFIX: &str = "doctor/rebuild/";
+/// Commit title of a `.meta` conflict resolution.
+pub const META_MERGE_COMMIT_PREFIX: &str =
+    "fix(doctor): fusionne origin/main, .meta de main gardes";
+/// Milliseconds in an hour.
+pub const MILLIS_PER_HOUR: i64 = 60 * 60 * 1000;
+/// Wait before the second investigation of an incident whose first one failed.
+pub const INVESTIGATION_RETRY_DELAY_MS: i64 = 15 * 60 * 1000;
+/// Investigations that may fail for one incident before it is final.
+pub const MAX_INVESTIGATION_FAILURES: u32 = 2;
+/// Status code letter of a path both sides added, in `git status --porcelain`.
+pub const GIT_UNMERGED_BOTH_ADDED: &str = "AA";
+/// Prefix of a `git status --porcelain` line for any unmerged path.
+pub const GIT_UNMERGED_MARKERS: [&str; 7] = ["DD", "AU", "UD", "UA", "DU", "AA", "UU"];
+/// Why a modal window cannot be closed: no channel reaches the editor's main thread.
+pub const NO_MODAL_CHANNEL: &str =
+    "no channel closes a Unity modal window: the playtest package cannot run while the editor's main thread is blocked";
+/// Commits `rebuild_branch` replays at most.
+pub const REBUILD_MAX_COMMITS: usize = 50;

@@ -59,6 +59,7 @@ steps:
 | `then` | Follow-up step id or ids. |
 | `on_error` | `fail` (default) stops the run on error. `warn` records a warning on the step and continues. |
 | `with` | Parameters passed to the action, probe or pipeline inputs. |
+| `optional` | `true` when the flow can go on without this step. The pipeline doctor may then skip it (`skip_optional_step`) when it keeps failing. Default `false`. |
 
 ### Step kinds
 

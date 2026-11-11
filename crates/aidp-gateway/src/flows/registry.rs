@@ -377,9 +377,15 @@ pub struct Registry {
     actions: BTreeMap<String, Arc<dyn FlowAction>>,
     probes: BTreeMap<String, Arc<dyn WaitProbe>>,
     pr_status: Option<Arc<dyn PrStatusSource>>,
+    wait_extensions: Arc<super::unity_wait::UnityWaitExtensions>,
 }
 
 impl Registry {
+    /// The longer Unity compile waits granted to flow runs.
+    pub fn wait_extensions(&self) -> Arc<super::unity_wait::UnityWaitExtensions> {
+        self.wait_extensions.clone()
+    }
+
     /// A registry holding `noop`, `fail` and the `timer` probe.
     pub fn with_builtins() -> Self {
         let mut registry = Registry::default();

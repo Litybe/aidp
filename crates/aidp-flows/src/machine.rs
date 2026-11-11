@@ -27,6 +27,7 @@ const OUTPUT_AT: &str = "at";
 /// Output of a human step holding the path of its stored report.
 pub const OUTPUT_REPORT: &str = "report";
 const OUTPUT_OK: &str = "ok";
+const OUTPUT_MARKED_PASSED: &str = "marked_passed";
 
 const CTX_STEPS: &str = "steps";
 const CTX_SETTINGS: &str = "settings";
@@ -112,6 +113,7 @@ impl Run<'_> {
             Event::Abort { .. } => self.abort(),
             Event::Retry { step, .. } => self.retry(&step),
             Event::Skip { step, .. } => self.skip(&step),
+            Event::MarkPassed { step, .. } => self.mark_passed(&step),
             Event::Manual { request, .. } => self.manual(request),
         }
     }
@@ -139,7 +141,14 @@ impl Run<'_> {
             {
                 Ok(())
             }
-            Event::Retry { .. } | Event::Skip { .. } | Event::Abort { .. } if !closed => Ok(()),
+            Event::Retry { .. }
+            | Event::Skip { .. }
+            | Event::MarkPassed { .. }
+            | Event::Abort { .. }
+                if !closed =>
+            {
+                Ok(())
+            }
             _ if !status.is_terminal() => Ok(()),
             _ => Err(rejected(
                 RejectReason::NotActive,
@@ -1082,6 +1091,39 @@ impl Run<'_> {
         self.state.ended_at = None;
         self.mark_skipped(step, StepReason::ManualSkip, "skipped by hand".to_string());
         self.leave();
+        self.drive();
+        Ok(())
+    }
+
+    /// A failed or escalated current step that is not a human step counts as passed.
+    fn mark_passed(&mut self, step: &str) -> Result<(), FlowError> {
+        let failed = self.state.current.as_deref() == Some(step)
+            && matches!(
+                self.current_status(),
+                Some(StepStatus::Failed | StepStatus::Escalated)
+            );
+        if !failed {
+            return Err(rejected(
+                RejectReason::WrongState,
+                format!("step `{step}` has not failed: it cannot be marked passed"),
+            ));
+        }
+        if self
+            .top_step()
+            .is_some_and(|top| top.kind == StepKind::Human)
+        {
+            return Err(rejected(
+                RejectReason::WrongState,
+                format!("step `{step}` is a human step: it is never marked passed"),
+            ));
+        }
+        self.state.status = FlowStatus::Running;
+        self.state.ended_at = None;
+        self.journal(format!("step {step} marked passed"));
+        let mut outputs = self.state.steps[step].outputs.clone();
+        outputs.insert(OUTPUT_OK.to_string(), json!(true));
+        outputs.insert(OUTPUT_MARKED_PASSED.to_string(), json!(true));
+        self.finish_ok(outputs);
         self.drive();
         Ok(())
     }

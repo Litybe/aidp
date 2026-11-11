@@ -40,7 +40,8 @@
         "until": { "type": "string" },
         "body": { "type": "array", "items": { "$ref": "#/$defs/step" } },
         "prompt": { "type": "string", "description": "Question shown for a human step." },
-        "choices": { "type": "array", "items": { "type": "string" } }
+        "choices": { "type": "array", "items": { "type": "string" } },
+        "optional": { "type": "boolean", "default": false, "description": "The flow can go on without this step: the doctor may skip it when it keeps failing." }
       }
     }
   }

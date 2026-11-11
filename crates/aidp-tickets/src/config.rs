@@ -340,9 +340,21 @@ pub struct DoctorConfig {
     /// Key of the dedicated harness issue (for example `GH-1`): bugs of a failure shared by several tickets are raised under it, never under a game ticket. Unset: the doctor asks a human.
     #[serde(default)]
     pub harness_ticket: Option<String>,
+    /// Times the doctor may lift the token ceiling of one ticket over 24 hours when a step waits for budget. 0: never.
+    #[serde(default)]
+    pub max_budget_raise: u32,
+    /// Hours a flow stays terminal or blocked before the doctor removes its worktree when the worktree cap is full.
+    #[serde(default = "DoctorConfig::default_prune_worktree_hours")]
+    pub prune_worktree_hours: u32,
+    /// Model a run is resumed with after the provider stayed overloaded through every resumption. Unset: no fallback.
+    #[serde(default)]
+    pub fallback_model: Option<String>,
 }
 
 impl DoctorConfig {
+    fn default_prune_worktree_hours() -> u32 {
+        24
+    }
     fn default_enabled() -> bool {
         true
     }
@@ -361,6 +373,9 @@ impl Default for DoctorConfig {
             stuck_minutes: Self::default_stuck_minutes(),
             max_attempts_per_ticket: Self::default_max_attempts_per_ticket(),
             harness_ticket: None,
+            max_budget_raise: 0,
+            prune_worktree_hours: Self::default_prune_worktree_hours(),
+            fallback_model: None,
         }
     }
 }

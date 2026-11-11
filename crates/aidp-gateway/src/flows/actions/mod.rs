@@ -1,6 +1,7 @@
 //! The deterministic flow actions, each an `aidp` subprocess over one verb.
 
 use super::registry::{ActionContext, FlowAction, Registry, SubprocessAction};
+use super::unity_wait::UnityRefreshAction;
 use crate::models::constants::flow_actions::*;
 use crate::models::enums::BuiltinAction;
 use aidp_flows::ActionOutcome;
@@ -428,11 +429,10 @@ pub fn register(registry: &mut Registry) {
     );
     // Runs in the project checkout (workspace: project) right after `git.checkout`: the editor's
     // reimport and recompilation of the new branch end before the test stage starts.
-    register_action(
-        registry,
-        BuiltinAction::UnityRefresh,
-        SubprocessAction::new([VERB_FLOW, VERB_FLOW_UNITY_REFRESH])
-            .timeout(Duration::from_secs(UNITY_REFRESH_TIMEOUT_SECONDS)),
+    let extensions = registry.wait_extensions();
+    registry.register_action(
+        BuiltinAction::UnityRefresh.as_str(),
+        Arc::new(UnityRefreshAction::new(extensions)),
     );
     register_action(
         registry,

@@ -18,16 +18,21 @@ pub(super) struct Environment<'a> {
     pub processes: &'a dyn ProcessSource,
     pub timeout: Duration,
     pub poll: Duration,
+    /// Times the heartbeat tolerance is stretched: 1 by default, more when the doctor granted a longer wait.
+    pub wait_multiplier: i64,
 }
 
 pub(super) fn unity_refresh(
     workspace: &Path,
     timeout_seconds: u64,
+    wait_multiplier: u32,
 ) -> anyhow::Result<CommandOutput> {
+    let multiplier = wait_multiplier.max(1);
     let environment = Environment {
         processes: &SystemProcesses,
-        timeout: Duration::from_secs(timeout_seconds),
+        timeout: Duration::from_secs(timeout_seconds * u64::from(multiplier)),
         poll: Duration::from_millis(POLL_INTERVAL_MILLIS),
+        wait_multiplier: i64::from(multiplier),
     };
     output(&run(workspace, &environment))
 }
@@ -65,7 +70,9 @@ pub(super) fn run(workspace: &Path, environment: &Environment<'_>) -> UnityRefre
             return from_result(request_id, &result);
         }
         let heartbeat = read_json(&heartbeat_file(workspace)).unwrap_or(Value::Null);
-        if let Some(age) = stale_heartbeat_age(&heartbeat, chrono::Utc::now()) {
+        if let Some(age) =
+            stale_heartbeat_age_scaled(&heartbeat, chrono::Utc::now(), environment.wait_multiplier)
+        {
             return blocked(
                 request_id,
                 format!(
@@ -140,12 +147,12 @@ pub(super) fn from_result(request_id: String, result: &Value) -> UnityRefreshRep
     }
 }
 
-/// How many seconds the heartbeat has been silent when that silence means a stuck editor: past
-/// `HEARTBEAT_STALE_SECONDS`, or past `HEARTBEAT_RELOAD_STALE_SECONDS` during a domain reload.
-/// `None` for a live heartbeat, and for a project with no heartbeat at all (older package).
-pub(super) fn stale_heartbeat_age(
+/// Seconds the heartbeat has been silent when that silence means a stuck editor, limits times
+/// `multiplier`. `None` for a live heartbeat or no heartbeat at all.
+pub(super) fn stale_heartbeat_age_scaled(
     heartbeat: &Value,
     now: chrono::DateTime<chrono::Utc>,
+    multiplier: i64,
 ) -> Option<i64> {
     let at = heartbeat.get(HEARTBEAT_FIELD_AT)?.as_str()?;
     let at = chrono::DateTime::parse_from_rfc3339(at).ok()?;
@@ -157,7 +164,7 @@ pub(super) fn stale_heartbeat_age(
     } else {
         HEARTBEAT_STALE_SECONDS
     };
-    (age > limit).then_some(age)
+    (age > limit * multiplier).then_some(age)
 }
 
 fn request_id() -> String {

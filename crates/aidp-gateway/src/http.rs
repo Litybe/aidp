@@ -1024,6 +1024,7 @@ fn build_doctor(
                 engine.as_ref(),
             ))
         })),
+        unity_modals: Arc::new(crate::doctor::ports::NoUnityModals),
         harness_repos: harness_repos(skill_root()),
         first_delay: FIRST_TICK_DELAY,
         interval: TICK_INTERVAL,

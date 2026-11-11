@@ -38,6 +38,9 @@ pub enum Op {
         /// Seconds to wait for the compile result before reporting the editor blocked.
         #[arg(long, value_name = "SECONDS", default_value_t = crate::models::constants::flow_unity::DEFAULT_TIMEOUT_SECONDS)]
         timeout: u64,
+        /// Times the wait and the heartbeat tolerance are stretched; the doctor sets it for one run.
+        #[arg(long = "wait-multiplier", value_name = "N", default_value_t = 1)]
+        wait_multiplier: u32,
     },
     /// Publish the worktree's branch as one commit GitHub signs, through its API: never `git push`.
     GitPush {

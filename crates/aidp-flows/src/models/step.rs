@@ -40,6 +40,9 @@ pub struct Step {
     pub prompt: Option<String>,
     #[serde(default)]
     pub choices: Vec<String>,
+    /// True when the flow can go on without this step: the doctor may skip it when it keeps failing.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub optional: bool,
 }
 
 impl Step {
