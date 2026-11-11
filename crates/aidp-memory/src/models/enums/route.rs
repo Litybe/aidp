@@ -21,4 +21,37 @@ impl Route {
             Route::Tooling => &[Source::Knowledge, Source::Doc, Source::Run],
         }
     }
+
+    /// Domains an agent without a specific role reads for this route.
+    pub fn domains(self) -> &'static [crate::models::enums::Domain] {
+        use crate::models::enums::Domain;
+        match self {
+            Route::Code => &[
+                Domain::Unity,
+                Domain::Csharp,
+                Domain::Mechanics,
+                Domain::GameDesign,
+            ],
+            Route::Art => &[
+                Domain::PixelArt,
+                Domain::PixelAnimation,
+                Domain::Tooling,
+                Domain::GameDesign,
+            ],
+            Route::Map => &[
+                Domain::LevelDesign,
+                Domain::Rooms,
+                Domain::Mechanics,
+                Domain::Tooling,
+                Domain::GameDesign,
+            ],
+            Route::Doc => &[
+                Domain::GameDesign,
+                Domain::Lore,
+                Domain::Mechanics,
+                Domain::Rooms,
+            ],
+            Route::Tooling => &[Domain::Tooling],
+        }
+    }
 }

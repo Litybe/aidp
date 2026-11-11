@@ -11,6 +11,7 @@ pub mod exit_status;
 pub mod expression_kind;
 pub mod fanout_items;
 pub(crate) mod flow;
+pub mod knowledge_route;
 pub(crate) mod loop_producer;
 pub mod model_tier;
 pub mod pass_end;
@@ -32,6 +33,7 @@ pub(crate) use case_kind::CaseKind;
 pub use effort_level::EffortLevel;
 pub use error_kind::{ErrorKind, HasErrorKind};
 pub use exit_status::{ExitStatus, ALL};
+pub use knowledge_route::KnowledgeRoute;
 pub use model_tier::ModelTier;
 pub use policy::{
     HarnessGapPolicy, Isolation, ItemFailurePolicy, LoopExhaustedPolicy, ToolEnforcement,

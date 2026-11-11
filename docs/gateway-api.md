@@ -2304,7 +2304,7 @@ so an automation on `session.*` starts seeing `session.updated` the moment this 
 | `flow.ended` | `{key, status}` | **Lot 29a.** |
 | `unity.lock_changed` | `{resource, held, holder, waiting}` | The Unity editor lock changed hands or its queue changed. See [Unity editor lock and status](#unity-editor-lock-and-status). |
 | `doctor.incident` | the incident | An incident of the pipeline doctor opened, started its investigation or closed. See [Pipeline doctor](#pipeline-doctor). |
-| `memory.proposed` / `memory.changed` / `rag.reindexed` | see [Project memory and RAG](#project-memory-and-rag) | Memory proposals, memory changes and finished re-indexes. |
+| `memory.proposed` / `memory.changed` / `knowledge.changed` / `rag.reindexed` / `memory.model` | see [Project memory and RAG](#project-memory-and-rag) | Memory proposals, memory changes, knowledge note changes, finished re-indexes and the state of the embedding model. |
 
 Because an `Event` trigger already subscribes with `on: [...]` glob patterns (see above), an
 automation can notify on `ticket.reviewed` through the existing generic webhook action with no new
@@ -2854,11 +2854,17 @@ The memory object is the C10 one, camelCase: `id`, `project`, `kind`, `title`, `
 | `PATCH /api/memory/:id` | any of `kind, title, text, confidence`, and `scope {route, paths, tags}` (or `route`, `paths`, `tags` at top level) | `memory` |
 | `POST /api/memory/:id/approve` and `/archive` | | `memory` |
 | `POST /api/memory/:id/merge` | `{into}` | the surviving memory |
-| `GET /api/rag/search?q=&source=&budget=&project=` (also `k`, `path`) | | `{project, query, usedTokens, budgetTokens, dropped, hits}` |
+| `GET /api/rag/search?q=&source=&budget=&project=` (also `k`, `path`, `domain`, `agentType`, `lexical`) | | `{project, query, usedTokens, budgetTokens, dropped, hits}` |
 | `POST /api/rag/reindex` | `{project?, source? "bible,doc,...", full?}` | `202 {ok, started, project}` |
 
 A hit is `{id, source, path, lines: "L10-L24", citation: "path:L10-L24", title, score, via, text}`;
-`budget` is in tokens (characters / 4, default 1500). `POST /api/rag/reindex` runs on a background
+`budget` is in tokens (characters / 4, default 1500). Search is built like the CLI one: hybrid (BM25
+fused with cosine, `via` is `bm25`, `vector`, `hybrid` or `graph`) when the embedding model is
+running in the daemon (see [Embedding model service](#embedding-model-service)), BM25 otherwise; `lexical=1` forces BM25. The vault glossary
+(`Knowledge/_glossary.md`) widens the query. `domain` (comma separated knowledge domains, `400` for an
+unknown one) and `agentType` filter the `knowledge` hits as `rag search --domain/--agent-type` do; without
+`domain`, the domains of the agent type apply. Re-indexes embed new and changed chunks when the model is
+installed. `POST /api/rag/reindex` runs on a background
 thread, one re-index at a time (`409` while one runs or waits); the result arrives as `rag.reindexed`.
 
 ### Ingestion at the end of a run
@@ -2870,6 +2876,29 @@ pull request input (`pr`) and the run id (`run`). A file is ingested once: a led
 (`memory/ingested.json`, keyed by path and content hash) skips it afterwards, and a modified file is
 ingested again. A refused file is logged (`warn`) and never fails the run.
 
+### Knowledge proposals
+
+Every `knowledge-proposals.json` under the run folder (same depth, same ledger, same references rules
+for the `run:<id>` source) is reconciled with the knowledge notes of the vault (see
+[memory.md](memory.md#knowledge-proposals)) when a vault is configured: a note is added, merged into an
+existing one as an evidence line, parked in `<vault>/Knowledge/_inbox/`, rewritten or superseded. The
+file is marked ingested even when refused (its content cannot improve by retrying); refused files and
+proposals are logged. `knowledge.changed` is published when a note changed.
+
+### After a run
+
+On `run.ended`, after the ingestion, the daemon refreshes the vectors of the memories of the project and
+of `_global`, runs `memory gc`, then queues a re-index of the `run`, `ticket` and `knowledge` sources of the
+project (the `_global` knowledge notes and the embedding of new chunks included) on the same single
+worker (`rag.reindexed` carries `"trigger": "run"`).
+
+### Catch-up at start
+
+At start the daemon scans `<vault>/Pipelines/<repo>/` (4 levels) of every registered project for
+`native-run.json` records with an `endedAt` in the last 30 days (200 runs at most, newest first), ingests
+each run exactly as above (the ledger skips what was already ingested) and queues one re-index per
+project (`"trigger": "catch-up"`). It runs on its own thread; nothing waits for it.
+
 ### Re-index after a merge
 
 A successful `gh.merge` flow action publishes `flow.merged` (`{key, repo}`); the daemon then
@@ -2877,11 +2906,46 @@ re-indexes the `code`, `doc` and `bible` sources of the project whose repository
 background thread (queued behind a running re-index; the pass only reads files whose size or mtime
 changed). `rag.reindexed` carries `"trigger": "merge"`.
 
+### Embedding model service
+
+The embedding model (`potion-multilingual-128M`, about 0.5 GB of RAM once loaded) exists as one
+instance on the machine, owned by the daemon. The CLI (`rag index|search`, `memory context`), the
+compile-time knowledge blocks of `aidp run` and `workflow emit` and the `SubagentStart` hook never load
+it: they embed through `POST /api/embed` when the model is running and search with BM25 plus the glossary
+otherwise. The daemon uses the same instance for its own search, ingestion and native runs.
+
+The state is `stopped`, `loading` (a background thread reads the files), `running` or `error` (the load
+failed, `error` holds the message). Stopping drops the model and frees its memory, also while it loads.
+`autostart` is saved in `<state dir>/memory/model.json` (`{"autostart": bool}`); it defaults to true when
+the model is installed, and the daemon loads the model at start when it is true. Errors use the flat
+`{error, code}` body.
+
+| Route | Body | Answer |
+|---|---|---|
+| `GET /api/memory/model` | | `200` status body |
+| `POST /api/memory/model/start` | | `202` status body (`loading`, or `running` when already); `409` code `model_missing` when the files are not installed |
+| `POST /api/memory/model/stop` | | `200` status body (`stopped`) |
+| `PATCH /api/memory/model` | `{autostart}` | `200` status body; `400` on a bad body |
+| `POST /api/memory/model/embed-pending` | | `202 {queued: true}`; `409` code `model_stopped` when the model is not running |
+| `POST /api/embed` | `{texts: [..]}` | `200 {model, dim, vectors: [[f32..]]}`; `409` code `model_stopped`; `400` code `batch_too_large` over 256 texts |
+
+The status body is `{model, installed, state, autostart, dim, ramBytes, loadedAt, error, chunks: {total,
+embedded, stale}, path}`: `dim`, `ramBytes`, `loadedAt` and `error` are `null` when unknown. `ramBytes` is
+an estimate, the size of `model.safetensors`, set while the model is `loading` or `running`. `loadedAt`
+is RFC 3339. `chunks.embedded` counts the vectors of this model, `stale` those of another model, `total`
+every chunk. `embed-pending` queues, on the re-index worker, the embedding of every chunk that has no
+vector of the running model, in every project; the result arrives as `rag.reindexed` with `trigger:
+"embed-pending"`. A daemon started with the model already installed loads it in the background: chunks
+indexed before it finished loading get their vectors with `embed-pending`. In read-only mode `POST
+/api/embed` still answers (it changes nothing); start, stop, patch and embed-pending are refused with `403`.
+
 ### Events
 
 | Event | Data |
 |---|---|
 | `memory.proposed` | `{project, runId, files, created, deduplicated, activated, rejected}` after an ingestion; `{project, ids, created}` after `POST /api/memory` of a proposal |
 | `memory.changed` | `{id, project, status, action}`, `action` in `added`, `edited`, `approved`, `archived`, `merged` |
-| `rag.reindexed` | `{ok, project, trigger: "api"\|"merge", indexed, updated, removed, unchanged, chunks, durationMs}`; on failure `{ok: false, project, trigger, error}` |
+| `knowledge.changed` | `{project, runId, added, merged, inboxed, updated, superseded, rejected}` after the ingestion of `knowledge-proposals.json` files that changed a note |
+| `memory.model` | the status body of `GET /api/memory/model`, on every state change of the model and on a change of `autostart` |
+| `rag.reindexed` | `{ok, project, trigger: "api"|"merge"|"run"|"catch-up"|"embed-pending", indexed, updated, removed, unchanged, chunks, embedded, durationMs}`;|"merge"\|"run"\|"catch-up", indexed, updated, removed, unchanged, chunks, durationMs}`; on failure `{ok: false, project, trigger, error}` |
 | `flow.merged` | `{key, repo}`, internal trigger of the post-merge re-index |

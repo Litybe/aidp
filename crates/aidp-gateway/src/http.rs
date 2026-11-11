@@ -735,7 +735,13 @@ fn serve_on_with_auth(
             .mcp_configurations()
             .upsert(configuration_id, configuration)?;
     }
-    let native_runs = build_native_runs(&config, &sessions, &projects, &bus);
+    let model = match environment.model_loader.clone() {
+        Some(loader) => {
+            crate::model_service::ModelService::with_loader(&config.state_dir, bus.clone(), loader)
+        }
+        None => crate::model_service::ModelService::new(&config.state_dir, bus.clone()),
+    };
+    let native_runs = build_native_runs(&config, &sessions, &projects, &bus, &model);
     let launcher = Arc::new(crate::launcher::RunLauncher::new(
         sessions.clone(),
         native_runs.clone(),
@@ -791,9 +797,15 @@ fn serve_on_with_auth(
         .as_ref()
         .map(|engine| build_doctor(&config, engine, &native_runs, &projects));
     let doctor_thread = doctor.as_ref().map(|doctor| doctor.spawn(shutdown.clone()));
-    let memory =
-        crate::memory_ingest::MemoryHub::new(&config.state_dir, &config.vault_root, bus.clone());
+    let memory = crate::memory_ingest::MemoryHub::with_model(
+        &config.state_dir,
+        &config.vault_root,
+        bus.clone(),
+        model,
+    );
+    memory.model().start_if_autostart();
     memory.spawn_listener(native_runs.clone(), projects.clone());
+    memory.spawn_catch_up(projects.clone());
     let app = Arc::new(App {
         bus,
         projects,
@@ -940,6 +952,7 @@ fn build_native_runs(
     sessions: &Arc<SessionManager>,
     projects: &Arc<Projects>,
     bus: &Arc<Bus>,
+    model: &Arc<crate::model_service::ModelService>,
 ) -> Arc<crate::native_runs::NativeRunManager> {
     let clock: Arc<dyn aidp_core::clock::Clock> = Arc::new(aidp_core::clock::SystemClock);
     let budget = Arc::new(crate::flows::registry::RateLimitGuard::new(
@@ -957,7 +970,8 @@ fn build_native_runs(
             &config.state_dir,
             sessions.configured_skill_root(),
         )
-        .with_default_vault(config.vault_root.clone()),
+        .with_default_vault(config.vault_root.clone())
+        .with_model_service(model.clone()),
     )
 }
 
@@ -1361,7 +1375,10 @@ fn gate(
     if segs.first() == Some(&SEGMENT_HOOKS) {
         return Gate::Allow;
     }
-    if read_only && is_mutating(m) {
+    if read_only
+        && is_mutating(m)
+        && segs != [crate::models::constants::model_service::SEGMENT_EMBED]
+    {
         return Gate::ReadOnly;
     }
     if is_mutating(m) && !origin.origin.is_empty() && !origin.is_allowed() {
@@ -2704,6 +2721,9 @@ fn route(
         return Ok(Reply::Json(status, reply));
     }
     if let Some((status, reply)) = crate::manual_run::handle(app, m, path, &body) {
+        return Ok(Reply::Json(status, reply));
+    }
+    if let Some((status, reply)) = crate::model_routes::handle(app, m, path, &q, &body) {
         return Ok(Reply::Json(status, reply));
     }
     if let Some((status, reply)) = crate::memory_routes::handle(app, m, path, &q, &body) {

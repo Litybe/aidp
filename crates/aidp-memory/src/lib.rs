@@ -6,46 +6,77 @@
 //! [`MemoryManager`]. This crate reads no environment variable and parses no
 //! arguments; the caller passes the gateway directory and the project.
 
+pub mod agent_knowledge;
+pub mod agent_roles;
 pub mod chunking;
 pub mod context;
 pub mod distill;
+pub mod embedder;
+pub mod embedding_index;
 pub mod error;
 pub mod eval;
+pub mod glossary;
 pub mod graph;
 pub mod hook_context;
+pub mod hybrid;
 pub mod indexer;
+pub mod knowledge_filter;
+pub mod knowledge_inbox;
+pub mod knowledge_ingest;
+pub mod knowledge_note;
+pub mod knowledge_proposals;
 pub mod manager;
 pub mod mmr;
+pub mod model_resolver;
 pub mod models;
+pub mod note_paths;
+pub mod note_text;
+pub mod note_vault;
 pub mod pack;
 pub mod project;
 mod proposal_shape;
 pub mod proposals;
+pub mod remote_embedder;
 pub mod retriever;
+pub mod retriever_factory;
 pub mod session_journal;
+pub mod stage_context;
 pub mod store;
 pub mod text;
 pub mod vault_notes;
+pub mod vectors;
 
+pub use embedder::{Embedder, Model2VecEmbedder};
 pub use error::{MemoryError, Result};
+pub use hybrid::HybridRetriever;
 pub use indexer::Indexer;
+pub use knowledge_inbox::KnowledgeInbox;
+pub use knowledge_ingest::KnowledgeIngestor;
 pub use manager::MemoryManager;
+pub use model_resolver::{
+    load_default_embedder, model_dir, model_status, model_weights_bytes, resolve_model,
+};
 pub use models::add_outcome::AddOutcome;
 pub use models::context_block::ContextBlock;
 pub use models::context_request::ContextRequest;
-pub use models::enums::{MemoryKind, MemoryStatus, RefType, Route, Source};
+pub use models::enums::{Domain, MemoryKind, MemoryStatus, NoteStatus, RefType, Route, Source};
 pub use models::hit::Hit;
 pub use models::index_options::IndexOptions;
 pub use models::index_report::IndexReport;
 pub use models::index_root::IndexRoot;
 pub use models::memory::Memory;
+pub use models::model_status::ModelStatus;
 pub use models::new_memory::NewMemory;
 pub use models::packed::Packed;
 pub use models::project_ref::ProjectRef;
 pub use models::search_query::SearchQuery;
+pub use models::shared_embedder::SharedEmbedder;
 pub use pack::{pack, render_markdown};
 pub use project::{is_registered, resolve_project};
+pub use remote_embedder::{quiet_remote_embedder, remote_embedder, RemoteEmbedder};
 pub use retriever::{Bm25Retriever, Retriever};
+pub use retriever_factory::{build_retriever, install_vault_glossary};
+pub use stage_context::KnowledgeContextProvider;
 pub use store::{db_path, MemoryStore};
 
 #[cfg(test)]

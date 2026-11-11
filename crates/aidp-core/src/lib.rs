@@ -10,6 +10,7 @@ pub mod aidp_binary;
 pub mod clock;
 pub mod compose;
 pub mod config;
+pub mod context_provider;
 pub mod cost;
 pub mod errors;
 pub mod exec_plan;

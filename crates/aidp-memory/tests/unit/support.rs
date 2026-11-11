@@ -86,3 +86,54 @@ pub fn indexed_store(root: &Path) -> (MemoryStore, ProjectRef) {
         .unwrap();
     (store, project)
 }
+
+pub const FAKE_MODEL: &str = "fake-model";
+pub const FAKE_DIM: usize = 64;
+const SYNONYMS: &[(&str, &str)] = &[("bondir", "saut"), ("sauter", "saut"), ("jump", "saut")];
+const HASH_SEED: usize = 17;
+const HASH_FACTOR: usize = 31;
+
+/// Deterministic bag-of-words embedder: words hash into buckets, synonyms share a bucket.
+pub struct HashEmbedder {
+    pub id: String,
+}
+
+impl HashEmbedder {
+    pub fn new(id: &str) -> Self {
+        Self { id: id.to_string() }
+    }
+
+    fn vector(text: &str) -> Vec<f32> {
+        let mut vector = vec![0.0_f32; FAKE_DIM];
+        for word in text
+            .to_lowercase()
+            .split(|character: char| !character.is_alphanumeric())
+            .filter(|word| !word.is_empty())
+        {
+            let canonical = SYNONYMS
+                .iter()
+                .find(|(alias, _)| *alias == word)
+                .map_or(word, |(_, target)| *target);
+            let bucket = canonical.bytes().fold(HASH_SEED, |acc, byte| {
+                acc.wrapping_mul(HASH_FACTOR)
+                    .wrapping_add(usize::from(byte))
+            }) % FAKE_DIM;
+            vector[bucket] += 1.0;
+        }
+        vector
+    }
+}
+
+impl crate::embedder::Embedder for HashEmbedder {
+    fn model_id(&self) -> &str {
+        &self.id
+    }
+
+    fn dim(&self) -> usize {
+        FAKE_DIM
+    }
+
+    fn embed(&self, texts: &[&str]) -> crate::error::Result<Vec<Vec<f32>>> {
+        Ok(texts.iter().map(|text| Self::vector(text)).collect())
+    }
+}

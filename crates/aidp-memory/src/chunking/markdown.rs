@@ -46,6 +46,26 @@ pub fn chunk_markdown(text: &str, fallback_title: &str) -> Vec<RawChunk> {
     chunks
 }
 
+/// The text of the first level-one heading of a body, outside code fences.
+pub fn title_of_note(body: &str) -> Option<String> {
+    let mut in_fence = false;
+    for line in body.lines() {
+        if CODE_FENCES
+            .iter()
+            .any(|fence| line.trim_start().starts_with(fence))
+        {
+            in_fence = !in_fence;
+        }
+        if in_fence {
+            continue;
+        }
+        if let Some((1, name)) = parse_heading(line) {
+            return Some(name);
+        }
+    }
+    None
+}
+
 fn frontmatter_end(lines: &[&str]) -> usize {
     if lines.first().map(|line| line.trim()) != Some(FRONTMATTER_FENCE) {
         return 0;

@@ -9,6 +9,7 @@ pub mod dispatch;
 pub mod exec_loop;
 pub mod external_session;
 pub mod http_routes;
+pub mod knowledge_block;
 pub mod recovery;
 pub mod reply;
 pub mod scope_guard;
@@ -19,6 +20,7 @@ use crate::bus::Bus;
 use crate::flows::lock::WorkspaceLock;
 use crate::flows::registry::BudgetGuard;
 use crate::inbox::InboxEntry;
+use crate::model_service::ModelService;
 use crate::models::agent_claim::AgentClaim;
 use crate::models::agent_claim_request::AgentClaimRequest;
 use crate::models::agent_heartbeat::AgentHeartbeat;
@@ -182,10 +184,14 @@ pub struct NativeDeps {
     pub lock: Arc<dyn WorkspaceLock>,
     /// Run index file, see [`recovery::index_path`].
     pub index_file: PathBuf,
+    /// Gateway state directory, holding the memory index the knowledge blocks read.
+    pub gateway_dir: PathBuf,
     /// Skill root holding `templates/` and `agents/`.
     pub skill_root: Option<PathBuf>,
     /// How often a stage session is polled for its end.
     pub poll_interval: Duration,
+    /// The daemon's embedding model, lent to the knowledge blocks; without it they are lexical.
+    pub model: Option<Arc<ModelService>>,
 }
 
 impl NativeDeps {
@@ -206,9 +212,17 @@ impl NativeDeps {
             budget,
             lock,
             index_file: recovery::index_path(state_dir),
+            gateway_dir: state_dir.to_path_buf(),
             skill_root,
             poll_interval: DEFAULT_POLL,
+            model: None,
         }
+    }
+
+    /// Lends the daemon's embedding model to the knowledge blocks of the runs.
+    pub fn with_model_service(mut self, model: Arc<ModelService>) -> Self {
+        self.model = Some(model);
+        self
     }
 
     /// Pins the host's vault; an empty path disables it instead of reading user configuration.
@@ -374,6 +388,12 @@ impl NativeRunManager {
             &mut state,
             vault.as_ref().map(|resolved| resolved.root.as_path()),
             &Default::default(),
+        );
+        knowledge_block::freeze(
+            &self.deps.gateway_dir,
+            vault.as_ref().map(|resolved| resolved.root.as_path()),
+            self.deps.model.as_ref().and_then(|model| model.embedder()),
+            &mut state,
         );
         run::save(&state)?;
         let run_id = state.run_id.clone();

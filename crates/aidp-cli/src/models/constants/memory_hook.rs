@@ -24,5 +24,7 @@ pub const GIT_DIR: &str = ".git";
 pub const EVENT_SESSION_START: &str = "SessionStart";
 /// Field of a hook reply that names the event.
 pub const EVENT_PROMPT_SUBMIT: &str = "UserPromptSubmit";
+/// Field of a hook reply that names the event.
+pub const EVENT_SUBAGENT_START: &str = "SubagentStart";
 /// Program that launches the extraction on Windows.
 pub const POWERSHELL_PROGRAM: &str = "powershell";

@@ -8,4 +8,8 @@ pub struct HookPayload {
     pub prompt: Option<String>,
     #[serde(default)]
     pub transcript_path: Option<String>,
+    #[serde(default)]
+    pub agent_type: Option<String>,
+    #[serde(default)]
+    pub description: Option<String>,
 }

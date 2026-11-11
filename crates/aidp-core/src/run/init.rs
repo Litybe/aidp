@@ -259,6 +259,7 @@ pub fn init_with_mode(
         assumptions: Vec::new(),
         escalations: Vec::new(),
         model_overrides: BTreeMap::new(),
+        stage_knowledge: BTreeMap::new(),
     };
 
     state.plan = plan_layers;

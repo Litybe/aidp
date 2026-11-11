@@ -28,6 +28,8 @@ pub struct GlobalFlags {
     pub vault: Option<PathBuf>,
     /// `--no-vault`: ignore any vault and use the in-repo layout.
     pub no_vault: bool,
+    /// `--no-knowledge`: compile the prompts without the knowledge block.
+    pub no_knowledge: bool,
     /// `--format`: the output format, `None` leaving each command its own default.
     pub format: Option<Format>,
     /// `--format footer`: the cost footer line instead of the report.

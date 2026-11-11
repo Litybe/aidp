@@ -38,6 +38,9 @@ Options:
       --no-vault
           Ignore any vault and keep artefacts in the repo (`.aidp/pipelines/`)
 
+      --no-knowledge
+          Leave the compile-time `## Knowledge` block out of the stage prompts
+
       --format <FORMAT>
           Output format. Each command keeps its own default when omitted
 

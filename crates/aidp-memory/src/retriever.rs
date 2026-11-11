@@ -2,12 +2,14 @@
 
 use crate::error::Result;
 use crate::graph::CodeGraph;
+use crate::knowledge_filter::{boost_importance, retain_allowed};
 use crate::mmr;
 use crate::models::constants::limits::{
     CANDIDATE_FACTOR, FILTERED_CANDIDATES, GRAPH_DAMPING, GRAPH_MAX_ADDED,
     GRAPH_NEIGHBOURS_PER_SEED, GRAPH_SEED_HITS, JOURNAL_SEGMENT, JOURNAL_WEIGHT, MIN_CANDIDATES,
     MMR_LAMBDA, SOURCE_WEIGHTS,
 };
+use crate::models::constants::schema::GLOBAL_PROJECT;
 use crate::models::enums::Source;
 use crate::models::hit::Hit;
 use crate::models::search_query::SearchQuery;
@@ -18,11 +20,12 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::OnceLock;
 
-const VIA_BM25: &str = "bm25";
+pub(crate) const VIA_BM25: &str = "bm25";
 const VIA_GRAPH: &str = "graph";
 const NAME_MATCH_SEEDS: usize = 3;
 const NAME_MATCH_SHARE: f64 = 0.6;
-const CHUNK_COLUMNS: &str = "c.id, c.source, c.path, c.line_start, c.line_end, c.title, c.text";
+pub(crate) const CHUNK_COLUMNS: &str =
+    "c.id, c.source, c.path, c.line_start, c.line_end, c.title, c.text";
 
 /// Anything that ranks indexed chunks for a query; a vector index can implement it later.
 pub trait Retriever {
@@ -68,9 +71,10 @@ impl<'a> Bm25Retriever<'a> {
         let sql = format!(
             "SELECT {CHUNK_COLUMNS}, bm25(chunks_fts, {weights}) AS rank \
              FROM chunks_fts JOIN chunks c ON c.rowid = chunks_fts.rowid \
-             WHERE chunks_fts MATCH ?1 AND c.project = ?2 {filter}\
+             WHERE chunks_fts MATCH ?1 AND {scope} {filter}\
              ORDER BY rank LIMIT ?3",
-            weights = crate::models::constants::schema::CHUNK_WEIGHTS
+            weights = crate::models::constants::schema::CHUNK_WEIGHTS,
+            scope = project_scope("?2")
         );
         self.store.read(|connection| {
             let mut statement = connection.prepare(&sql)?;
@@ -170,18 +174,14 @@ impl<'a> Bm25Retriever<'a> {
     }
 }
 
-impl Retriever for Bm25Retriever<'_> {
-    fn search(&self, query: &SearchQuery) -> Result<Vec<Hit>> {
+impl Bm25Retriever<'_> {
+    /// Every BM25 and graph candidate matching the filters, best first, before the MMR pass.
+    pub(crate) fn ranked(&self, query: &SearchQuery) -> Result<Vec<Hit>> {
         let Some(expression) = match_expression(&query.text) else {
             return Ok(Vec::new());
         };
-        let pattern = match &query.path_glob {
-            Some(glob) => Some(glob::Pattern::new(glob).map_err(|error| {
-                crate::error::MemoryError::Invalid(format!("invalid --path glob: {error}"))
-            })?),
-            None => None,
-        };
-        let limit = if pattern.is_some() {
+        let pattern = path_pattern(query)?;
+        let limit = if pattern.is_some() || query.filters_knowledge() {
             FILTERED_CANDIDATES
         } else {
             (query.k * CANDIDATE_FACTOR).max(MIN_CANDIDATES)
@@ -191,13 +191,40 @@ impl Retriever for Bm25Retriever<'_> {
         if let Some(pattern) = &pattern {
             hits.retain(|hit| pattern.matches(&hit.path));
         }
+        let mut hits = retain_allowed(self.store, query, hits)?;
         hits.sort_by(|left, right| right.score.total_cmp(&left.score));
+        Ok(hits)
+    }
+}
+
+impl Retriever for Bm25Retriever<'_> {
+    fn search(&self, query: &SearchQuery) -> Result<Vec<Hit>> {
+        let mut hits = self.ranked(query)?;
+        boost_importance(self.store, &mut hits)?;
         Ok(mmr::select(hits, query.k, MMR_LAMBDA))
     }
 }
 
+/// SQL condition selecting the chunks of the project bound to `parameter`, and the global knowledge notes.
+pub(crate) fn project_scope(parameter: &str) -> String {
+    format!(
+        "(c.project = {parameter} OR (c.project = '{GLOBAL_PROJECT}' AND c.source = '{}'))",
+        Source::Knowledge.as_str()
+    )
+}
+
+/// The compiled `--path` glob of a query, if any.
+pub(crate) fn path_pattern(query: &SearchQuery) -> Result<Option<glob::Pattern>> {
+    match &query.path_glob {
+        Some(glob) => Ok(Some(glob::Pattern::new(glob).map_err(|error| {
+            crate::error::MemoryError::Invalid(format!("invalid --path glob: {error}"))
+        })?)),
+        None => Ok(None),
+    }
+}
+
 /// How much a hit of this source and path counts against the others.
-fn source_weight(hit: &Hit) -> f64 {
+pub(crate) fn source_weight(hit: &Hit) -> f64 {
     let weight = SOURCE_WEIGHTS
         .iter()
         .find(|(source, _)| *source == hit.source)
@@ -218,7 +245,7 @@ fn keep_best(map: &mut HashMap<String, Hit>, hit: Hit) {
     }
 }
 
-fn hit_from_row(row: &Row, via: &str) -> rusqlite::Result<Hit> {
+pub(crate) fn hit_from_row(row: &Row, via: &str) -> rusqlite::Result<Hit> {
     let source: String = row.get(1)?;
     Ok(Hit {
         id: row.get(0)?,

@@ -121,3 +121,29 @@ fn fts_handles_french_accents() {
         .unwrap();
     assert_eq!(hits, 1);
 }
+
+#[test]
+fn chunk_vectors_follow_their_chunk_on_delete() {
+    let store = MemoryStore::open_in_memory().unwrap();
+    store
+        .write(|tx| {
+            tx.execute(
+                "INSERT INTO chunks (id, project, source, path, line_start, line_end, title, text, hash, mtime) \
+                 VALUES ('p:doc:a#0', 'p', 'doc', 'a.md', 1, 1, 't', 'x', 'h', 0)",
+                [],
+            )?;
+            let rowid: i64 = tx.query_row("SELECT rowid FROM chunks", [], |row| row.get(0))?;
+            tx.execute(
+                "INSERT INTO chunk_vectors (chunk_id, model, dim, vector) VALUES (?1, 'm', 1, x'00000000')",
+                [rowid],
+            )?;
+            tx.execute("DELETE FROM chunks", [])?;
+            Ok(())
+        })
+        .unwrap();
+    let left: i64 = store
+        .read(|c| Ok(c.query_row("SELECT COUNT(*) FROM chunk_vectors", [], |row| row.get(0))?))
+        .unwrap();
+    assert_eq!(left, 0);
+    assert_eq!(MIGRATIONS.len(), 3);
+}

@@ -1,3 +1,5 @@
+use super::knowledge_proposals::HISTORY_DIR;
+
 /// Folder of the BIBLE under a project.
 pub const BIBLE_DIR: &str = ".claude/BIBLE";
 /// Folder of the design documents under a project.
@@ -29,9 +31,16 @@ pub const EXCLUDED_DIRS: &[&str] = &[
     "UserSettings",
     ".state",
     NOTES_DIR,
+    INBOX_DIR,
+    EVAL_DIR,
+    HISTORY_DIR,
 ];
 /// Folder of the memory notes under `<vault>/Knowledge/<repo>`.
 pub const NOTES_DIR: &str = "_memories";
+/// Folder of the proposed knowledge notes under `<vault>/Knowledge`; never indexed.
+pub const INBOX_DIR: &str = "_inbox";
+/// Folder of the retrieval evaluation cases under `<vault>/Knowledge/<repo>`; never indexed.
+pub const EVAL_DIR: &str = "_eval";
 /// Extension of C# files.
 pub const CSHARP_EXT: &str = "cs";
 /// Extension of Markdown files.
@@ -42,3 +51,9 @@ pub const TEXT_EXTS: &[&str] = &["json", "txt", "yaml"];
 pub const SEPARATOR: char = '/';
 /// Windows path separator folded into `SEPARATOR`.
 pub const BACKSLASH: char = '\\';
+/// Folder of the mirrored tickets under the vault.
+pub const TICKETS_DIR: &str = "TODO";
+/// Extension of a mirrored ticket.
+pub const TICKET_EXTENSION: &str = "md";
+/// File holding the model service settings, under the memory folder.
+pub const MODEL_SETTINGS_FILE: &str = "model.json";

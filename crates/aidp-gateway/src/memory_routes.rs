@@ -6,14 +6,15 @@ use crate::http::App;
 use crate::memory_ingest::{Enqueued, MemoryHub, ReindexJob};
 use crate::models::enums::ApiStatus;
 use crate::unity_routes::resolve_project;
+use aidp_memory::agent_roles::parse_domains;
 use aidp_memory::models::constants::limits::DEFAULT_K;
 use aidp_memory::models::memory_filter::MemoryFilter;
 use aidp_memory::models::memory_patch::MemoryPatch;
 use aidp_memory::models::memory_ref::MemoryRef;
 use aidp_memory::models::memory_scope::MemoryScope;
 use aidp_memory::{
-    pack, Bm25Retriever, Hit, Memory, MemoryError, MemoryKind, MemoryManager, MemoryStatus,
-    NewMemory, ProjectRef, Retriever, Route, SearchQuery, Source,
+    pack, Hit, Memory, MemoryError, MemoryKind, MemoryManager, MemoryStatus, NewMemory, ProjectRef,
+    Route, SearchQuery, Source,
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -23,6 +24,11 @@ use tiny_http::Method;
 const MEMORY_SEGMENT: &str = "memory";
 const RAG_SEGMENT: &str = "rag";
 const QUERY_PROJECT: &str = "project";
+const QUERY_DOMAIN: &str = "domain";
+const QUERY_AGENT_TYPE: &str = "agentType";
+const QUERY_LEXICAL: &str = "lexical";
+const DOMAIN_SEPARATOR: char = ',';
+const FLAG_TRUE: [&str; 2] = ["1", "true"];
 const DEFAULT_BUDGET: usize = 1500;
 const STATUS_OK: u16 = 200;
 const STATUS_CREATED: u16 = 201;
@@ -48,7 +54,9 @@ fn memory_failure(error: MemoryError) -> Reply {
         MemoryError::NotFound(_) => STATUS_NOT_FOUND,
         MemoryError::Conflict(_) => STATUS_CONFLICT,
         MemoryError::Invalid(_) | MemoryError::Json(_) => STATUS_BAD_REQUEST,
-        MemoryError::Io(_) | MemoryError::Database(_) => STATUS_INTERNAL,
+        MemoryError::Io(_) | MemoryError::Database(_) | MemoryError::Embedding(_) => {
+            STATUS_INTERNAL
+        }
     };
     failure(code, error)
 }
@@ -295,13 +303,36 @@ fn search(scope: &Scope, query: &HashMap<String, String>) -> Reply {
             Err(error) => return memory_failure(error),
         }
     }
-    let retriever = Bm25Retriever::new(
+    let agent_type = query
+        .get(QUERY_AGENT_TYPE)
+        .map(|agent| agent.trim().to_string())
+        .filter(|agent| !agent.is_empty());
+    let domains: Vec<String> = query
+        .get(QUERY_DOMAIN)
+        .map(|raw| {
+            raw.split(DOMAIN_SEPARATOR)
+                .map(str::trim)
+                .filter(|domain| !domain.is_empty())
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default();
+    request.domains = match parse_domains(&domains, agent_type.as_deref()) {
+        Ok(parsed) => parsed,
+        Err(error) => return memory_failure(error),
+    };
+    request.agent_type = agent_type;
+    let lexical = query
+        .get(QUERY_LEXICAL)
+        .is_some_and(|value| FLAG_TRUE.contains(&value.as_str()));
+    let retriever = scope.hub.retriever(
         &scope.store,
         scope
             .project
             .root
             .is_dir()
             .then(|| scope.project.root.clone()),
+        lexical,
     );
     match retriever.search(&request) {
         Ok(hits) => {
@@ -341,6 +372,7 @@ fn reindex(scope: &Scope, body: &Value) -> Reply {
         sources,
         full: body.get("full").and_then(Value::as_bool).unwrap_or(false),
         trigger: TRIGGER_API.to_string(),
+        embed_only: false,
     };
     match scope.hub.enqueue_reindex(job) {
         Enqueued::Started => (

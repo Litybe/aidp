@@ -1,6 +1,7 @@
 //! The `aidp rag` and `aidp memory` subcommand trees.
 
 use crate::models::enums::memory_hook_event::MemoryHookEvent;
+use crate::models::enums::switch_arg::SwitchArg;
 use clap::Subcommand;
 use std::path::PathBuf;
 
@@ -25,6 +26,9 @@ pub enum RagOp {
         /// Re-chunk every file even when unchanged.
         #[arg(long)]
         full: bool,
+        /// Require the embedding model: fail when it is not installed. Without the flag, chunks are embedded whenever the model is present.
+        #[arg(long)]
+        embed: bool,
     },
     /// Search the index (BM25 plus code graph) and pack excerpts under a token budget.
     Search {
@@ -46,6 +50,15 @@ pub enum RagOp {
         /// Token budget of the packed excerpts (tokens are characters / 4).
         #[arg(long, default_value_t = 1500)]
         budget: usize,
+        /// Force BM25 only, even when the embedding model is installed.
+        #[arg(long)]
+        lexical: bool,
+        /// Keep knowledge notes of these domains; repeatable or comma separated.
+        #[arg(long = "domain", value_name = "DOMAIN", value_delimiter = ',')]
+        domains: Vec<String>,
+        /// Keep knowledge notes meant for this agent type; its domains apply when `--domain` is absent.
+        #[arg(long, value_name = "AGENT")]
+        agent_type: Option<String>,
     },
     /// Measure the search on cases with known answers: recall at k and mean reciprocal rank.
     Eval {
@@ -58,6 +71,9 @@ pub enum RagOp {
         /// Hits that count as an answer.
         #[arg(long, default_value_t = 5)]
         k: usize,
+        /// Force BM25 only, even when the embedding model is installed.
+        #[arg(long)]
+        lexical: bool,
     },
     /// Delete the index of an orphan key: never a registered project, never a key with memories.
     Purge {
@@ -86,6 +102,15 @@ pub enum MemoryOp {
         /// Token budget of the block.
         #[arg(long, default_value_t = 2000)]
         budget: usize,
+        /// Force BM25 only, even when the embedding model is installed.
+        #[arg(long)]
+        lexical: bool,
+        /// Keep knowledge notes of these domains; repeatable or comma separated.
+        #[arg(long = "domain", value_name = "DOMAIN", value_delimiter = ',')]
+        domains: Vec<String>,
+        /// Agent type the block is for: filters the notes and gives the route and domains.
+        #[arg(long, value_name = "AGENT")]
+        agent_type: Option<String>,
     },
     /// Answer a question from the memories and the corpus, project and global, under a budget.
     Recall {
@@ -101,6 +126,9 @@ pub enum MemoryOp {
         /// Token budget of the answer.
         #[arg(long, default_value_t = 1500)]
         budget: usize,
+        /// Force BM25 only, even when the embedding model is installed.
+        #[arg(long)]
+        lexical: bool,
     },
     /// Add a memory (proposed unless `--status active`).
     Add {
@@ -252,6 +280,11 @@ pub enum MemoryOp {
         #[command(flatten)]
         project: ProjectArg,
     },
+    /// Inspect the embedding model used by the hybrid search.
+    Model {
+        #[command(subcommand)]
+        op: MemoryModelOp,
+    },
     /// Ingest memory-proposals.json files from a stage folder or a file.
     Ingest {
         /// A proposals file, or a folder scanned for memory-proposals.json.
@@ -261,4 +294,63 @@ pub enum MemoryOp {
         #[command(flatten)]
         project: ProjectArg,
     },
+    /// Ingest a knowledge-proposals.json: add, merge, inbox, rewrite or supersede knowledge notes, then re-index them.
+    IngestKnowledge {
+        /// A knowledge-proposals.json file, or a folder holding one.
+        #[arg(value_name = "FILE")]
+        path: PathBuf,
+        /// Project of the notes.
+        #[command(flatten)]
+        project: ProjectArg,
+    },
+    /// Review the proposed knowledge notes waiting in `<vault>/Knowledge/_inbox`.
+    Inbox {
+        #[command(subcommand)]
+        op: MemoryInboxOp,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum MemoryInboxOp {
+    /// List the notes waiting for review.
+    List {
+        /// Project of the notes.
+        #[command(flatten)]
+        project: ProjectArg,
+    },
+    /// Activate a note: an add or supersede moves to its folder, an update rewrites its target.
+    Approve {
+        /// File name or path of the inbox note.
+        #[arg(value_name = "PATH")]
+        path: String,
+        /// Project of the notes.
+        #[command(flatten)]
+        project: ProjectArg,
+    },
+    /// Move a note to `_inbox/_rejected/`; nothing is deleted.
+    Reject {
+        /// File name or path of the inbox note.
+        #[arg(value_name = "PATH")]
+        path: String,
+        /// Project of the notes.
+        #[command(flatten)]
+        project: ProjectArg,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum MemoryModelOp {
+    /// Print the state of the model service of the daemon; without the daemon, the files and vectors on disk.
+    Status,
+    /// Load the model in the daemon (the one instance every caller shares).
+    Start,
+    /// Unload the model from the daemon and free its memory.
+    Stop,
+    /// Choose whether the daemon loads the model when it starts.
+    Autostart {
+        #[arg(value_enum)]
+        value: SwitchArg,
+    },
+    /// Embed, in the daemon, the chunks that lack a vector of the model.
+    EmbedPending,
 }

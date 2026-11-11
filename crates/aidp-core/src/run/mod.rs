@@ -7,6 +7,7 @@ mod init;
 mod layout;
 mod reconcile;
 mod render;
+mod stage_knowledge;
 
 use crate::pipeline::Placement;
 use std::path::{Path, PathBuf};
@@ -38,6 +39,7 @@ pub use layout::{
 };
 pub use reconcile::{carry_over_task_outcomes, reconcile, reconcile_with, record_plan_schedules};
 pub use render::{render_progress, render_summary};
+pub use stage_knowledge::{ensure_stage_knowledge, stage_context_request};
 
 impl RunState {
     /// The shared per-feature directory (`…/<feature>/`, in the vault under `Pipelines/<repo>/` or

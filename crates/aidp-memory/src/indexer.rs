@@ -1,16 +1,22 @@
 //! Incremental indexer: walks the sources, re-chunks changed files, drops vanished ones.
 
 use crate::chunking::{csharp::chunk_csharp, markdown::chunk_markdown};
+use crate::embedder::Embedder;
+use crate::embedding_index::embed_pending;
 use crate::error::{MemoryError, Result};
+use crate::knowledge_note::parse_knowledge;
+use crate::models::chunk_meta::ChunkMeta;
 use crate::models::constants::limits::MAX_FILE_BYTES;
 use crate::models::constants::paths::{
     BACKSLASH, BIBLE_DIR, CODE_DIR, CSHARP_EXT, DOC_DIR, EXCLUDED_DIRS, MARKDOWN_EXT, README_FILE,
     SEPARATOR, TEXT_EXTS,
 };
+use crate::models::constants::schema::GLOBAL_PROJECT;
 use crate::models::enums::Source;
 use crate::models::index_options::IndexOptions;
 use crate::models::index_report::IndexReport;
 use crate::models::index_root::IndexRoot;
+use crate::models::knowledge_note::KnowledgeNote;
 use crate::models::project_ref::ProjectRef;
 use crate::models::raw_chunk::RawChunk;
 use crate::store::MemoryStore;
@@ -39,11 +45,21 @@ struct StoredFile {
 /// Builds and refreshes the chunk index of a project.
 pub struct Indexer<'a> {
     store: &'a MemoryStore,
+    embedder: Option<&'a dyn Embedder>,
 }
 
 impl<'a> Indexer<'a> {
     pub fn new(store: &'a MemoryStore) -> Self {
-        Self { store }
+        Self {
+            store,
+            embedder: None,
+        }
+    }
+
+    /// Embeds new and changed chunks, and re-embeds those of another model, in the indexing transactions.
+    pub fn with_embedder(mut self, embedder: &'a dyn Embedder) -> Self {
+        self.embedder = Some(embedder);
+        self
     }
 
     /// Refreshes the requested sources of `project` and reports what changed.
@@ -78,12 +94,66 @@ impl<'a> Indexer<'a> {
                     &targets,
                     options.full,
                     &mut report,
-                )
+                )?;
+                Ok(())
             })?;
+            if let Some(embedder) = self.embedder {
+                report.embedded += embed_pending(self.store, embedder, &project.key, Some(source))?;
+            }
+        }
+        self.index_global_knowledge(project, options, &mut report)?;
+        if let Some(embedder) = self.embedder {
+            report.embedded += embed_pending(self.store, embedder, &project.key, None)?;
         }
         report.chunks = self.store.stats(&project.key)?.chunks;
         report.duration_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
         Ok(report)
+    }
+}
+
+impl Indexer<'_> {
+    fn index_global_knowledge(
+        &self,
+        project: &ProjectRef,
+        options: &IndexOptions,
+        report: &mut IndexReport,
+    ) -> Result<()> {
+        let Some(root) = options.global_knowledge.as_ref() else {
+            return Ok(());
+        };
+        let wanted = options.sources.is_empty() || options.sources.contains(&Source::Knowledge);
+        if !wanted || project.key == GLOBAL_PROJECT || !root.dir.is_dir() {
+            return Ok(());
+        }
+        let global = ProjectRef {
+            key: GLOBAL_PROJECT.to_string(),
+            root: project.root.clone(),
+        };
+        let targets = [Target {
+            dir: root.dir.clone(),
+            prefix: root.prefix.clone(),
+            extensions: &[MARKDOWN_EXT],
+            only_file: None,
+        }];
+        self.store.write(|transaction| {
+            index_source(
+                transaction,
+                &global,
+                Source::Knowledge,
+                &targets,
+                options.full,
+                report,
+            )
+        })?;
+        if let Some(embedder) = self.embedder {
+            report.embedded += embed_pending(
+                self.store,
+                embedder,
+                GLOBAL_PROJECT,
+                Some(Source::Knowledge),
+            )?;
+        }
+        Ok(())
     }
 }
 
@@ -185,8 +255,16 @@ fn index_source(
                 }
             }
             delete_chunks(transaction, &project.key, source, &stored_path)?;
-            let raw = chunk_file(&path, &content);
-            insert_chunks(transaction, project, source, &stored_path, mtime, &raw)?;
+            let (raw, note) = chunk_source_file(source, &path, &content);
+            insert_chunks(
+                transaction,
+                project,
+                source,
+                &stored_path,
+                mtime,
+                &raw,
+                note.as_ref(),
+            )?;
             transaction.execute(
                 "INSERT OR REPLACE INTO files (project, source, path, hash, mtime, size) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
                 params![project.key, source.as_str(), stored_path, hash, mtime, size],
@@ -306,6 +384,27 @@ fn chunk_file(path: &Path, content: &str) -> Vec<RawChunk> {
     }
 }
 
+fn chunk_source_file(
+    source: Source,
+    path: &Path,
+    content: &str,
+) -> (Vec<RawChunk>, Option<KnowledgeNote>) {
+    let mut raw = chunk_file(path, content);
+    if source != Source::Knowledge {
+        return (raw, None);
+    }
+    let stem = path
+        .file_stem()
+        .map(|name| name.to_string_lossy().to_string())
+        .unwrap_or_default();
+    let note = parse_knowledge(content, &stem);
+    if !note.is_indexable() {
+        return (Vec::new(), None);
+    }
+    note.title_chunks(&mut raw, &stem);
+    (raw, Some(note))
+}
+
 fn delete_chunks(
     transaction: &Transaction,
     project: &str,
@@ -326,6 +425,7 @@ fn insert_chunks(
     path: &str,
     mtime: i64,
     raw: &[RawChunk],
+    note: Option<&KnowledgeNote>,
 ) -> Result<()> {
     let mut statement = transaction.prepare_cached(
         "INSERT OR REPLACE INTO chunks (id, project, source, path, line_start, line_end, title, text, idents, hash, mtime, meta) \
@@ -342,7 +442,15 @@ fn insert_chunks(
         } else {
             String::new()
         };
-        let meta = serde_json::json!({ "kind": chunk.kind, "symbol": chunk.symbol });
+        let meta = ChunkMeta {
+            kind: chunk.kind.to_string(),
+            symbol: chunk.symbol.clone(),
+            domain: note.and_then(|note| note.front.domain.clone()),
+            agents: note.map_or_else(Vec::new, |note| note.front.agents.clone()),
+            status: note.and_then(|note| note.front.status.clone()),
+            importance: note.and_then(|note| note.front.importance),
+            tags: note.map_or_else(Vec::new, |note| note.front.tags.clone()),
+        };
         statement.execute(params![
             id,
             project.key,
@@ -355,7 +463,7 @@ fn insert_chunks(
             idents,
             short_hash(&chunk.text),
             mtime,
-            meta.to_string(),
+            serde_json::to_string(&meta)?,
         ])?;
     }
     Ok(())

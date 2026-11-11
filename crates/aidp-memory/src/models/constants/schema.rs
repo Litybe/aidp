@@ -2,6 +2,7 @@
 pub const MIGRATIONS: &[&str] = &[
     include_str!("../../../migrations/0001_initial.sql"),
     include_str!("../../../migrations/0002_note_hash.sql"),
+    include_str!("../../../migrations/0003_chunk_vectors.sql"),
 ];
 /// Project key of the memories that apply to every project.
 pub const GLOBAL_PROJECT: &str = "_global";

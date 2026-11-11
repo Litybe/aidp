@@ -34,7 +34,7 @@ const NO_HEAD_SHA: &str = "head commit of the pull request";
 const NO_FALLBACK_REPOS: &[String] = &[];
 
 /// Maps a daemon failure to its exit status: 403 and 409 are policy refusals.
-fn daemon_failure(error: anyhow::Error) -> anyhow::Error {
+pub(super) fn daemon_failure(error: anyhow::Error) -> anyhow::Error {
     let message = format!("{error}");
     let status = exit_status_for(&error);
     TypedExit { status, message }.into()

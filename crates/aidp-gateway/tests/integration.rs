@@ -18,6 +18,7 @@ mod mcp_configurations;
 mod mcp_providers;
 mod mcp_resume;
 mod memory_http_routes;
+mod model_http_routes;
 mod native_launch_paths;
 mod native_plan_tasks;
 mod native_runs;

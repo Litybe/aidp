@@ -1,5 +1,5 @@
 use crate::models::constants::limits::DEFAULT_CONTEXT_BUDGET;
-use crate::models::enums::Route;
+use crate::models::enums::{Domain, Route};
 
 /// What `MemoryManager::context` builds a block for.
 #[derive(Debug, Clone)]
@@ -13,6 +13,10 @@ pub struct ContextRequest {
     pub budget_tokens: usize,
     /// Counts the injected memories as used; false for a measurement.
     pub record_use: bool,
+    /// Knowledge domains to keep; empty means all.
+    pub domains: Vec<Domain>,
+    /// Agent type the knowledge notes must be meant for.
+    pub agent_type: Option<String>,
 }
 
 impl ContextRequest {
@@ -26,6 +30,8 @@ impl ContextRequest {
             stage: None,
             budget_tokens: DEFAULT_CONTEXT_BUDGET,
             record_use: true,
+            domains: Vec::new(),
+            agent_type: None,
         }
     }
 }

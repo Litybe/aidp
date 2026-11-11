@@ -8,4 +8,5 @@ pub enum MemoryHookEvent {
     Stop,
     PreCompact,
     SessionEnd,
+    SubagentStart,
 }

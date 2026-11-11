@@ -1,0 +1,150 @@
+//! Keeps `chunk_vectors` in step with `chunks`: embeds what has no vector for the current model.
+
+use crate::embedder::Embedder;
+use crate::error::{MemoryError, Result};
+use crate::models::constants::embedding::{EMBED_BATCH, EMBED_MAX_CHARS};
+use crate::models::enums::Source;
+use crate::store::MemoryStore;
+use crate::vectors::encode_vector;
+use rusqlite::{params, Connection};
+
+const TITLE_SEPARATOR: char = '\n';
+
+/// Text sent to the model for a chunk: its title then its text, cut to the model limit.
+pub fn embedding_text(title: &str, text: &str) -> String {
+    format!("{title}{TITLE_SEPARATOR}{text}")
+        .chars()
+        .take(EMBED_MAX_CHARS)
+        .collect()
+}
+
+/// Embeds, by batches, the chunks of `project` (of one `source`, or all) whose vector is missing or comes from another model.
+/// The model runs outside the store lock; each batch is stored in its own short write.
+pub fn embed_pending(
+    store: &MemoryStore,
+    embedder: &dyn Embedder,
+    project: &str,
+    source: Option<Source>,
+) -> Result<usize> {
+    let source_filter = source.map(|source| source.as_str());
+    let mut embedded = 0;
+    loop {
+        let batch =
+            store.read(|connection| pending_batch(connection, embedder, project, source_filter))?;
+        if batch.is_empty() {
+            return Ok(embedded);
+        }
+        let texts: Vec<&str> = batch.iter().map(|(_, text)| text.as_str()).collect();
+        let vectors = embedder.embed(&texts)?;
+        check_vectors(embedder, &vectors, batch.len())?;
+        store.write(|transaction| {
+            let mut statement = transaction.prepare_cached(
+                "INSERT OR REPLACE INTO chunk_vectors (chunk_id, model, dim, vector)                  SELECT ?1, ?2, ?3, ?4 WHERE EXISTS (SELECT 1 FROM chunks WHERE rowid = ?1)",
+            )?;
+            for ((chunk_id, _), vector) in batch.iter().zip(&vectors) {
+                statement.execute(params![
+                    chunk_id,
+                    embedder.model_id(),
+                    vector.len() as i64,
+                    encode_vector(vector)
+                ])?;
+            }
+            Ok(())
+        })?;
+        embedded += batch.len();
+    }
+}
+
+/// Whether a chunk of `source` in `project` has no vector at all.
+pub fn lacks_vectors(store: &MemoryStore, project: &str, source: Source) -> Result<bool> {
+    store.read(|connection| {
+        let missing: i64 = connection.query_row(
+            "SELECT COUNT(*) FROM chunks c LEFT JOIN chunk_vectors v ON v.chunk_id = c.rowid              WHERE c.project = ?1 AND c.source = ?2 AND v.chunk_id IS NULL",
+            params![project, source.as_str()],
+            |row| row.get(0),
+        )?;
+        Ok(missing > 0)
+    })
+}
+
+fn check_vectors(embedder: &dyn Embedder, vectors: &[Vec<f32>], expected: usize) -> Result<()> {
+    if vectors.len() != expected {
+        return Err(MemoryError::Embedding(format!(
+            "model returned {} vectors for {expected} texts",
+            vectors.len()
+        )));
+    }
+    if let Some(wrong) = vectors.iter().find(|vector| vector.len() != embedder.dim()) {
+        return Err(MemoryError::Embedding(format!(
+            "model returned a vector of {} values, expected {}",
+            wrong.len(),
+            embedder.dim()
+        )));
+    }
+    Ok(())
+}
+
+/// Embeds the chunks of `source` that lack a vector in each of `projects`.
+pub fn embed_projects(
+    store: &MemoryStore,
+    embedder: &dyn Embedder,
+    projects: &[&str],
+    source: Option<Source>,
+) -> Result<usize> {
+    let mut total = 0;
+    for project in projects {
+        total += embed_pending(store, embedder, project, source)?;
+    }
+    Ok(total)
+}
+
+fn pending_batch(
+    connection: &Connection,
+    embedder: &dyn Embedder,
+    project: &str,
+    source: Option<&str>,
+) -> Result<Vec<(i64, String)>> {
+    let mut statement = connection.prepare_cached(
+        "SELECT c.rowid, c.title, c.text FROM chunks c \
+         LEFT JOIN chunk_vectors v ON v.chunk_id = c.rowid \
+         WHERE c.project = ?1 AND (?2 IS NULL OR c.source = ?2) \
+         AND (v.chunk_id IS NULL OR v.model != ?3 OR v.dim != ?4) \
+         ORDER BY c.rowid LIMIT ?5",
+    )?;
+    let rows = statement.query_map(
+        params![
+            project,
+            source,
+            embedder.model_id(),
+            embedder.dim() as i64,
+            EMBED_BATCH as i64
+        ],
+        |row| {
+            let title: String = row.get(1)?;
+            let text: String = row.get(2)?;
+            Ok((row.get::<_, i64>(0)?, embedding_text(&title, &text)))
+        },
+    )?;
+    Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+}
+
+/// Vectors stored for `model` and the model-wide chunk count, over the whole database.
+pub fn vector_counts(connection: &Connection, model: &str) -> Result<(usize, usize, usize)> {
+    let embedded: usize = connection.query_row(
+        "SELECT COUNT(*) FROM chunk_vectors WHERE model = ?1",
+        params![model],
+        |row| row.get(0),
+    )?;
+    let other: usize = connection.query_row(
+        "SELECT COUNT(*) FROM chunk_vectors WHERE model != ?1",
+        params![model],
+        |row| row.get(0),
+    )?;
+    let chunks: usize =
+        connection.query_row("SELECT COUNT(*) FROM chunks", [], |row| row.get(0))?;
+    Ok((embedded, other, chunks))
+}
+
+#[cfg(test)]
+#[path = "../tests/unit/embedding_index_tests.rs"]
+mod tests;

@@ -20,13 +20,23 @@ workspace = true
 
 ### BEGIN HAKARI SECTION
 [dependencies]
-getrandom = { version = "0.3", default-features = false, features = ["std"] }
+aho-corasick = { version = "1" }
+bit-set = { version = "0.8" }
+bit-vec = { version = "0.8" }
+getrandom = { version = "0.3", default-features = false, features = ["std", "wasm_js"] }
 log = { version = "0.4", default-features = false, features = ["std"] }
 memchr = { version = "2" }
 once_cell = { version = "1" }
+ppv-lite86 = { version = "0.2", default-features = false, features = ["simd", "std"] }
+rand = { version = "0.9" }
+rand_chacha = { version = "0.9", default-features = false, features = ["std"] }
+serde = { version = "1", features = ["alloc", "derive"] }
+serde_core = { version = "1", default-features = false, features = ["alloc", "result", "std"] }
+serde_json = { version = "1", features = ["raw_value"] }
 time = { version = "0.3", features = ["formatting", "macros", "parsing"] }
 tracing-core = { version = "0.1" }
 uuid = { version = "1", features = ["v4"] }
+zerocopy = { version = "0.8", default-features = false, features = ["derive", "simd"] }
 
 [build-dependencies]
 proc-macro2 = { version = "1" }

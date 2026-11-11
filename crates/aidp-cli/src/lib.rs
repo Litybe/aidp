@@ -211,6 +211,7 @@ fn split_globals(cli: Cli) -> (GlobalFlags, Cmd) {
         workspace_root: cli.workspace_root,
         vault: cli.vault,
         no_vault: cli.no_vault,
+        no_knowledge: cli.no_knowledge,
         footer: cli.format == Some(crate::models::FormatArg::Footer),
         format: cli.format.map(Into::into),
         verbose: cli.verbose,
