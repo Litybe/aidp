@@ -7,6 +7,7 @@ pub mod exit_status;
 pub mod expr;
 pub mod git;
 pub mod kg;
+pub mod knowledge_context;
 pub mod messages;
 pub mod obsidian;
 pub mod pass;

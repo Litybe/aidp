@@ -46,9 +46,13 @@
           }
         },
         "knowledge": {
-          "type": "object",
-          "description": "Prompt-rendering budget for the project knowledge base (Lot 3 / C1). A sibling of `knowledge_graph` (Graphify config) — unrelated settings block, do not conflate.",
+          "type": ["boolean", "object"],
+          "description": "Project knowledge settings (a sibling of `knowledge_graph`, unrelated). `true` is the same as `{ enabled: true }`. With `enabled`, every agent stage prompt gets a `## Knowledge` block built at compile time from the notes the memory index holds, filtered by the stage's agent; `prompt_budget_chars` and `max_note_bytes` tune the project knowledge base listing.",
           "properties": {
+            "enabled": { "type": "boolean", "default": false, "description": "Inject the compile-time knowledge block into the agent stage prompts." },
+            "budget": { "type": "integer", "minimum": 100, "default": 1500, "description": "Token budget of the block of each stage." },
+            "route": { "type": "string", "enum": ["code", "art", "map", "doc", "tooling"], "description": "Kind of work the block is for; narrows the sources searched." },
+            "stages": { "type": "array", "items": { "type": "string" }, "description": "Stages that get the block; every agent stage when absent." },
             "prompt_budget_chars": { "type": "integer", "minimum": 500 },
             "max_note_bytes": { "type": "integer", "minimum": 1024 }
           }

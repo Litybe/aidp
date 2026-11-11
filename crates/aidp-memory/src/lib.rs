@@ -32,6 +32,7 @@ mod proposal_shape;
 pub mod proposals;
 pub mod retriever;
 pub mod session_journal;
+pub mod stage_context;
 pub mod store;
 pub mod text;
 pub mod vault_notes;
@@ -60,6 +61,7 @@ pub use models::search_query::SearchQuery;
 pub use pack::{pack, render_markdown};
 pub use project::{is_registered, resolve_project};
 pub use retriever::{Bm25Retriever, Retriever};
+pub use stage_context::KnowledgeContextProvider;
 pub use store::{db_path, MemoryStore};
 
 #[cfg(test)]

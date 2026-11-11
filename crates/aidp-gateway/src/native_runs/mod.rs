@@ -9,6 +9,7 @@ pub mod dispatch;
 pub mod exec_loop;
 pub mod external_session;
 pub mod http_routes;
+pub mod knowledge_block;
 pub mod recovery;
 pub mod reply;
 pub mod scope_guard;
@@ -182,6 +183,8 @@ pub struct NativeDeps {
     pub lock: Arc<dyn WorkspaceLock>,
     /// Run index file, see [`recovery::index_path`].
     pub index_file: PathBuf,
+    /// Gateway state directory, holding the memory index the knowledge blocks read.
+    pub gateway_dir: PathBuf,
     /// Skill root holding `templates/` and `agents/`.
     pub skill_root: Option<PathBuf>,
     /// How often a stage session is polled for its end.
@@ -206,6 +209,7 @@ impl NativeDeps {
             budget,
             lock,
             index_file: recovery::index_path(state_dir),
+            gateway_dir: state_dir.to_path_buf(),
             skill_root,
             poll_interval: DEFAULT_POLL,
         }
@@ -374,6 +378,11 @@ impl NativeRunManager {
             &mut state,
             vault.as_ref().map(|resolved| resolved.root.as_path()),
             &Default::default(),
+        );
+        knowledge_block::freeze(
+            &self.deps.gateway_dir,
+            vault.as_ref().map(|resolved| resolved.root.as_path()),
+            &mut state,
         );
         run::save(&state)?;
         let run_id = state.run_id.clone();

@@ -84,3 +84,9 @@ pub const AGENT_ROLES: &[AgentRole] = &[
         route: None,
     },
 ];
+/// Separator of the parts of the query of a stage.
+pub const STAGE_QUERY_SEPARATOR: &str = " ";
+/// Prefix of a Markdown heading the stage block demotes.
+pub const HEADING_PREFIX: &str = "## ";
+/// The same heading one level lower.
+pub const DEMOTED_HEADING_PREFIX: &str = "### ";

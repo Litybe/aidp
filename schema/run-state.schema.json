@@ -354,6 +354,11 @@
           "auto_answered": { "type": "boolean" }
         }
       }
+    },
+    "stage_knowledge": {
+      "type": "object",
+      "description": "Knowledge block frozen per stage by `run::ensure_stage_knowledge` when `settings.knowledge` is enabled, so every re-emit of the run renders the same prompt. An empty text means no note was relevant to the stage.",
+      "additionalProperties": { "type": "string" }
     }
   },
   "definitions": {

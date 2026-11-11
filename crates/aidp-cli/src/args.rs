@@ -82,6 +82,9 @@ pub struct Cli {
     /// Ignore any vault and keep artefacts in the repo (`.aidp/pipelines/`).
     #[arg(long, global = true, conflicts_with = "vault")]
     pub no_vault: bool,
+    /// Leave the compile-time `## Knowledge` block out of the stage prompts.
+    #[arg(long, global = true)]
+    pub no_knowledge: bool,
     /// Output format. Each command keeps its own default when omitted.
     #[arg(long, global = true, value_enum, value_name = "FORMAT")]
     pub format: Option<FormatArg>,

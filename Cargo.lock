@@ -33,7 +33,7 @@ dependencies = [
 
 [[package]]
 name = "aidp-agents"
-version = "7.7.0"
+version = "7.8.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -42,7 +42,7 @@ dependencies = [
 
 [[package]]
 name = "aidp-cli"
-version = "7.7.0"
+version = "7.8.0"
 dependencies = [
  "aidp-agents",
  "aidp-core",
@@ -73,7 +73,7 @@ dependencies = [
 
 [[package]]
 name = "aidp-core"
-version = "7.7.0"
+version = "7.8.0"
 dependencies = [
  "aidp-testkit",
  "aidp-workspace-hack",
@@ -98,7 +98,7 @@ dependencies = [
 
 [[package]]
 name = "aidp-flows"
-version = "7.7.0"
+version = "7.8.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -108,7 +108,7 @@ dependencies = [
 
 [[package]]
 name = "aidp-gateway"
-version = "7.7.0"
+version = "7.8.0"
 dependencies = [
  "aidp-agents",
  "aidp-core",
@@ -141,7 +141,7 @@ dependencies = [
 
 [[package]]
 name = "aidp-integrations"
-version = "7.7.0"
+version = "7.8.0"
 dependencies = [
  "aidp-core",
  "aidp-testkit",
@@ -167,7 +167,7 @@ dependencies = [
 
 [[package]]
 name = "aidp-memory"
-version = "7.7.0"
+version = "7.8.0"
 dependencies = [
  "aidp-core",
  "aidp-workspace-hack",
@@ -189,7 +189,7 @@ dependencies = [
 
 [[package]]
 name = "aidp-testkit"
-version = "7.7.0"
+version = "7.8.0"
 dependencies = [
  "aidp-agents",
  "aidp-workspace-hack",
@@ -198,7 +198,7 @@ dependencies = [
 
 [[package]]
 name = "aidp-tickets"
-version = "7.7.0"
+version = "7.8.0"
 dependencies = [
  "aidp-core",
  "aidp-testkit",

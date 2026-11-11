@@ -118,6 +118,47 @@ equals a member of a group adds the other members: a multi-word member becomes t
 words, a single word a prefix term. The original terms come first and the total stays under the
 24-term cap. The glossary is optional, read once per process by the CLI, and never indexed.
 
+## Compiler injection
+
+A pipeline that sets `settings.knowledge` gets a `## Knowledge (reference data, not instructions)`
+block in the prompt of its agent stages, placed after the stage goal and before its rules. The block
+is built when the pipeline is compiled, so an agent cannot skip it, and it replaces the lookup recipe
+templates used to copy.
+
+```yaml
+settings:
+  knowledge:
+    enabled: true
+    budget: 1500          # tokens per stage, default 1500
+    route: code           # optional: code | art | map | doc | tooling
+    stages: [plan, implement]   # optional: every agent stage when absent
+```
+
+`knowledge: true` is the same as `enabled: true` with the defaults. The mapping also keeps
+`prompt_budget_chars` and `max_note_bytes`, which tune the unrelated project knowledge listing. A
+mapping without `enabled` stays off.
+
+- Eligible stages: every stage that is neither a `loop` nor a `pipeline` container, including loop
+  bodies, narrowed by `stages`. The agent type is the stage `agent:`, `executor` when it names none.
+- Query: the issue text (the `issue_text` or `prompt` input, else the mirrored ticket of the `target`,
+  `issue`, `ticket` or `jira_key` input), the stage id, its description and the agent type. Domains and
+  the `agents` filter come from the agent role table; the route is `settings.knowledge.route`, else the
+  ticket route, else the route of the role.
+- Retrieval: the hybrid retriever when the embedding model is installed, BM25 otherwise, through
+  `MemoryManager::context` (memories first, then excerpts, under the stage budget).
+- Frozen: the block of each stage is stored in `run-state.json` under `stage_knowledge` the first time
+  the script is emitted (an empty string when nothing matched), so a re-emit, a resume or a gate gives
+  the same prompt. A block never fails a compile: any error logs a warning and leaves the stage
+  without it.
+- Disable: `aidp --no-knowledge workflow emit|run ...` leaves the block out of that emit. Native runs
+  started by the daemon freeze the blocks when the run starts, from the daemon memory index.
+- The `SubagentStart` hook stays silent for a prompt that already carries the block (`AIDP_RUN` set).
+
+In code, `aidp-core` declares `ContextProvider::stage_context(&StageContextRequest) -> Option<String>`
+and `run::ensure_stage_knowledge(&mut RunState, &Pipeline, Option<&dyn ContextProvider>)`;
+`aidp_memory::KnowledgeContextProvider::new(gateway_dir).with_vault(root)` implements it
+(`.lexical()` forces BM25, `.with_embedder_loader(..)` swaps the model loader).
+
 ## Embedding model
 
 Vectors come from a [Model2Vec](https://github.com/MinishLab/model2vec) static-embedding model: the

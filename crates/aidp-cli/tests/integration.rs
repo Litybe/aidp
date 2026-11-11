@@ -38,6 +38,7 @@ mod it_run_exec;
 mod it_scope_exit_codes;
 mod it_skill_root;
 mod it_skill_rules;
+mod it_stage_knowledge;
 mod it_ticket_adopt;
 mod it_tickets;
 mod it_typed_errors;

@@ -2,6 +2,7 @@
 //! Rule: paths only, never inline upstream artifact bodies.
 
 use crate::expr::{self, EvalCtx};
+use crate::models::constants::knowledge_context::KNOWLEDGE_BLOCK_HEADING;
 use crate::models::enums::AgentRole;
 use crate::models::prompt_form::PromptForm;
 use crate::pipeline::{self, KnowledgeLayer, Pipeline, Placement, Stage};
@@ -146,6 +147,8 @@ fn build_prompt_with_form(
         s.push_str(&stage.description);
         s.push_str("\n\n");
     }
+
+    s.push_str(&stage_knowledge_section(state, &stage.name));
 
     if !pipe.policy.is_empty() {
         s.push_str("## Règles non négociables (pipeline)\n\n");
@@ -612,6 +615,21 @@ fn feature_queries(state: &RunState) -> Vec<String> {
     let mut seen = std::collections::BTreeSet::new();
     out.retain(|q| seen.insert(q.to_lowercase()));
     out
+}
+
+/// The frozen knowledge block of a stage under its heading; empty when the stage has none.
+fn stage_knowledge_section(state: &RunState, stage_name: &str) -> String {
+    match state.stage_knowledge.get(stage_name) {
+        Some(block) if !block.trim().is_empty() => format!(
+            "{KNOWLEDGE_BLOCK_HEADING}
+
+{}
+
+",
+            crate::guard::neutralize_markers(block.trim())
+        ),
+        _ => String::new(),
+    }
 }
 
 /// The "read the project knowledge base first" section for research and planning stages.

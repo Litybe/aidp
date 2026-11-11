@@ -179,6 +179,7 @@ pub fn emit_to_disk(
     out: Option<PathBuf>,
 ) -> anyhow::Result<(PathBuf, aidp_core::workflow_emit::Emitted)> {
     aidp_core::run::ensure_knowledge_snapshot(run_state)?;
+    super::stage_knowledge::freeze(ctx, run_state)?;
     let emitted = aidp_core::workflow_emit::compile(run_state)?;
     let path = out.unwrap_or_else(|| run_state.run_dir.join(WORKFLOW_SCRIPT_FILE));
     if let Some(parent) = path.parent() {

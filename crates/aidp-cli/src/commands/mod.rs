@@ -22,6 +22,7 @@ pub mod scope;
 pub mod setup;
 pub mod skill_rules;
 pub mod skills;
+pub mod stage_knowledge;
 pub mod status;
 pub mod ticket;
 pub mod ticket_github;

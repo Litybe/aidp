@@ -48,3 +48,7 @@ pub const TEXT_EXTS: &[&str] = &["json", "txt", "yaml"];
 pub const SEPARATOR: char = '/';
 /// Windows path separator folded into `SEPARATOR`.
 pub const BACKSLASH: char = '\\';
+/// Folder of the mirrored tickets under the vault.
+pub const TICKETS_DIR: &str = "TODO";
+/// Extension of a mirrored ticket.
+pub const TICKET_EXTENSION: &str = "md";

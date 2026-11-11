@@ -154,6 +154,9 @@ pub struct RunState {
     /// Stage name to model tier fixed at init by the model policy; wins over the template's `model:`.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub model_overrides: BTreeMap<String, crate::models::enums::ModelTier>,
+    /// Knowledge block frozen per stage at compile time; an empty text means nothing was relevant.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub stage_knowledge: BTreeMap<String, String>,
 }
 
 /// Run-level rollup of [`StageUsage`], attached best-effort by `reconcile`.
