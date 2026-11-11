@@ -6,10 +6,12 @@ use crate::models::catalog_template::CatalogTemplate;
 use crate::models::catalog_validation::CatalogValidation;
 use crate::models::catalog_write_request::CatalogWriteRequest;
 use crate::models::constants::catalog::*;
+use crate::models::constants::swr_cache::CATALOG_TTL;
 use crate::models::native_error_body::NativeErrorBody;
 pub use crate::models::pipeline_catalog::PipelineCatalog;
 use crate::models::{ApiError, FlowReply};
 use crate::session_error::SessionError;
+use crate::swr_cache::SwrCache;
 use aidp_core::pipeline::{self, Pipeline, MAX_PIPELINE_BYTES};
 use aidp_flows::FlowDef;
 use serde::Serialize;
@@ -17,10 +19,18 @@ use serde_json::Value;
 use std::fs::{self, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Mutex, OnceLock};
 use tiny_http::Method;
 
 static WRITE_GUARD: Mutex<()> = Mutex::new(());
+
+type ReadKey = (PathBuf, String);
+
+/// The answers of the catalogue reads, refreshed in the background once stale.
+fn read_cache() -> &'static SwrCache<ReadKey, FlowReply> {
+    static CACHE: OnceLock<SwrCache<ReadKey, FlowReply>> = OnceLock::new();
+    CACHE.get_or_init(|| SwrCache::new(CATALOG_TTL))
+}
 
 impl PipelineCatalog {
     pub fn new(skill_root: PathBuf) -> Self {
@@ -277,15 +287,39 @@ pub fn handle(
     if !suffix.starts_with('/') {
         return None;
     }
+    let segments = crate::path_segments::split(suffix.trim_matches('/'));
+    let cacheable = *method == Method::Get
+        && matches!(
+            segments
+                .iter()
+                .map(String::as_str)
+                .collect::<Vec<_>>()
+                .as_slice(),
+            [TEMPLATES] | [TEMPLATES, _] | [FLOWS] | [FLOWS, _]
+        );
     let result = skill_root
         .ok_or_else(|| SessionError::Config(SKILL_UNAVAILABLE.to_string()).into())
         .and_then(|root| {
-            dispatch(
-                &PipelineCatalog::new(root),
-                method,
-                &crate::path_segments::split(suffix.trim_matches('/')),
-                body,
-            )
+            if !cacheable {
+                let answer = dispatch(&PipelineCatalog::new(root), method, &segments, body);
+                if *method != Method::Get {
+                    read_cache().clear();
+                }
+                return answer;
+            }
+            let key = (root.clone(), suffix.to_string());
+            let missing = suffix.to_string();
+            read_cache()
+                .get(key, move || {
+                    dispatch(
+                        &PipelineCatalog::new(root),
+                        &Method::Get,
+                        &segments,
+                        &Value::Null,
+                    )?
+                    .ok_or_else(|| SessionError::NotFound(missing).into())
+                })
+                .map(Some)
         });
     match result {
         Ok(reply) => reply,

@@ -53,7 +53,13 @@ fn a_run_stage_session_belongs_to_its_target_ticket_not_to_its_run_id() {
 #[test]
 fn the_route_group_reads_the_run_state_then_the_pipeline_then_the_template() {
     let vault = TempWorkspace::new("cost-routes");
-    write_run_state(vault.path(), "GH-410", "run-art", "art-produce", Some("art"));
+    write_run_state(
+        vault.path(),
+        "GH-410",
+        "run-art",
+        "art-produce",
+        Some("art"),
+    );
     write_run_state(vault.path(), "GH-418", "run-code", "unity-implement", None);
     let records = vec![
         stage_session("s1", "GH-410", "run-art", "art-produce", 100),
@@ -91,7 +97,70 @@ fn the_ticket_group_keys_on_the_issue_and_lists_its_runs() {
 #[test]
 fn the_route_of_a_ticket_comes_from_its_latest_run_state() {
     let vault = TempWorkspace::new("cost-route-key");
-    write_run_state(vault.path(), "GH-7", "20261109-000000-aaaa", "dev", Some("code"));
-    write_run_state(vault.path(), "GH-7", "20261110-000000-bbbb", "art-produce", Some("art"));
-    assert_eq!(route_of_key(vault.path(), "GH-7", &[]).as_deref(), Some("art"));
+    write_run_state(
+        vault.path(),
+        "GH-7",
+        "20261109-000000-aaaa",
+        "dev",
+        Some("code"),
+    );
+    write_run_state(
+        vault.path(),
+        "GH-7",
+        "20261110-000000-bbbb",
+        "art-produce",
+        Some("art"),
+    );
+    assert_eq!(
+        route_of_key_in(
+            &vault_index::snapshot(vault.path()),
+            vault.path(),
+            "GH-7",
+            &[]
+        )
+        .as_deref(),
+        Some("art")
+    );
+}
+
+#[test]
+fn the_batch_costs_equal_the_cost_of_each_ticket() {
+    let vault = TempWorkspace::new("cost-batch");
+    let records = vec![
+        stage_session("s1", "GH-410", "run-a", "art-produce", 100),
+        stage_session("s2", "GH-410", "run-a", "art-produce", 20),
+        stage_session("s3", "GH-418", "run-b", "unity-implement", 7),
+    ];
+    let batch = ticket_costs_report(&records, vault.path(), None);
+    assert_eq!(batch.len(), 2);
+    for key in ["GH-410", "GH-418"] {
+        let single = ticket_cost_report(key, &records, vault.path(), None).unwrap();
+        assert_eq!(batch[key].totals.total_tokens, single.totals.total_tokens);
+        assert_eq!(batch[key].cost_usd, single.cost_usd);
+    }
+    assert_eq!(batch["GH-410"].totals.total_tokens, 120);
+}
+
+#[test]
+fn the_batch_costs_honour_the_keys_and_skip_unknown_tickets() {
+    let vault = TempWorkspace::new("cost-batch-keys");
+    let records = vec![
+        stage_session("s1", "GH-410", "run-a", "art-produce", 100),
+        stage_session("s2", "GH-418", "run-b", "unity-implement", 7),
+    ];
+    let keys = vec!["GH-418".to_string(), "GH-999".to_string()];
+    let batch = ticket_costs_report(&records, vault.path(), Some(&keys));
+    assert_eq!(batch.keys().collect::<Vec<_>>(), vec!["GH-418"]);
+}
+
+#[test]
+fn a_ticket_without_a_priced_session_has_no_dollars() {
+    let vault = TempWorkspace::new("cost-batch-unpriced");
+    let mut record = stage_session("s1", "GH-410", "run-a", "art-produce", 100);
+    record.model = None;
+    record.cost_usd = None;
+    let batch = ticket_costs_report(&[record], vault.path(), None);
+    assert_eq!(batch["GH-410"].cost_usd, None);
+    let body = serde_json::to_value(batch["GH-410"]).unwrap();
+    assert_eq!(body["costUsd"], serde_json::Value::Null);
 }

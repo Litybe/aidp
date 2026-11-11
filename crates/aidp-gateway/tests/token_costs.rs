@@ -151,3 +151,35 @@ fn cost_anomalies_flag_the_outlier_and_need_three_tickets() {
     assert_eq!(flagged[0]["key"], "GH-5");
     handle.stop();
 }
+
+/// `GET /api/tickets/costs` carries, per ticket, the figures of `GET /api/tickets/:key/cost`.
+#[test]
+fn ticket_costs_match_the_cost_of_each_ticket() {
+    let (handle, port) = boot(&[("GH-1", 100), ("GH-1", 50), ("GH-2", 10)]);
+    let (status, all) = get(port, "/api/tickets/costs");
+    assert_eq!(status, STATUS_OK);
+    assert_eq!(all.as_object().unwrap().len(), 2);
+    for key in ["GH-1", "GH-2"] {
+        let (_, single) = get(port, &format!("/api/tickets/{key}/cost"));
+        assert_eq!(
+            all[key]["totals"]["totalTokens"],
+            single["totals"]["totalTokens"]
+        );
+        assert_eq!(all[key]["costUsd"], single["costUsd"]);
+    }
+    assert_eq!(all["GH-1"]["totals"]["totalTokens"], 150);
+    assert!(all["GH-1"]["costUsd"].as_f64().unwrap() > 0.0);
+    handle.stop();
+}
+
+/// `?keys=` limits the answer and leaves out a ticket nothing knows.
+#[test]
+fn ticket_costs_honour_the_keys_filter() {
+    let (handle, port) = boot(&[("GH-1", 100), ("GH-2", 10)]);
+    let (status, body) = get(port, "/api/tickets/costs?keys=GH-2,GH-99");
+    assert_eq!(status, STATUS_OK);
+    let entries = body.as_object().unwrap();
+    assert_eq!(entries.len(), 1);
+    assert_eq!(body["GH-2"]["totals"]["totalTokens"], 10);
+    handle.stop();
+}

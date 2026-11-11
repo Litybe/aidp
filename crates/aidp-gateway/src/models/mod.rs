@@ -302,6 +302,7 @@ pub mod session_outcome;
 pub mod setting_field;
 pub mod setting_issue;
 pub mod started_session;
+pub mod ticket_cost_brief;
 pub mod viewed_file_state;
 pub mod worktree_ensure_response;
 pub mod worktree_key_request;

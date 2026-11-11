@@ -3,44 +3,26 @@
 //! and `GET /api/cost/anomalies`.
 
 use crate::models::constants::ticket_cost::{GROUP_ROUTE, GROUP_STAGE};
+use crate::models::ticket_cost_brief::TicketCostBrief;
 use crate::sessions::{RateLimitInfo, SessionRecord};
-use crate::models::constants::pixellab::PIPELINES_DIR;
 use crate::ticket_cost::{
-    aggregate_contextual, anomalies, load_stage_rows, run_of, ticket_cost, ticket_of, AnomalyReport,
+    aggregate_contextual, anomalies, run_of, ticket_cost, ticket_of, ticket_totals, AnomalyReport,
     CostContext, TicketCost,
 };
 use crate::usage::{in_range, UsageReport};
-use aidp_tickets::store::TicketStore;
-use aidp_tickets::ticket_route::{route_of_template, route_of_ticket};
+use crate::vault_index::{self, VaultSnapshot};
+use aidp_core::models::run_state::RunState;
 use aidp_tickets::models::enums::BudgetRoute;
-use std::collections::HashMap;
+use aidp_tickets::store::{ListFilter, TicketStore};
+use aidp_tickets::ticket_route::{route_of_template, route_of_ticket};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
 
 /// Input of a pipeline run that holds its route (`code`, `art`, `map`, `doc`).
 const RUN_ROUTE_INPUT: &str = "route";
 
-/// Directories of the runs of ticket `key` (`<vault>/Pipelines/<repo>/<key>/<run>`), newest first.
-fn run_dirs(vault: &Path, key: &str) -> Vec<(String, std::path::PathBuf)> {
-    if vault.as_os_str().is_empty() {
-        return Vec::new();
-    }
-    let Ok(repos) = std::fs::read_dir(vault.join(PIPELINES_DIR)) else {
-        return Vec::new();
-    };
-    let mut runs: Vec<(String, std::path::PathBuf)> = repos
-        .flatten()
-        .filter_map(|repo| std::fs::read_dir(repo.path().join(key)).ok())
-        .flat_map(|entries| entries.flatten())
-        .filter(|entry| entry.path().is_dir())
-        .map(|entry| (entry.file_name().to_string_lossy().into_owned(), entry.path()))
-        .collect();
-    runs.sort_by(|a, b| b.0.cmp(&a.0));
-    runs
-}
-
-/// The route of one run: the `route` input of its run state, else its pipeline id.
-pub(crate) fn route_of_run_dir(run_dir: &Path) -> Option<String> {
-    let state = crate::runs::read_run_state(run_dir)?;
+/// The route of one run state: its `route` input, else its pipeline id.
+pub(crate) fn route_of_state(state: &RunState) -> Option<String> {
     state
         .inputs
         .get(RUN_ROUTE_INPUT)
@@ -51,35 +33,34 @@ pub(crate) fn route_of_run_dir(run_dir: &Path) -> Option<String> {
 }
 
 /// The route name of a ticket: its note when the vault has one, else the route of its latest
-/// run (run state), else its sessions' template.
-pub(crate) fn route_of_key(vault: &Path, key: &str, records: &[SessionRecord]) -> Option<String> {
+/// run in the index, else its sessions' template.
+pub(crate) fn route_of_key_in(
+    index: &VaultSnapshot,
+    vault: &Path,
+    key: &str,
+    records: &[SessionRecord],
+) -> Option<String> {
     let from_note = (!vault.as_os_str().is_empty())
         .then(|| TicketStore::open(vault).ok())
         .flatten()
         .and_then(|store| store.get(key).ok())
         .and_then(|(ticket, _, _)| route_of_ticket(&ticket))
         .map(|route| route.as_str().to_string());
-    from_note
-        .or_else(|| {
-            run_dirs(vault, key)
-                .iter()
-                .find_map(|(_, dir)| route_of_run_dir(dir))
-        })
-        .or_else(|| {
-            records
-                .iter()
-                .filter(|record| ticket_of(record) == Some(key))
-                .find_map(|record| record.template_id.as_deref().and_then(route_of_template))
-                .map(|route| route.as_str().to_string())
-        })
+    from_note.or_else(|| index.route_of(key)).or_else(|| {
+        records
+            .iter()
+            .filter(|record| ticket_of(record) == Some(key))
+            .find_map(|record| record.template_id.as_deref().and_then(route_of_template))
+            .map(|route| route.as_str().to_string())
+    })
 }
 
-/// The route of every run that has a session in range, read from the run states of the vault.
+/// The route of every run that has a session in range, read from the run index.
 fn run_routes(
     records: &[SessionRecord],
     from: Option<&str>,
     to: Option<&str>,
-    vault: &Path,
+    index: &VaultSnapshot,
 ) -> HashMap<String, String> {
     let mut wanted: Vec<(&str, &str)> = records
         .iter()
@@ -88,22 +69,10 @@ fn run_routes(
         .collect();
     wanted.sort_unstable();
     wanted.dedup();
-    let mut routes = HashMap::new();
-    let mut last_ticket: Option<(&str, Vec<(String, std::path::PathBuf)>)> = None;
-    for (ticket, run) in wanted {
-        if last_ticket.as_ref().map(|(key, _)| *key) != Some(ticket) {
-            last_ticket = Some((ticket, run_dirs(vault, ticket)));
-        }
-        let dirs = last_ticket.as_ref().map(|(_, dirs)| dirs.as_slice()).unwrap_or(&[]);
-        if let Some(route) = dirs
-            .iter()
-            .find(|(id, _)| id == run)
-            .and_then(|(_, dir)| route_of_run_dir(dir))
-        {
-            routes.insert(run.to_string(), route);
-        }
-    }
-    routes
+    wanted
+        .into_iter()
+        .filter_map(|(ticket, run)| Some((run.to_string(), index.route_of_run(ticket, run)?)))
+        .collect()
 }
 
 /// `GET /api/usage` for the groupings that read tickets, stages or routes.
@@ -115,8 +84,9 @@ pub fn usage_report(
     vault: &Path,
 ) -> UsageReport {
     let mut context = CostContext::default();
+    let index = vault_index::snapshot(vault);
     if group_by == GROUP_ROUTE {
-        context.run_routes = run_routes(records, from, to, vault);
+        context.run_routes = run_routes(records, from, to, &index);
     }
     if group_by == GROUP_STAGE || group_by == GROUP_ROUTE {
         let mut tickets: Vec<&str> = records
@@ -130,8 +100,8 @@ pub fn usage_report(
             if group_by == GROUP_STAGE {
                 context
                     .stages
-                    .insert(key.to_string(), load_stage_rows(vault, key));
-            } else if let Some(route) = route_of_key(vault, key, records) {
+                    .insert(key.to_string(), index.stage_rows(key));
+            } else if let Some(route) = route_of_key_in(&index, vault, key, records) {
                 context.routes.insert(key.to_string(), route);
             }
         }
@@ -154,12 +124,9 @@ pub fn ticket_cost_report(
     if !has_sessions && !has_note {
         return None;
     }
-    let stages = if vault.as_os_str().is_empty() {
-        Vec::new()
-    } else {
-        load_stage_rows(vault, key)
-    };
-    let route = route_of_key(vault, key, records);
+    let index = vault_index::snapshot(vault);
+    let stages = index.stage_rows(key);
+    let route = route_of_key_in(&index, vault, key, records);
     let mut report = ticket_cost(key, records, &stages, route, rate_limit);
     if !vault.as_os_str().is_empty() {
         let (budget, pixellab) = crate::ticket_ceiling::report(vault, key, records);
@@ -167,6 +134,42 @@ pub fn ticket_cost_report(
         report.pixellab = Some(pixellab);
     }
     Some(report)
+}
+
+/// `GET /api/tickets/costs`: the dollars and the tokens of each ticket, in one pass over the
+/// sessions. `keys` limits the answer; a ticket no session and no note knows is left out.
+pub fn ticket_costs_report(
+    records: &[SessionRecord],
+    vault: &Path,
+    keys: Option<&[String]>,
+) -> BTreeMap<String, TicketCostBrief> {
+    let wanted: Option<HashSet<&str>> = keys.map(|keys| keys.iter().map(String::as_str).collect());
+    let mut costs = ticket_totals(records, wanted.as_ref());
+    let noted: Vec<String> = if vault.as_os_str().is_empty() {
+        Vec::new()
+    } else {
+        TicketStore::open(vault)
+            .map(|store| {
+                store
+                    .list(&ListFilter {
+                        archived: true,
+                        ..ListFilter::default()
+                    })
+                    .into_iter()
+                    .map(|ticket| ticket.key)
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    for key in noted {
+        if wanted
+            .as_ref()
+            .is_none_or(|wanted| wanted.contains(key.as_str()))
+        {
+            costs.entry(key).or_default();
+        }
+    }
+    costs
 }
 
 /// `GET /api/cost/anomalies`.
