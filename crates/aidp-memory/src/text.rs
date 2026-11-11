@@ -4,9 +4,11 @@ use crate::models::constants::limits::{
     CHARS_PER_TOKEN, MAX_IDENT_TOKENS, MAX_QUERY_TERMS, PLURAL_MIN_CHARS, PREFIX_MIN_CHARS,
 };
 use crate::models::constants::words::STOPWORDS;
+use crate::models::glossary::Glossary;
 use std::collections::{HashMap, HashSet};
 
 const TERM_JOINER: &str = " OR ";
+const WORD_JOINER: &str = " AND ";
 const SHORTEST_WORD: usize = 2;
 const FIRST_LINE_BONUS: f64 = 3.0;
 const IDENTIFIER_BONUS: f64 = 2.0;
@@ -179,23 +181,53 @@ pub fn singular(term: &str) -> String {
     }
 }
 
-/// An FTS5 match expression: every term as a prefix, joined with `OR`.
+/// An FTS5 match expression: every term as a prefix, joined with `OR`, widened by the installed glossary.
 pub fn match_expression(query: &str) -> Option<String> {
-    let clauses: Vec<String> = query_terms(query)
+    match_expression_with(query, crate::glossary::current())
+}
+
+/// [`match_expression`] with an explicit glossary.
+///
+/// Synonyms fill what is left of the term cap after the original terms; a multi-word synonym is an `AND` of its words.
+pub fn match_expression_with(query: &str, glossary: Option<&Glossary>) -> Option<String> {
+    let mut clauses: Vec<String> = query_terms(query)
         .iter()
-        .map(|term| singular(term))
-        .map(|term| {
-            if term.chars().count() >= PREFIX_MIN_CHARS {
-                format!("\"{term}\"*")
-            } else {
-                format!("\"{term}\"")
-            }
-        })
+        .map(|term| term_clause(&singular(term)))
         .collect();
     if clauses.is_empty() {
-        None
+        return None;
+    }
+    if let Some(glossary) = glossary {
+        for words in glossary.expansions(query) {
+            if clauses.len() >= MAX_QUERY_TERMS {
+                break;
+            }
+            let clause = synonym_clause(&words);
+            if !clauses.contains(&clause) {
+                clauses.push(clause);
+            }
+        }
+    }
+    Some(clauses.join(TERM_JOINER))
+}
+
+fn term_clause(term: &str) -> String {
+    if term.chars().count() >= PREFIX_MIN_CHARS {
+        format!("\"{term}\"*")
     } else {
-        Some(clauses.join(TERM_JOINER))
+        format!("\"{term}\"")
+    }
+}
+
+fn synonym_clause(words: &[String]) -> String {
+    let clauses: Vec<String> = words
+        .iter()
+        .map(|word| term_clause(&singular(word)))
+        .collect();
+    if clauses.len() == 1 {
+        clauses.join("")
+    } else {
+        format!("({})", clauses.join(WORD_JOINER))
     }
 }
 

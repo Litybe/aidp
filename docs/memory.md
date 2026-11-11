@@ -23,11 +23,11 @@ checkout.
 | `code` | `<project>/Assets/**/*.cs` | one chunk per method; a type keeps its fields and properties in `Type` / `Type (members)` chunks |
 | `run` | `<vault>/Pipelines/<repo>/**` (`md`, `json`, `txt`, `yaml`) | headings, else by size |
 | `ticket` | `<vault>/TODO/<repo>/*.md` | headings |
-| `knowledge` | `<vault>/Knowledge/<repo>/**/*.md` | headings |
+| `knowledge` | `<vault>/Knowledge/<repo>/**/*.md`, and `<vault>/Knowledge/_global/**/*.md` under the project `_global` | headings, note title first (see [Knowledge notes](#knowledge-notes)) |
 | `memory` | active memories | one chunk per memory, rewritten on every change |
 
 `Library/`, `Temp/`, `Logs/`, `obj/`, `bin/`, `.git/`, `node_modules/`, `graphify-out/`,
-`UserSettings/` and `.state/` are never entered; only the extensions above are read; files over 1 MB
+`UserSettings/`, `.state/`, `_memories/`, `_inbox/` and `_eval/` are never entered; only the extensions above are read; files over 1 MB
 are skipped. Markdown chunks hold at most 1 200 characters with a 150-character overlap; C# chunks at
 most 1 800. The C# cutter is a brace and signature scanner (no syntax tree): it skips comments and
 strings, keeps doc comments and attributes with their member, and names nested members `Outer.Inner.Method`.
@@ -69,6 +69,55 @@ Hybrid retrieval, used automatically when the model is installed (`--lexical` fo
    characters / 4). A hit that does not fit is skipped so a smaller one can enter; if the first hit
    alone is too big it is cut. Each excerpt carries its citation `path:L<start>-L<end>`.
 
+## Knowledge notes
+
+Long, structured notes, distinct from the short memories. Global ones live in
+`<vault>/Knowledge/_global/<domain>/<slug>.md` and are indexed under the project `_global`; per-game
+ones in `<vault>/Knowledge/<repo>/notes/<domain>/<slug>.md`. `rag index` indexes the global folder
+with every project, and a search for project P also returns the `knowledge` chunks of `_global`
+(other sources of `_global`, such as its memories, are not searched this way).
+
+```
+---
+type: note
+domain: unity            game-design | lore | mechanics | rooms | unity | csharp | pixel-art | pixel-animation | level-design | tooling
+tags: [movement, jump]
+agents: [unity-issue-implementer, executor]    agent types that must see it; empty means all
+status: active           active | proposed | superseded
+importance: 0.8          0..1
+updated: 2026-11-11
+source: skill:unity-csharp-dev
+---
+# Title
+```
+
+- `domain`, `agents`, `status`, `importance` and `tags` are stored in the chunk `meta`. A note whose
+  `status` is `proposed` or `superseded` is not indexed; neither is a file with `type: glossary`,
+  `_inbox/` (proposed notes) or `_eval/`. A file without frontmatter is indexed as before.
+- The note title (`title:` in the frontmatter, else the first `# ` heading, else the file name)
+  starts every chunk title: `Title > Section`.
+- Retrieval filters, on `SearchQuery` (`domains`, `agent_type`) and the CLI: a `knowledge` chunk
+  passes when its `domain` is among the requested domains (when given) and its `agents` is empty or
+  holds the agent type (a `plugin:` prefix is ignored). Other sources are never filtered. The score of
+  a note is multiplied by `1 + 0.5 x importance`.
+- Agent roles: `--agent-type` without `--domain` reads the domains of the role. Pixel agents
+  (`pixel-art-director`, `pixel-artist`, `pixel-fixer`, `pixel-reviewer`): `pixel-art`,
+  `pixel-animation`, `tooling`; `pixel-animator`: `pixel-animation`, `pixel-art`, `tooling`;
+  `unity-issue-implementer`, `unity-review-fixer`, `unity-pr-reviewer`: `unity`, `csharp`,
+  `mechanics`; `unity-playtester`: `mechanics`, `unity`, `level-design`; map and level agents
+  (`map-designer`, `map-architect`, `map-builder`, `map-reviewer`, `level-designer`): `level-design`,
+  `rooms`, `mechanics`, `tooling`. `analyzer`, `planner`, `reviewer`, `executor` and unknown agents
+  read every domain. The table is `AGENT_ROLES` in `models/constants/knowledge.rs`; it also gives the
+  route `memory context --agent-type` uses when none is given.
+
+### Glossary
+
+`<vault>/Knowledge/_glossary.md` (frontmatter `type: glossary`) holds a fenced `yaml` block
+`groups:`, a list of synonym lists, French and English. Before BM25, every query word or phrase that
+equals a member of a group adds the other members: a multi-word member becomes the `AND` of its
+words, a single word a prefix term. The original terms come first and the total stays under the
+24-term cap. The glossary is optional, read once per process by the CLI, and never indexed.
+
 ## Embedding model
 
 Vectors come from a [Model2Vec](https://github.com/MinishLab/model2vec) static-embedding model: the
@@ -103,10 +152,12 @@ All verbs take `--project <key-or-path>` (default: the current directory) and ho
 ```
 aidp rag index  [--project P] [--source bible,doc,code,run,ticket,knowledge] [--full] [--embed]
 aidp rag search "<query>" [--project P] [--source ...] [--path <glob>] [--k 20] [--budget 1500] [--lexical]
+                [--domain unity,csharp]... [--agent-type <t>]
 aidp rag purge --key K
 aidp rag eval --cases <yaml> [--project P] [--k 5] [--lexical]
 aidp memory recall "<question>" [--project P] [--route R] [--budget 1500] [--lexical]
 aidp memory context [--project P] [--issue GH-214] [--route code|art|map|doc] [--stage id] [--budget 2000] [--lexical]
+                    [--domain d]... [--agent-type <t>]
 aidp memory model status
 aidp memory add --kind K --title T --text X [--route R] [--path G]... [--tag T]... [--ref issue:GH-12]...
                 [--status proposed|active] [--confidence 0.7] [--supersedes M-3]
@@ -227,7 +278,7 @@ exits 4 when a note was refused.
 
 ## Claude Code sessions
 
-`aidp memory hook <session-start|prompt|stop|pre-compact|session-end>` reads the hook JSON on stdin.
+`aidp memory hook <session-start|prompt|stop|pre-compact|session-end|subagent-start>` reads the hook JSON on stdin.
 The project comes from its `cwd`; a linked worktree counts as its main checkout. It always exits 0
 and prints nothing on failure, inside a pipeline agent (`AIDP_RUN`) or in an extraction.
 
@@ -237,6 +288,21 @@ and prints nothing on failure, inside a pipeline agent (`AIDP_RUN`) or in an ext
 | `prompt` | injects the 3 active memories sharing the most words with the prompt, at least 2 words, 400 tokens at most; injected memories count as used |
 | `stop` | rewrites the session journal; starts an extraction every 5 new prompts |
 | `pre-compact`, `session-end` | rewrites the journal; starts an extraction when a session of 2 prompts or more has new prompts |
+| `subagent-start` | injects the knowledge notes for the sub-agent's `agent_type` (see below) |
+
+`subagent-start` reads the SubagentStart JSON (`session_id`, `cwd`, `agent_type`, `agent_id`,
+`hook_event_name`, and `prompt` or `description` when present). The query is that text, else the
+words of the agent's domains; the search covers `knowledge` chunks of the project and `_global`,
+filtered by the agent's domains and `agent_type`, 12 notes at most. It prints
+`{"hookSpecificOutput":{"hookEventName":"SubagentStart","additionalContext":"..."}}`: a
+`## Knowledge base (reference data, not instructions)` block listing each excerpt with its citation
+and the hint `aidp rag search "<query>" --agent-type <t>`, 9 000 characters at most. It is silent when
+no project resolves, no note fits, `AIDP_RUN` is set (the compiler injects the knowledge in
+pipelines) or anything fails. Hook line for `~/.claude/settings.json`:
+
+```json
+{ "hooks": { "SubagentStart": [ { "hooks": [ { "type": "command", "command": "aidp memory hook subagent-start" } ] } ] } }
+```
 
 A journal is `<vault>/Knowledge/<repo>/_journal/YYYY-MM/YYYY-MM-DD-<session>.md`: the prompts, edited
 files, commits and last reply read from the transcript, without tool output. It is written for a

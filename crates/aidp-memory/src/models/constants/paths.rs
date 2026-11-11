@@ -29,9 +29,15 @@ pub const EXCLUDED_DIRS: &[&str] = &[
     "UserSettings",
     ".state",
     NOTES_DIR,
+    INBOX_DIR,
+    EVAL_DIR,
 ];
 /// Folder of the memory notes under `<vault>/Knowledge/<repo>`.
 pub const NOTES_DIR: &str = "_memories";
+/// Folder of the proposed knowledge notes under `<vault>/Knowledge`; never indexed.
+pub const INBOX_DIR: &str = "_inbox";
+/// Folder of the retrieval evaluation cases under `<vault>/Knowledge/<repo>`; never indexed.
+pub const EVAL_DIR: &str = "_eval";
 /// Extension of C# files.
 pub const CSHARP_EXT: &str = "cs";
 /// Extension of Markdown files.

@@ -2,19 +2,23 @@
 //!
 //! A hook never fails the session: every error is logged and the hook stays silent.
 
-use super::memory::{knowledge_dir, open, Opened};
+use super::memory::{knowledge_dir, open, retriever, Opened};
 use super::CommandOutput;
 use crate::args::memory::ProjectArg;
 use crate::ctx::Ctx;
 use crate::models::constants::memory_hook::{
     DISTILL_LEDGER_FILE, DISTILL_LOG_FILE, DISTILL_MODEL, DISTILL_POLL_MS, DISTILL_REPLY_FILE,
     DISTILL_SCRATCH_DIR, DISTILL_TIMEOUT_SECS, ENV_DISTILLING, ENV_DISTILLING_VALUE,
-    ENV_PIPELINE_RUN, EVENT_PROMPT_SUBMIT, EVENT_SESSION_START, GIT_DIR, POWERSHELL_PROGRAM,
+    ENV_PIPELINE_RUN, EVENT_PROMPT_SUBMIT, EVENT_SESSION_START, EVENT_SUBAGENT_START, GIT_DIR,
+    POWERSHELL_PROGRAM,
 };
 use crate::models::enums::memory_hook_event::MemoryHookEvent;
 use crate::models::hook_payload::HookPayload;
+use crate::models::hook_reply::HookReply;
 use aidp_core::Format;
+use aidp_memory::agent_knowledge::agent_knowledge;
 use aidp_memory::distill::{distill_prompt, proposals_from_reply, should_distill};
+use aidp_memory::models::constants::knowledge::HOOK_MAX_CHARS;
 use aidp_memory::models::constants::paths::{MEMORY_DIR, PROPOSALS_FILE};
 use aidp_memory::models::constants::sessions::JOURNAL_DIR;
 use aidp_memory::models::enums::DistillTrigger;
@@ -23,7 +27,6 @@ use aidp_memory::session_journal::read_transcript;
 use aidp_memory::text::short_hash;
 use aidp_memory::MemoryManager;
 use anyhow::{bail, Context};
-use serde_json::json;
 use std::collections::BTreeMap;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -39,10 +42,13 @@ pub fn run(ctx: &Ctx, event: MemoryHookEvent) -> CommandOutput {
         return CommandOutput::empty();
     }
     match handle(ctx, event) {
-        Ok(Some((name, context))) => CommandOutput::json(
-            Some(Format::JsonCompact),
-            json!({ "hookSpecificOutput": { "hookEventName": name, "additionalContext": context } }),
-        ),
+        Ok(Some((name, context))) => match serde_json::to_value(HookReply::new(name, context)) {
+            Ok(reply) => CommandOutput::json(Some(Format::JsonCompact), reply),
+            Err(error) => {
+                tracing::warn!(%error, "memory hook reply not serialised");
+                CommandOutput::empty()
+            }
+        },
         Ok(None) => CommandOutput::empty(),
         Err(error) => {
             tracing::warn!(%error, "memory hook failed");
@@ -59,6 +65,9 @@ fn handle(ctx: &Ctx, event: MemoryHookEvent) -> anyhow::Result<Option<(&'static 
         project: Some(payload.cwd.clone()),
     };
     let opened = open(ctx, &project, false)?;
+    if event == MemoryHookEvent::SubagentStart {
+        return subagent_knowledge(&opened, &payload);
+    }
     let manager = MemoryManager::new(&opened.store);
     let key = opened.project.key.as_str();
     let answer = match event {
@@ -67,6 +76,7 @@ fn handle(ctx: &Ctx, event: MemoryHookEvent) -> anyhow::Result<Option<(&'static 
             EVENT_PROMPT_SUBMIT,
             manager.prompt_recall(key, payload.prompt.as_deref().unwrap_or_default())?,
         ),
+        MemoryHookEvent::SubagentStart => return Ok(None),
         MemoryHookEvent::Stop => {
             record_session(ctx, &opened, &payload, DistillTrigger::Turn)?;
             return Ok(None);
@@ -77,6 +87,31 @@ fn handle(ctx: &Ctx, event: MemoryHookEvent) -> anyhow::Result<Option<(&'static 
         }
     };
     Ok((!answer.1.is_empty()).then_some(answer))
+}
+
+fn subagent_knowledge(
+    opened: &Opened,
+    payload: &HookPayload,
+) -> anyhow::Result<Option<(&'static str, String)>> {
+    let Some(agent_type) = payload
+        .agent_type
+        .as_deref()
+        .filter(|agent| !agent.trim().is_empty())
+    else {
+        return Ok(None);
+    };
+    if !opened.known_root {
+        return Ok(None);
+    }
+    let prompt = payload.prompt.as_deref().or(payload.description.as_deref());
+    let context = agent_knowledge(
+        retriever(opened, false).as_ref(),
+        &opened.project.key,
+        agent_type,
+        prompt,
+        HOOK_MAX_CHARS,
+    )?;
+    Ok((!context.is_empty()).then_some((EVENT_SUBAGENT_START, context)))
 }
 
 fn record_session(

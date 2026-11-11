@@ -52,6 +52,12 @@ pub enum RagOp {
         /// Force BM25 only, even when the embedding model is installed.
         #[arg(long)]
         lexical: bool,
+        /// Keep knowledge notes of these domains; repeatable or comma separated.
+        #[arg(long = "domain", value_name = "DOMAIN", value_delimiter = ',')]
+        domains: Vec<String>,
+        /// Keep knowledge notes meant for this agent type; its domains apply when `--domain` is absent.
+        #[arg(long, value_name = "AGENT")]
+        agent_type: Option<String>,
     },
     /// Measure the search on cases with known answers: recall at k and mean reciprocal rank.
     Eval {
@@ -98,6 +104,12 @@ pub enum MemoryOp {
         /// Force BM25 only, even when the embedding model is installed.
         #[arg(long)]
         lexical: bool,
+        /// Keep knowledge notes of these domains; repeatable or comma separated.
+        #[arg(long = "domain", value_name = "DOMAIN", value_delimiter = ',')]
+        domains: Vec<String>,
+        /// Agent type the block is for: filters the notes and gives the route and domains.
+        #[arg(long, value_name = "AGENT")]
+        agent_type: Option<String>,
     },
     /// Answer a question from the memories and the corpus, project and global, under a budget.
     Recall {

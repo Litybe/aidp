@@ -10,4 +10,6 @@ pub struct IndexOptions {
     pub full: bool,
     /// Directories feeding `run`, `ticket` and `knowledge`.
     pub extra_roots: Vec<IndexRoot>,
+    /// `<vault>/Knowledge/_global`, indexed as `knowledge` under the `_global` project.
+    pub global_knowledge: Option<IndexRoot>,
 }

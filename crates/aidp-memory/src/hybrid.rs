@@ -2,6 +2,7 @@
 
 use crate::embedder::Embedder;
 use crate::error::Result;
+use crate::knowledge_filter::{boost_importance, retain_allowed};
 use crate::mmr;
 use crate::models::constants::embedding::{
     EMBED_MAX_CHARS, MIN_COSINE, RRF_K, VECTOR_CANDIDATE_FACTOR, VIA_HYBRID, VIA_VECTOR,
@@ -10,7 +11,8 @@ use crate::models::constants::limits::{FILTERED_CANDIDATES, MIN_CANDIDATES, MMR_
 use crate::models::hit::Hit;
 use crate::models::search_query::SearchQuery;
 use crate::retriever::{
-    hit_from_row, path_pattern, source_weight, Bm25Retriever, Retriever, CHUNK_COLUMNS,
+    hit_from_row, path_pattern, project_scope, source_weight, Bm25Retriever, Retriever,
+    CHUNK_COLUMNS,
 };
 use crate::store::MemoryStore;
 use crate::vectors::{cosine, decode_vector};
@@ -44,7 +46,7 @@ impl<'a> HybridRetriever<'a> {
             return Ok(Vec::new());
         }
         let pattern = path_pattern(query)?;
-        let limit = if pattern.is_some() {
+        let limit = if pattern.is_some() || query.filters_knowledge() {
             FILTERED_CANDIDATES
         } else {
             (query.k * VECTOR_CANDIDATE_FACTOR).max(MIN_CANDIDATES)
@@ -68,9 +70,10 @@ impl<'a> HybridRetriever<'a> {
         };
         let sql = format!(
             "SELECT v.chunk_id, v.vector FROM chunk_vectors v JOIN chunks c ON c.rowid = v.chunk_id \
-             WHERE c.project = ?1 AND v.model = ?2 {filter}"
+             WHERE {scope} AND v.model = ?2 {filter}",
+            scope = project_scope("?1")
         );
-        self.store.read(|connection| {
+        let hits = self.store.read(|connection| {
             let mut scored: Vec<(f64, i64)> = Vec::new();
             let mut statement = connection.prepare(&sql)?;
             let mut rows =
@@ -106,7 +109,8 @@ impl<'a> HybridRetriever<'a> {
                 hits.push(hit);
             }
             Ok(hits)
-        })
+        })?;
+        retain_allowed(self.store, query, hits)
     }
 }
 
@@ -125,6 +129,7 @@ impl Retriever for HybridRetriever<'_> {
             hit.score *= source_weight(hit);
         }
         sort_hits(&mut fused);
+        boost_importance(self.store, &mut fused)?;
         Ok(mmr::select(fused, query.k, MMR_LAMBDA))
     }
 }

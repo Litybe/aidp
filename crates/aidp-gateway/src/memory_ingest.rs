@@ -8,6 +8,7 @@ use crate::projects::{Project, Projects};
 use crate::sync::lock;
 use aidp_memory::models::constants::limits::INGEST_MAX_DEPTH;
 use aidp_memory::models::constants::paths::{NOTES_DIR, PROPOSALS_FILE};
+use aidp_memory::models::constants::schema::GLOBAL_PROJECT;
 use aidp_memory::models::ingest_report::IngestReport;
 use aidp_memory::{
     IndexOptions, IndexReport, IndexRoot, Indexer, Memory, MemoryError, MemoryManager, MemoryStore,
@@ -164,6 +165,18 @@ impl MemoryHub {
         ]
     }
 
+    /// `<vault>/Knowledge/_global`, indexed as `knowledge` under the `_global` project.
+    pub fn global_knowledge_root(&self) -> Option<IndexRoot> {
+        if self.vault_root.as_os_str().is_empty() {
+            return None;
+        }
+        Some(IndexRoot {
+            source: Source::Knowledge,
+            dir: self.vault_root.join(KNOWLEDGE_PREFIX).join(GLOBAL_PROJECT),
+            prefix: format!("{KNOWLEDGE_PREFIX}/{GLOBAL_PROJECT}"),
+        })
+    }
+
     /// Brings the vault notes of a project in step with the database; failures are logged.
     pub fn sync_notes(&self, project: &ProjectRef) {
         if self.vault_root.as_os_str().is_empty() {
@@ -247,6 +260,7 @@ impl MemoryHub {
             sources: job.sources.clone(),
             full: job.full,
             extra_roots: self.extra_roots(&job.project),
+            global_knowledge: self.global_knowledge_root(),
         };
         Indexer::new(&store).index(&job.project, &options)
     }

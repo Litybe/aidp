@@ -3,15 +3,18 @@ use crate::args::memory::{MemoryModelOp, MemoryOp, ProjectArg, RagOp};
 use crate::ctx::Ctx;
 use crate::models::hit_view::HitView;
 use aidp_core::{ExitStatus, Format};
+use aidp_memory::agent_roles::{effective_domains, role_of};
+use aidp_memory::glossary;
 use aidp_memory::models::constants::paths::NOTES_DIR;
+use aidp_memory::models::constants::schema::GLOBAL_PROJECT;
 use aidp_memory::models::memory_filter::MemoryFilter;
 use aidp_memory::models::memory_patch::MemoryPatch;
 use aidp_memory::models::memory_ref::MemoryRef;
 use aidp_memory::{
     is_registered, load_default_embedder, model_status, pack, render_markdown, resolve_project,
-    Bm25Retriever, ContextRequest, HybridRetriever, IndexOptions, IndexRoot, Indexer, Memory,
-    MemoryError, MemoryKind, MemoryManager, MemoryStatus, MemoryStore, NewMemory, ProjectRef,
-    RefType, Retriever, Route, SearchQuery, Source,
+    Bm25Retriever, ContextRequest, Domain, HybridRetriever, IndexOptions, IndexRoot, Indexer,
+    Memory, MemoryError, MemoryKind, MemoryManager, MemoryStatus, MemoryStore, NewMemory,
+    ProjectRef, RefType, Retriever, Route, SearchQuery, Source,
 };
 use std::path::PathBuf;
 
@@ -47,6 +50,7 @@ pub fn run_rag(ctx: &Ctx, op: RagOp) -> anyhow::Result<CommandOutput> {
                 sources: parse_sources(source.as_deref())?,
                 full,
                 extra_roots: extra_roots(ctx, &opened.project),
+                global_knowledge: global_knowledge_root(ctx),
             };
             let embedder = load_default_embedder(&opened.gateway);
             if embed && embedder.is_none() {
@@ -70,6 +74,8 @@ pub fn run_rag(ctx: &Ctx, op: RagOp) -> anyhow::Result<CommandOutput> {
             k,
             budget,
             lexical,
+            domains,
+            agent_type,
         } => {
             let opened = open(ctx, &project, false)?;
             let retriever = retriever(&opened, lexical);
@@ -77,6 +83,8 @@ pub fn run_rag(ctx: &Ctx, op: RagOp) -> anyhow::Result<CommandOutput> {
             request.sources = parse_sources(source.as_deref())?;
             request.path_glob = path;
             request.k = k;
+            request.domains = parse_domains(&domains, agent_type.as_deref())?;
+            request.agent_type = agent_type;
             let packed = pack(retriever.search(&request)?, budget);
             if wants_json(ctx) {
                 let views: Vec<HitView> = packed.hits.iter().map(HitView::from).collect();
@@ -291,12 +299,16 @@ chunks d'un autre modele: {}",
             stage,
             budget,
             lexical,
+            domains,
+            agent_type,
         } => {
             let opened = open(ctx, &project, false)?;
             let mut request = ContextRequest::new(opened.project.key.clone());
             request.route = route.as_deref().map(Route::parse).transpose()?;
             request.stage = stage;
             request.budget_tokens = budget;
+            request.domains = parse_domains(&domains, agent_type.as_deref())?;
+            request.agent_type = agent_type;
             let mut diagnostics = Vec::new();
             if let Some(issue) = issue {
                 match issue_text(ctx, &opened.project, &issue) {
@@ -307,6 +319,13 @@ chunks d'un autre modele: {}",
                     request.route = issue_route(ctx, &opened.project, &issue);
                 }
                 request.issue = Some(issue);
+            }
+            if request.route.is_none() {
+                request.route = request
+                    .agent_type
+                    .as_deref()
+                    .and_then(role_of)
+                    .and_then(|role| role.route);
             }
             let manager = MemoryManager::new(&opened.store);
             let block = manager.context(&request, retriever(&opened, lexical).as_ref())?;
@@ -478,6 +497,9 @@ pub(super) fn open(ctx: &Ctx, argument: &ProjectArg, strict: bool) -> anyhow::Re
         },
         Err(error) => return Err(error.into()),
     };
+    if let Some(vault) = ctx.vault_override() {
+        glossary::install_from_dir(&vault.root.join(KNOWLEDGE_PREFIX));
+    }
     Ok(Opened {
         store: MemoryStore::open_in(&gateway)?,
         gateway,
@@ -486,7 +508,7 @@ pub(super) fn open(ctx: &Ctx, argument: &ProjectArg, strict: bool) -> anyhow::Re
     })
 }
 
-fn retriever(opened: &Opened, lexical: bool) -> Box<dyn Retriever + '_> {
+pub(super) fn retriever(opened: &Opened, lexical: bool) -> Box<dyn Retriever + '_> {
     let root = opened.known_root.then(|| opened.project.root.clone());
     if !lexical {
         if let Some(embedder) = load_default_embedder(&opened.gateway) {
@@ -541,6 +563,25 @@ fn extra_roots(ctx: &Ctx, project: &ProjectRef) -> Vec<IndexRoot> {
             prefix: format!("{KNOWLEDGE_PREFIX}/{repo}"),
         },
     ]
+}
+
+/// The domains of `--domain`, else those of the agent type; empty means every domain.
+fn parse_domains(raw: &[String], agent_type: Option<&str>) -> Result<Vec<Domain>, MemoryError> {
+    let explicit = raw
+        .iter()
+        .map(|domain| Domain::parse(domain))
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(effective_domains(&explicit, agent_type))
+}
+
+/// `<vault>/Knowledge/_global`, indexed under the `_global` project.
+fn global_knowledge_root(ctx: &Ctx) -> Option<IndexRoot> {
+    let vault = ctx.vault_override()?;
+    Some(IndexRoot {
+        source: Source::Knowledge,
+        dir: vault.root.join(KNOWLEDGE_PREFIX).join(GLOBAL_PROJECT),
+        prefix: format!("{KNOWLEDGE_PREFIX}/{GLOBAL_PROJECT}"),
+    })
 }
 
 fn ticket_mirror(ctx: &Ctx, project: &ProjectRef, issue: &str) -> Option<String> {

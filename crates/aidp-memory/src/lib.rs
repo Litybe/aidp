@@ -6,6 +6,8 @@
 //! [`MemoryManager`]. This crate reads no environment variable and parses no
 //! arguments; the caller passes the gateway directory and the project.
 
+pub mod agent_knowledge;
+pub mod agent_roles;
 pub mod chunking;
 pub mod context;
 pub mod distill;
@@ -13,10 +15,13 @@ pub mod embedder;
 pub mod embedding_index;
 pub mod error;
 pub mod eval;
+pub mod glossary;
 pub mod graph;
 pub mod hook_context;
 pub mod hybrid;
 pub mod indexer;
+pub mod knowledge_filter;
+pub mod knowledge_note;
 pub mod manager;
 pub mod mmr;
 pub mod model_resolver;
@@ -41,7 +46,7 @@ pub use model_resolver::{load_default_embedder, model_status, resolve_model};
 pub use models::add_outcome::AddOutcome;
 pub use models::context_block::ContextBlock;
 pub use models::context_request::ContextRequest;
-pub use models::enums::{MemoryKind, MemoryStatus, RefType, Route, Source};
+pub use models::enums::{Domain, MemoryKind, MemoryStatus, NoteStatus, RefType, Route, Source};
 pub use models::hit::Hit;
 pub use models::index_options::IndexOptions;
 pub use models::index_report::IndexReport;

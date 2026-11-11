@@ -98,6 +98,8 @@ impl MemoryManager<'_> {
         {
             let mut query = SearchQuery::new(request.project.clone(), query_text.clone());
             query.k = EXCERPT_K;
+            query.domains = request.domains.clone();
+            query.agent_type = request.agent_type.clone();
             query.sources = match request.route {
                 Some(route) => route.sources().to_vec(),
                 None => DEFAULT_SOURCES.to_vec(),

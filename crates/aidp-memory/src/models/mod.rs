@@ -1,7 +1,9 @@
 //! Data models of this crate: one struct per file, constants and enums apart.
 
 pub mod add_outcome;
+pub mod agent_role;
 pub mod chunk;
+pub mod chunk_meta;
 pub mod constants;
 pub mod context_block;
 pub mod context_request;
@@ -9,11 +11,13 @@ pub mod enums;
 pub mod eval_case;
 pub mod eval_miss;
 pub mod eval_report;
+pub mod glossary;
 pub mod hit;
 pub mod index_options;
 pub mod index_report;
 pub mod index_root;
 pub mod ingest_report;
+pub mod knowledge_note;
 pub mod memory;
 pub mod memory_filter;
 pub mod memory_note;
@@ -22,6 +26,7 @@ pub mod memory_ref;
 pub mod memory_scope;
 pub mod model_status;
 pub mod new_memory;
+pub mod note_frontmatter;
 pub mod packed;
 pub mod project_ref;
 pub mod purge_report;

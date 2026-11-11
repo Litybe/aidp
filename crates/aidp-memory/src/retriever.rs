@@ -2,12 +2,14 @@
 
 use crate::error::Result;
 use crate::graph::CodeGraph;
+use crate::knowledge_filter::{boost_importance, retain_allowed};
 use crate::mmr;
 use crate::models::constants::limits::{
     CANDIDATE_FACTOR, FILTERED_CANDIDATES, GRAPH_DAMPING, GRAPH_MAX_ADDED,
     GRAPH_NEIGHBOURS_PER_SEED, GRAPH_SEED_HITS, JOURNAL_SEGMENT, JOURNAL_WEIGHT, MIN_CANDIDATES,
     MMR_LAMBDA, SOURCE_WEIGHTS,
 };
+use crate::models::constants::schema::GLOBAL_PROJECT;
 use crate::models::enums::Source;
 use crate::models::hit::Hit;
 use crate::models::search_query::SearchQuery;
@@ -69,9 +71,10 @@ impl<'a> Bm25Retriever<'a> {
         let sql = format!(
             "SELECT {CHUNK_COLUMNS}, bm25(chunks_fts, {weights}) AS rank \
              FROM chunks_fts JOIN chunks c ON c.rowid = chunks_fts.rowid \
-             WHERE chunks_fts MATCH ?1 AND c.project = ?2 {filter}\
+             WHERE chunks_fts MATCH ?1 AND {scope} {filter}\
              ORDER BY rank LIMIT ?3",
-            weights = crate::models::constants::schema::CHUNK_WEIGHTS
+            weights = crate::models::constants::schema::CHUNK_WEIGHTS,
+            scope = project_scope("?2")
         );
         self.store.read(|connection| {
             let mut statement = connection.prepare(&sql)?;
@@ -178,7 +181,7 @@ impl Bm25Retriever<'_> {
             return Ok(Vec::new());
         };
         let pattern = path_pattern(query)?;
-        let limit = if pattern.is_some() {
+        let limit = if pattern.is_some() || query.filters_knowledge() {
             FILTERED_CANDIDATES
         } else {
             (query.k * CANDIDATE_FACTOR).max(MIN_CANDIDATES)
@@ -188,6 +191,7 @@ impl Bm25Retriever<'_> {
         if let Some(pattern) = &pattern {
             hits.retain(|hit| pattern.matches(&hit.path));
         }
+        let mut hits = retain_allowed(self.store, query, hits)?;
         hits.sort_by(|left, right| right.score.total_cmp(&left.score));
         Ok(hits)
     }
@@ -195,8 +199,18 @@ impl Bm25Retriever<'_> {
 
 impl Retriever for Bm25Retriever<'_> {
     fn search(&self, query: &SearchQuery) -> Result<Vec<Hit>> {
-        Ok(mmr::select(self.ranked(query)?, query.k, MMR_LAMBDA))
+        let mut hits = self.ranked(query)?;
+        boost_importance(self.store, &mut hits)?;
+        Ok(mmr::select(hits, query.k, MMR_LAMBDA))
     }
+}
+
+/// SQL condition selecting the chunks of the project bound to `parameter`, and the global knowledge notes.
+pub(crate) fn project_scope(parameter: &str) -> String {
+    format!(
+        "(c.project = {parameter} OR (c.project = '{GLOBAL_PROJECT}' AND c.source = '{}'))",
+        Source::Knowledge.as_str()
+    )
 }
 
 /// The compiled `--path` glob of a query, if any.
