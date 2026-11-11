@@ -180,3 +180,19 @@ fn the_pixel_agent_reads_its_own_notes() {
         .expect("a block");
     assert!(block.contains(OUTLINE_NOTE), "{block}");
 }
+
+#[test]
+fn the_default_provider_falls_back_to_the_lexical_block_when_the_daemon_is_down() {
+    let dead_port = {
+        let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        listener.local_addr().unwrap().port()
+    };
+    std::env::set_var("AIDP_GATEWAY_URL", format!("http://127.0.0.1:{dead_port}"));
+    let setup = setup();
+    let provider = KnowledgeContextProvider::new(setup.gateway.path())
+        .with_vault(Some(setup.vault.path().to_path_buf()));
+    let block = provider
+        .stage_context(&request(&setup, UNITY_AGENT, "coyote saut plateforme"))
+        .expect("a block");
+    assert!(block.contains(COYOTE_NOTE), "{block}");
+}

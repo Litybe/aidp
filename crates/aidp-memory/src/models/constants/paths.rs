@@ -55,3 +55,5 @@ pub const BACKSLASH: char = '\\';
 pub const TICKETS_DIR: &str = "TODO";
 /// Extension of a mirrored ticket.
 pub const TICKET_EXTENSION: &str = "md";
+/// File holding the model service settings, under the memory folder.
+pub const MODEL_SETTINGS_FILE: &str = "model.json";

@@ -1,6 +1,7 @@
 //! The `aidp rag` and `aidp memory` subcommand trees.
 
 use crate::models::enums::memory_hook_event::MemoryHookEvent;
+use crate::models::enums::switch_arg::SwitchArg;
 use clap::Subcommand;
 use std::path::PathBuf;
 
@@ -339,6 +340,17 @@ pub enum MemoryInboxOp {
 
 #[derive(Subcommand)]
 pub enum MemoryModelOp {
-    /// Print the model folder, whether it is installed, its vector size and the chunks embedded.
+    /// Print the state of the model service of the daemon; without the daemon, the files and vectors on disk.
     Status,
+    /// Load the model in the daemon (the one instance every caller shares).
+    Start,
+    /// Unload the model from the daemon and free its memory.
+    Stop,
+    /// Choose whether the daemon loads the model when it starts.
+    Autostart {
+        #[arg(value_enum)]
+        value: SwitchArg,
+    },
+    /// Embed, in the daemon, the chunks that lack a vector of the model.
+    EmbedPending,
 }

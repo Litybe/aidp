@@ -7,8 +7,11 @@ use crate::flows::http_routes::{
 use crate::models::enums::PrReference;
 use crate::models::gateway_http_error::GatewayHttpError;
 use crate::models::gateway_unreachable::GatewayUnreachable;
+use crate::models::model_patch_body::ModelPatchBody;
 use crate::models::{AdoptRequest, StartBody, StartOrigin, WorkspaceRequest};
-use crate::routes::{DISPATCHER_BUDGET, DISPATCHER_PLAN, DISPATCHER_TICK, PROJECTS, TICKETS};
+use crate::routes::{
+    DISPATCHER_BUDGET, DISPATCHER_PLAN, DISPATCHER_TICK, MEMORY_MODEL, PROJECTS, TICKETS,
+};
 use anyhow::anyhow;
 use serde_json::{json, Value};
 
@@ -120,6 +123,12 @@ pub(crate) fn post_long(url: &Option<String>, path: &str, body: Value) -> anyhow
 pub(crate) fn put(url: &Option<String>, path: &str, body: Value) -> anyhow::Result<Value> {
     call(
         with_auth(crate::net::agent().put(&format!("{}{}", base(url), path))),
+        Some(body),
+    )
+}
+pub(crate) fn patch(url: &Option<String>, path: &str, body: Value) -> anyhow::Result<Value> {
+    call(
+        with_auth(crate::net::agent().request("PATCH", &format!("{}{}", base(url), path))),
         Some(body),
     )
 }
@@ -447,6 +456,25 @@ pub fn ticket_start(
         body["track"] = json!(v);
     }
     post(url, &format!("{TICKETS}/{key}/start"), body)
+}
+
+/// The state of the embedding model service (`aidp memory model status`).
+pub fn memory_model_status(url: &Option<String>) -> anyhow::Result<Value> {
+    get(url, MEMORY_MODEL)
+}
+
+/// Runs one action of the model service: `start`, `stop` or `embed-pending`.
+pub fn memory_model_action(url: &Option<String>, action: &str) -> anyhow::Result<Value> {
+    post(url, &format!("{MEMORY_MODEL}/{action}"), json!({}))
+}
+
+/// Saves whether the daemon loads the model when it starts.
+pub fn memory_model_autostart(url: &Option<String>, autostart: bool) -> anyhow::Result<Value> {
+    patch(
+        url,
+        MEMORY_MODEL,
+        serde_json::to_value(ModelPatchBody { autostart })?,
+    )
 }
 
 /// Adopt an existing pull request (url or number) for a ticket (`aidp ticket adopt`).

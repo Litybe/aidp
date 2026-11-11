@@ -30,6 +30,8 @@ pub const DISPATCHER_TICK: &str = "/api/dispatcher/tick";
 pub const DISPATCHER_BUDGET: &str = "/api/dispatcher/budget";
 /// Tickets collection route.
 pub const TICKETS: &str = "/api/tickets";
+/// Embedding model service of the daemon.
+pub const MEMORY_MODEL: &str = "/api/memory/model";
 /// Recent events route.
 pub const EVENTS_RECENT: &str = "/api/events/recent";
 /// Path segment of a project's Claude Code transcripts, under `/api/projects/:id/`.

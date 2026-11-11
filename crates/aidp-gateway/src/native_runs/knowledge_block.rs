@@ -2,12 +2,20 @@
 
 use aidp_core::pipeline;
 use aidp_core::run::{self, RunState};
-use aidp_memory::KnowledgeContextProvider;
+use aidp_memory::{Embedder, KnowledgeContextProvider, SharedEmbedder};
 use std::path::Path;
+use std::sync::Arc;
 
 /// Fills `state.stage_knowledge` when the pipeline enables `settings.knowledge`.
-/// A failure is logged and leaves the prompts without the block.
-pub fn freeze(gateway_dir: &Path, vault_root: Option<&Path>, state: &mut RunState) {
+///
+/// `embedder` is the daemon's own running model, never a call back to the daemon: without it the
+/// search is lexical. A failure is logged and leaves the prompts without the block.
+pub fn freeze(
+    gateway_dir: &Path,
+    vault_root: Option<&Path>,
+    embedder: Option<Arc<dyn Embedder>>,
+    state: &mut RunState,
+) {
     let pipe = match pipeline::load(&state.pipeline_path) {
         Ok(pipe) => pipe,
         Err(error) => {
@@ -15,8 +23,13 @@ pub fn freeze(gateway_dir: &Path, vault_root: Option<&Path>, state: &mut RunStat
             return;
         }
     };
-    let provider =
-        KnowledgeContextProvider::new(gateway_dir).with_vault(vault_root.map(Path::to_path_buf));
+    let provider = KnowledgeContextProvider::new(gateway_dir)
+        .with_vault(vault_root.map(Path::to_path_buf))
+        .with_embedder_loader(move |_| {
+            embedder
+                .clone()
+                .map(|shared| Box::new(SharedEmbedder(shared)) as Box<dyn Embedder>)
+        });
     if let Err(error) = run::ensure_stage_knowledge(state, &pipe, Some(&provider)) {
         tracing::warn!(%error, "knowledge block not frozen");
     }

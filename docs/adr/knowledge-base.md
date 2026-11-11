@@ -78,3 +78,11 @@ C10 text once they enable `settings.knowledge` (skill raises `min_aidp_version`)
   non-existent map agents are gone from the role table.
 - Embedding: `model2vec-rs` with the `wasm` feature, so the build needs no C++ toolchain or
   libstdc++.
+- Embedding model: one instance per machine, owned by the gateway daemon (`ModelService`: `stopped`,
+  `loading`, `running`, `error`; started and stopped from `aidp memory model` or the studio; `autostart`
+  in `memory/model.json`). The model weighs about 0.5 GB of RAM, and a model per CLI call or per hook
+  was not acceptable. Every other caller embeds through `POST /api/embed` (`RemoteEmbedder`) when the
+  daemon reports the model `running`, and falls back to BM25 plus the glossary otherwise; the
+  `SubagentStart` hook is hybrid again, with a strict 500 ms probe and 500 ms query budget. Only the
+  daemon calls `load_default_embedder`. Vectors written by a CLI process carry the model id the daemon
+  reports, so a daemon restart on another model re-embeds them like any stale vector.

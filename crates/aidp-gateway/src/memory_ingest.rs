@@ -3,12 +3,15 @@
 //! triggers both. Failures here are logged, never raised to the run or the flow.
 
 use crate::bus::Bus;
+use crate::model_service::ModelService;
+use crate::models::constants::model_service::TRIGGER_EMBED_PENDING;
 use crate::models::memory_catch_up_report::MemoryCatchUpReport;
 use crate::models::native_run_view::NativeRunView;
 use crate::native_runs::{NativeRunManager, EVENT_RUN_ENDED};
 use crate::projects::{Project, Projects};
 use crate::sync::lock;
-use aidp_memory::embedding_index::embed_projects;
+use aidp_memory::embedding_index::{embed_projects, vector_counts};
+use aidp_memory::models::constants::embedding::DEFAULT_MODEL_NAME;
 use aidp_memory::models::constants::knowledge_proposals::{
     KNOWLEDGE_PROPOSALS_FILE, RUN_SOURCE_PREFIX,
 };
@@ -17,17 +20,18 @@ use aidp_memory::models::constants::paths::{NOTES_DIR, PROPOSALS_FILE};
 use aidp_memory::models::constants::schema::GLOBAL_PROJECT;
 use aidp_memory::models::ingest_report::IngestReport;
 use aidp_memory::models::knowledge_ingest_report::KnowledgeIngestReport;
+use aidp_memory::models::model_chunks::ModelChunks;
 use aidp_memory::{
-    build_retriever, install_vault_glossary, load_default_embedder, Embedder, IndexOptions,
-    IndexReport, IndexRoot, Indexer, KnowledgeIngestor, Memory, MemoryError, MemoryManager,
-    MemoryStore, ProjectRef, Retriever, SharedEmbedder, Source,
+    build_retriever, install_vault_glossary, Embedder, IndexOptions, IndexReport, IndexRoot,
+    Indexer, KnowledgeIngestor, Memory, MemoryError, MemoryManager, MemoryStore, ProjectRef,
+    Retriever, SharedEmbedder, Source,
 };
 use chrono::{DateTime, Duration, Utc};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, VecDeque};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex};
 
 /// Published by the flow executor after a successful `gh.merge`: `{ key, repo }`.
 pub const EVENT_FLOW_MERGED: &str = "flow.merged";
@@ -71,6 +75,8 @@ pub struct ReindexJob {
     pub full: bool,
     /// Why it runs: `api` or `merge`.
     pub trigger: String,
+    /// Only embed the chunks that lack a vector, in every project; nothing is re-read from disk.
+    pub embed_only: bool,
 }
 
 /// What `enqueue_reindex` did with a job.
@@ -108,35 +114,41 @@ pub struct MemoryHub {
     queue: Mutex<Queue>,
     ledger: Mutex<()>,
     ingest_gate: Mutex<()>,
-    embedder: OnceLock<Option<Arc<dyn Embedder>>>,
+    model: Arc<ModelService>,
 }
 
 impl MemoryHub {
-    /// `state_dir` is the gateway directory (`memory/memory.db` lives under it).
+    /// `state_dir` is the gateway directory (`memory/memory.db` lives under it); the model starts stopped.
     pub fn new(state_dir: &Path, vault_root: &Path, bus: Arc<Bus>) -> Arc<Self> {
-        Self::build(state_dir, vault_root, bus, OnceLock::new())
+        let model = ModelService::new(state_dir, bus.clone());
+        Self::with_model(state_dir, vault_root, bus, model)
     }
 
-    /// Like [`MemoryHub::new`] with the embedding model given instead of loaded from disk.
+    /// Like [`MemoryHub::new`] with the embedding model given, already running, instead of loaded from disk.
     pub fn with_embedder(
         state_dir: &Path,
         vault_root: &Path,
         bus: Arc<Bus>,
         embedder: Option<Arc<dyn Embedder>>,
     ) -> Arc<Self> {
-        Self::build(state_dir, vault_root, bus, OnceLock::from(embedder))
+        let model = match embedder {
+            Some(embedder) => ModelService::running(state_dir, bus.clone(), embedder),
+            None => ModelService::new(state_dir, bus.clone()),
+        };
+        Self::with_model(state_dir, vault_root, bus, model)
     }
 
-    fn build(
+    /// Like [`MemoryHub::new`] over the model service the daemon shares with the native runs.
+    pub fn with_model(
         state_dir: &Path,
         vault_root: &Path,
         bus: Arc<Bus>,
-        embedder: OnceLock<Option<Arc<dyn Embedder>>>,
+        model: Arc<ModelService>,
     ) -> Arc<Self> {
         if !vault_root.as_os_str().is_empty() {
             install_vault_glossary(vault_root);
         }
-        Arc::new(Self {
+        let hub = Arc::new(Self {
             state_dir: state_dir.to_path_buf(),
             vault_root: vault_root.to_path_buf(),
             bus,
@@ -144,15 +156,39 @@ impl MemoryHub {
             queue: Mutex::new(Queue::default()),
             ledger: Mutex::new(()),
             ingest_gate: Mutex::new(()),
-            embedder,
-        })
+            model: model.clone(),
+        });
+        let weak = Arc::downgrade(&hub);
+        model.set_coverage(Arc::new(move || {
+            weak.upgrade()
+                .map(|hub| hub.chunk_coverage())
+                .unwrap_or_default()
+        }));
+        hub
     }
 
-    /// The embedding model, loaded on first use; `None` (and one warning) when it is not installed.
+    /// The model service of the daemon: the only place the embedding model is loaded.
+    pub fn model(&self) -> &Arc<ModelService> {
+        &self.model
+    }
+
+    /// The embedding model when it is running; `None` otherwise, and search is lexical.
     pub fn embedder(&self) -> Option<Arc<dyn Embedder>> {
-        self.embedder
-            .get_or_init(|| load_default_embedder(&self.state_dir).map(Arc::from))
-            .clone()
+        self.model.embedder()
+    }
+
+    fn chunk_coverage(&self) -> ModelChunks {
+        let counts = self.store().and_then(|store| {
+            store.read(|connection| vector_counts(connection, DEFAULT_MODEL_NAME))
+        });
+        match counts {
+            Ok((embedded, stale, total)) => ModelChunks {
+                total,
+                embedded,
+                stale,
+            },
+            Err(_) => ModelChunks::default(),
+        }
     }
 
     /// The retriever the CLI builds: hybrid when the model is installed, BM25 otherwise.
@@ -341,6 +377,9 @@ impl MemoryHub {
 
     fn run_reindex(&self, job: &ReindexJob) -> Result<IndexReport, MemoryError> {
         let store = self.store()?;
+        if job.embed_only {
+            return self.run_embed_pending(&store);
+        }
         let options = IndexOptions {
             sources: job.sources.clone(),
             full: job.full,
@@ -353,6 +392,39 @@ impl MemoryHub {
             indexer = indexer.with_embedder(model);
         }
         indexer.index(&job.project, &options)
+    }
+
+    fn run_embed_pending(&self, store: &MemoryStore) -> Result<IndexReport, MemoryError> {
+        let started = std::time::Instant::now();
+        let embedder = self.embedder().ok_or_else(|| {
+            MemoryError::Embedding("the embedding model is not running".to_string())
+        })?;
+        let projects: Vec<String> = store.read(|connection| {
+            let mut statement = connection.prepare("SELECT DISTINCT project FROM chunks")?;
+            let rows = statement.query_map([], |row| row.get::<_, String>(0))?;
+            Ok(rows.collect::<Result<Vec<_>, _>>()?)
+        })?;
+        let keys: Vec<&str> = projects.iter().map(String::as_str).collect();
+        let embedded = embed_projects(store, embedder.as_ref(), &keys, None)?;
+        Ok(IndexReport {
+            embedded,
+            duration_ms: started.elapsed().as_millis() as u64,
+            ..IndexReport::default()
+        })
+    }
+
+    /// Queues the embedding of every chunk lacking a vector of the running model.
+    pub fn enqueue_embed_pending(self: &Arc<Self>) -> Enqueued {
+        self.enqueue_reindex(ReindexJob {
+            project: ProjectRef {
+                key: GLOBAL_PROJECT.to_string(),
+                root: PathBuf::new(),
+            },
+            sources: Vec::new(),
+            full: false,
+            trigger: TRIGGER_EMBED_PENDING.to_string(),
+            embed_only: true,
+        })
     }
 
     /// Ingests what a run proposed: its memories (with the issue, pull request and run references
@@ -596,6 +668,7 @@ impl MemoryHub {
             sources: RUN_SOURCES.to_vec(),
             full: false,
             trigger: TRIGGER_RUN.to_string(),
+            embed_only: false,
         });
     }
 
@@ -636,6 +709,7 @@ impl MemoryHub {
                 sources: RUN_SOURCES.to_vec(),
                 full: false,
                 trigger: TRIGGER_CATCH_UP.to_string(),
+                embed_only: false,
             });
         }
         report
@@ -677,6 +751,7 @@ impl MemoryHub {
             sources: MERGE_SOURCES.to_vec(),
             full: false,
             trigger: "merge".to_string(),
+            embed_only: false,
         });
     }
 
@@ -709,6 +784,7 @@ fn reindex_payload(job: &ReindexJob, report: &IndexReport) -> Value {
         "removed": report.removed,
         "unchanged": report.unchanged,
         "chunks": report.chunks,
+        "embedded": report.embedded,
         "durationMs": report.duration_ms,
     })
 }

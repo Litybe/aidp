@@ -39,6 +39,8 @@ pub mod manual_run;
 pub mod mcp_configurations;
 pub mod memory_ingest;
 pub mod memory_routes;
+pub mod model_routes;
+pub mod model_service;
 pub mod models;
 pub mod native_runs;
 pub mod net;

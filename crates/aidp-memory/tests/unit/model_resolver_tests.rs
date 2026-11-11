@@ -80,3 +80,23 @@ fn status_counts_vectors_of_the_default_model_and_stale_ones() {
     assert_eq!(stale.embedded_chunks, 0);
     assert_eq!(stale.stale_chunks, report.chunks);
 }
+
+#[test]
+fn weights_bytes_is_the_size_of_the_weights_file_or_none() {
+    let gateway = tempfile::tempdir().unwrap();
+    assert_eq!(model_weights_bytes(gateway.path()), None);
+    let dir = model_dir(gateway.path());
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join(MODEL_FILES[0]), vec![0u8; 1234]).unwrap();
+    assert_eq!(model_weights_bytes(gateway.path()), Some(1234));
+}
+
+#[test]
+fn status_never_loads_the_model_to_learn_its_size() {
+    let gateway = tempfile::tempdir().unwrap();
+    write_model_files(gateway.path());
+    let store = MemoryStore::open_in_memory().unwrap();
+    let status = model_status(&store, gateway.path()).unwrap();
+    assert!(status.present);
+    assert_eq!(status.dim, None);
+}

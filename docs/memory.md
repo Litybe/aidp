@@ -5,7 +5,7 @@ and a store of durable lessons (`aidp memory`). One SQLite database holds both:
 `<AIDP_GATEWAY_DIR>/memory/memory.db` (WAL, one writer connection, versioned migrations in
 `crates/aidp-memory/migrations/`, `PRAGMA user_version` = number of applied migrations). Search is
 BM25 over FTS5 plus an expansion through the graphify code graph. When a static-embedding model is
-installed (see [Embedding model](#embedding-model)), a brute-force cosine search over stored vectors
+running in the daemon (see [Embedding model](#embedding-model)), a brute-force cosine search over stored vectors
 is fused with it (hybrid retrieval); without a model, search stays BM25 only.
 
 ## Model
@@ -48,7 +48,7 @@ A query longer than 24 terms keeps its most telling ones: terms of its first lin
 identifiers (inner capital, underscore) 2 more, and each repetition 1 more. A mirrored ticket is
 searched as its `summary` then its body; its frontmatter is dropped.
 
-Hybrid retrieval, used automatically when the model is installed (`--lexical` forces BM25):
+Hybrid retrieval, used automatically when the daemon model is running (`--lexical` forces BM25):
 
 - BM25 and graph candidates are ranked as below, and the vector side ranks every stored vector of
   the same project (and `--source` filter) by cosine similarity with the query (at least 60
@@ -205,7 +205,7 @@ mapping without `enabled` stays off.
   `issue`, `ticket` or `jira_key` input), the stage id, its description and the agent type. Domains and
   the `agents` filter come from the agent role table; the route is `settings.knowledge.route`, else the
   ticket route, else the route of the role.
-- Retrieval: the hybrid retriever when the embedding model is installed, BM25 otherwise, through
+- Retrieval: the hybrid retriever when the embedding model runs in the daemon, BM25 otherwise, through
   `MemoryManager::context` (memories first, then excerpts, under the stage budget).
 - Frozen: the block of each stage is stored in `run-state.json` under `stage_knowledge` the first time
   the script is emitted (an empty string when nothing matched), so a re-emit, a resume or a gate gives
@@ -218,7 +218,7 @@ mapping without `enabled` stays off.
 In code, `aidp-core` declares `ContextProvider::stage_context(&StageContextRequest) -> Option<String>`
 and `run::ensure_stage_knowledge(&mut RunState, &Pipeline, Option<&dyn ContextProvider>)`;
 `aidp_memory::KnowledgeContextProvider::new(gateway_dir).with_vault(root)` implements it
-(`.lexical()` forces BM25, `.with_embedder_loader(..)` swaps the model loader).
+(`.lexical()` forces BM25, `.with_embedder_loader(..)` swaps the loader; the default one asks the daemon, the daemon itself lends its own instance).
 
 ## Embedding model
 
@@ -233,9 +233,37 @@ install it once by hand:
 git clone https://huggingface.co/minishlab/potion-multilingual-128M <AIDP_GATEWAY_DIR>/memory/models/potion-multilingual-128M
 ```
 
-(`git lfs` must be installed, the weights are an LFS file.) `aidp memory model status` prints the
-folder, whether it is complete, the vector size and the number of chunks embedded. Without the
-model, every command logs one warning and uses BM25 only.
+(`git lfs` must be installed, the weights are an LFS file.)
+
+### One instance, owned by the daemon
+
+The model takes about 0.5 GB of RAM, so it is loaded once, by the gateway daemon (`ModelService` in
+`aidp-gateway`, states `stopped`, `loading`, `running`, `error`). Nobody else loads it:
+
+- The daemon loads it on a background thread at start when `autostart` is on (default: on when the
+  model is installed; saved in `<AIDP_GATEWAY_DIR>/memory/model.json`), or on `aidp memory model start`
+  (also the studio button). `aidp memory model stop` drops it and frees the memory.
+- The daemon uses it directly for its own search, ingestion and the knowledge blocks of native runs.
+- Every other caller (`rag index`, `rag search`, `memory context`, the knowledge blocks frozen by `aidp
+  run` and `workflow emit`, `memory sync`, the `SubagentStart` hook) uses `RemoteEmbedder`, which asks
+  `POST /api/embed` of the daemon (`AIDP_GATEWAY_URL`, default `http://127.0.0.1:3001`, `AIDP_UI_TOKEN`
+  when the daemon needs one). The probe `GET /api/memory/model` must say `running`; connect timeout 300
+  ms, probe 500 ms, batches of at most 256 texts with a 10 s read timeout.
+- Daemon down, model stopped, still loading or failed: the caller logs one warning and searches with
+  BM25 plus the glossary only (`rag index` then stores no vectors; `--embed` makes that an error). The
+  hook is silent and strict: probe and query embedding each wait at most 500 ms, so a hung daemon never
+  delays an agent by more than a second, then the hook goes lexical.
+- A caller that indexes while the model is down leaves chunks without vectors; `aidp memory model
+  embed-pending` (or the studio button) embeds them in the daemon. A daemon that autostarts the model
+  after the start-up catch-up needs that call too.
+- `load_default_embedder` stays in `aidp-memory` for the daemon only.
+
+`aidp memory model status|start|stop|autostart on|off|embed-pending` call the routes of
+[the gateway API](gateway-api.md#embedding-model-service). `status` without a reachable daemon prints
+the folder, whether it is complete, the vectors counted in the database, and says the daemon is not
+running (exit 0); the other verbs exit 5 when the daemon is unreachable, 4 when it refuses (model not
+installed, not running), 3 or 7 for a missing route or a bad request. The RAM figure is an estimate (the
+size of `model.safetensors`).
 
 Vectors live in `chunk_vectors (chunk_id, model, dim, vector)`: one row per chunk, the vector an
 f32 little-endian blob, deleted with its chunk. Memories are indexed as `memory` chunks, so they
@@ -261,7 +289,7 @@ aidp rag eval --cases <yaml> [--project P] [--k 5] [--lexical]
 aidp memory recall "<question>" [--project P] [--route R] [--budget 1500] [--lexical]
 aidp memory context [--project P] [--issue GH-214] [--route code|art|map|doc] [--stage id] [--budget 2000] [--lexical]
                     [--domain d]... [--agent-type <t>]
-aidp memory model status
+aidp memory model status|start|stop|autostart on|off|embed-pending
 aidp memory add --kind K --title T --text X [--route R] [--path G]... [--tag T]... [--ref issue:GH-12]...
                 [--status proposed|active] [--confidence 0.7] [--supersedes M-3]
 aidp memory list [--status S] [--kind K] [--q words]
@@ -275,9 +303,10 @@ aidp memory inbox list|approve <path>|reject <path>
 ```
 
 `rag index` prints `{ indexed, updated, removed, unchanged, chunks, embedded, durationMs, skippedSources }`.
-It embeds automatically when the model is installed; `--embed` makes a missing model an error (exit 7).
-`memory model status` prints `{ model, path, present, dim, embeddedChunks, staleChunks, totalChunks }`
-(`staleChunks`: vectors of another model, re-embedded by the next `rag index`).
+It embeds automatically when the daemon model is running; `--embed` makes a model that is not running an error (exit 7).
+`memory model status` prints the status body of the daemon (see the gateway API); without the daemon it prints
+`{ daemonRunning: false, model, path, present, dim, embeddedChunks, staleChunks, totalChunks }` (`staleChunks`:
+vectors of another model, re-embedded by the next `rag index`).
 `run`, `ticket` and `knowledge` need a vault (`--vault`, `AIDP_VAULT`, or auto-detected); without
 one they are listed in `skippedSources`. `rag search --format json` prints
 `[{ id, source, path, lines, citation, title, score, via, text }]`.
@@ -393,7 +422,7 @@ and prints nothing on failure, inside a pipeline agent (`AIDP_RUN`) or in an ext
 | `prompt` | injects the 3 active memories sharing the most words with the prompt, at least 2 words, 400 tokens at most; injected memories count as used |
 | `stop` | rewrites the session journal; starts an extraction every 5 new prompts |
 | `pre-compact`, `session-end` | rewrites the journal; starts an extraction when a session of 2 prompts or more has new prompts |
-| `subagent-start` | injects the knowledge notes for the sub-agent's `agent_type` (see below) |
+| `subagent-start` | injects the knowledge notes for the sub-agent's `agent_type` (see below); hybrid through the daemon model when it is running, lexical otherwise |
 
 `subagent-start` reads the SubagentStart JSON (`session_id`, `cwd`, `agent_type`, `agent_id`,
 `hook_event_name`, and `prompt` or `description` when present). The query is that text, else the

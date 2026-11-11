@@ -173,6 +173,7 @@ fn reindex_runs_in_the_background_and_publishes_counters() {
         sources: vec![Source::Doc],
         full: false,
         trigger: "api".to_string(),
+        embed_only: false,
     };
     assert_eq!(hub.enqueue_reindex(job), Enqueued::Started);
     let data = wait_reindexed(&events);
@@ -462,6 +463,7 @@ fn the_hub_retriever_follows_the_embedder_and_the_lexical_flag() {
         sources: vec![Source::Doc],
         full: false,
         trigger: "api".to_string(),
+        embed_only: false,
     });
     while hub.reindexing() {
         std::thread::sleep(std::time::Duration::from_millis(20));

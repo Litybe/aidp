@@ -9,6 +9,7 @@ pub mod gate_approve_resume;
 pub mod hit_view;
 pub mod hook_payload;
 pub mod hook_reply;
+pub mod model_status_fallback;
 pub mod pipeline_validation_failure;
 pub mod plan_status_envelope;
 pub mod plan_task_status_count;

@@ -372,6 +372,7 @@ fn reindex(scope: &Scope, body: &Value) -> Reply {
         sources,
         full: body.get("full").and_then(Value::as_bool).unwrap_or(false),
         trigger: TRIGGER_API.to_string(),
+        embed_only: false,
     };
     match scope.hub.enqueue_reindex(job) {
         Enqueued::Started => (

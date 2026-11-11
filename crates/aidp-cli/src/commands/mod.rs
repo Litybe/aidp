@@ -13,6 +13,7 @@ pub mod knowledge;
 pub mod memory;
 pub mod memory_hook;
 pub mod memory_knowledge;
+pub mod memory_model;
 pub mod mock;
 pub mod pipeline;
 pub mod progress;

@@ -38,7 +38,7 @@ fn an_enabled_pipeline_freezes_a_block_per_agent_stage_in_the_given_gateway_only
     std::fs::create_dir_all(root.path().join("workspace")).unwrap();
     let mut state = state_for(root.path(), ENABLED);
 
-    freeze(&gateway, None, &mut state);
+    freeze(&gateway, None, None, &mut state);
 
     let names: Vec<&str> = state.stage_knowledge.keys().map(String::as_str).collect();
     assert_eq!(names, ["implement", "plan"]);
@@ -51,7 +51,7 @@ fn a_pipeline_without_the_setting_freezes_nothing() {
     let gateway = root.path().join("gateway");
     let mut state = state_for(root.path(), DISABLED);
 
-    freeze(&gateway, None, &mut state);
+    freeze(&gateway, None, None, &mut state);
 
     assert!(state.stage_knowledge.is_empty());
     assert!(!gateway.exists());
@@ -63,7 +63,7 @@ fn an_unreadable_pipeline_is_skipped() {
     let mut state = state_for(root.path(), ENABLED);
     state.pipeline_path = root.path().join("missing.yaml");
 
-    freeze(&root.path().join("gateway"), None, &mut state);
+    freeze(&root.path().join("gateway"), None, None, &mut state);
 
     assert!(state.stage_knowledge.is_empty());
 }

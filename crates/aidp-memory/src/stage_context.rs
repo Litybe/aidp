@@ -7,7 +7,6 @@ use crate::error::Result;
 use crate::glossary;
 use crate::hybrid::HybridRetriever;
 use crate::manager::MemoryManager;
-use crate::model_resolver::load_default_embedder;
 use crate::models::constants::knowledge::{
     DEMOTED_HEADING_PREFIX, HEADING_PREFIX, KNOWLEDGE_DIR, STAGE_QUERY_SEPARATOR,
 };
@@ -16,6 +15,7 @@ use crate::models::context_request::ContextRequest;
 use crate::models::enums::Route;
 use crate::models::shared_embedder::SharedEmbedder;
 use crate::project::resolve_project;
+use crate::remote_embedder::remote_embedder;
 use crate::retriever::{Bm25Retriever, Retriever};
 use crate::store::MemoryStore;
 use aidp_core::context_provider::ContextProvider;
@@ -37,12 +37,12 @@ pub struct KnowledgeContextProvider {
 }
 
 impl KnowledgeContextProvider {
-    /// A provider reading `<gateway_dir>/memory/memory.db`, with the default embedding model.
+    /// A provider reading `<gateway_dir>/memory/memory.db`, embedding through the running daemon when there is one.
     pub fn new(gateway_dir: impl Into<PathBuf>) -> Self {
         Self {
             gateway_dir: gateway_dir.into(),
             vault_root: None,
-            load_embedder: Box::new(load_default_embedder),
+            load_embedder: Box::new(|_| remote_embedder()),
             embedder: OnceLock::new(),
         }
     }

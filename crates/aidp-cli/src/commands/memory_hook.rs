@@ -2,7 +2,7 @@
 //!
 //! A hook never fails the session: every error is logged and the hook stays silent.
 
-use super::memory::{knowledge_dir, open, retriever, Opened};
+use super::memory::{hook_retriever, knowledge_dir, open, Opened};
 use super::CommandOutput;
 use crate::args::memory::ProjectArg;
 use crate::ctx::Ctx;
@@ -107,7 +107,7 @@ fn subagent_knowledge(
     let prompt = payload.prompt.as_deref().or(payload.description.as_deref());
     let route = prompt.and_then(route_in_text);
     let context = agent_knowledge(
-        retriever(opened, true).as_ref(),
+        hook_retriever(opened).as_ref(),
         &opened.project.key,
         agent_type,
         prompt,

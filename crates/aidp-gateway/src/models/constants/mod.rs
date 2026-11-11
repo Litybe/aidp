@@ -44,6 +44,7 @@ pub mod ticket_flow;
 
 pub mod mcp;
 pub mod mcp_configuration;
+pub mod model_service;
 
 pub mod flow_manual;
 pub mod settings;

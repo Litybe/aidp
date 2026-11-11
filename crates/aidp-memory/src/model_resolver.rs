@@ -44,7 +44,15 @@ pub fn load_default_embedder(gateway_dir: &Path) -> Option<Box<dyn Embedder>> {
     }
 }
 
-/// Presence, size and coverage of the default model; the model is loaded only when no vector gives the size.
+/// Size in bytes of the weights file of the default model: an estimate of the RAM it takes once loaded.
+pub fn model_weights_bytes(gateway_dir: &Path) -> Option<u64> {
+    let weights = model_dir(gateway_dir).join(MODEL_FILES[0]);
+    std::fs::metadata(weights)
+        .ok()
+        .map(|metadata| metadata.len())
+}
+
+/// Presence, size and coverage of the default model; the size comes from the stored vectors, never from loading the model here.
 pub fn model_status(store: &MemoryStore, gateway_dir: &Path) -> Result<ModelStatus> {
     let path = model_dir(gateway_dir);
     let present = resolve_model(gateway_dir).is_some();
@@ -59,11 +67,7 @@ pub fn model_status(store: &MemoryStore, gateway_dir: &Path) -> Result<ModelStat
             .ok();
         Ok((embedded, stale, total, dim))
     })?;
-    let dim = stored_dim.map(|dim| dim as usize).or_else(|| {
-        present
-            .then(|| Model2VecEmbedder::load(&path).ok().map(|model| model.dim()))
-            .flatten()
-    });
+    let dim = stored_dim.map(|dim| dim as usize);
     Ok(ModelStatus {
         model: DEFAULT_MODEL_NAME.to_string(),
         path,

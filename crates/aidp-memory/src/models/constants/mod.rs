@@ -7,6 +7,7 @@ pub mod limits;
 pub mod notes;
 pub mod paths;
 pub mod proposal_fields;
+pub mod remote;
 pub mod schema;
 pub mod sessions;
 pub mod words;

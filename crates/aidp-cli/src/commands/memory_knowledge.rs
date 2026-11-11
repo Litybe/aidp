@@ -9,7 +9,7 @@ use aidp_memory::models::constants::knowledge_proposals::{
     KNOWLEDGE_PROPOSALS_FILE, MANUAL_SOURCE,
 };
 use aidp_memory::{
-    load_default_embedder, IndexOptions, KnowledgeInbox, KnowledgeIngestor, MemoryError, Source,
+    remote_embedder, IndexOptions, KnowledgeInbox, KnowledgeIngestor, MemoryError, Source,
 };
 use std::path::{Path, PathBuf};
 
@@ -32,7 +32,7 @@ fn repo_of(opened: &Opened) -> String {
 }
 
 fn reindex_knowledge(ctx: &Ctx, opened: &Opened) {
-    let embedder = load_default_embedder(&opened.gateway);
+    let embedder = remote_embedder();
     let mut indexer = aidp_memory::Indexer::new(&opened.store);
     if let Some(model) = embedder.as_deref() {
         indexer = indexer.with_embedder(model);
@@ -68,7 +68,7 @@ pub fn ingest_knowledge(
     let vault = vault_root(ctx)?;
     let opened = open(ctx, project, false)?;
     let file = proposals_file(&ctx.absolute(path));
-    let embedder = load_default_embedder(&opened.gateway);
+    let embedder = remote_embedder();
     let mut ingestor = KnowledgeIngestor::new(
         &opened.store,
         &vault,

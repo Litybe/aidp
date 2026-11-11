@@ -36,6 +36,7 @@ pub mod pack;
 pub mod project;
 mod proposal_shape;
 pub mod proposals;
+pub mod remote_embedder;
 pub mod retriever;
 pub mod retriever_factory;
 pub mod session_journal;
@@ -52,7 +53,9 @@ pub use indexer::Indexer;
 pub use knowledge_inbox::KnowledgeInbox;
 pub use knowledge_ingest::KnowledgeIngestor;
 pub use manager::MemoryManager;
-pub use model_resolver::{load_default_embedder, model_status, resolve_model};
+pub use model_resolver::{
+    load_default_embedder, model_dir, model_status, model_weights_bytes, resolve_model,
+};
 pub use models::add_outcome::AddOutcome;
 pub use models::context_block::ContextBlock;
 pub use models::context_request::ContextRequest;
@@ -70,6 +73,7 @@ pub use models::search_query::SearchQuery;
 pub use models::shared_embedder::SharedEmbedder;
 pub use pack::{pack, render_markdown};
 pub use project::{is_registered, resolve_project};
+pub use remote_embedder::{quiet_remote_embedder, remote_embedder, RemoteEmbedder};
 pub use retriever::{Bm25Retriever, Retriever};
 pub use retriever_factory::{build_retriever, install_vault_glossary};
 pub use stage_context::KnowledgeContextProvider;

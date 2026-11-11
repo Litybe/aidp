@@ -3,4 +3,5 @@
 mod hybrid_flow;
 mod knowledge_flow;
 mod rag_flow;
+mod remote_embedder;
 mod stage_context;

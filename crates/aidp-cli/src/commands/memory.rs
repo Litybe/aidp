@@ -1,24 +1,27 @@
 use super::memory_knowledge;
 use super::CommandOutput;
-use crate::args::memory::{MemoryModelOp, MemoryOp, ProjectArg, RagOp};
+use crate::args::memory::{MemoryOp, ProjectArg, RagOp};
 use crate::ctx::Ctx;
 use crate::models::hit_view::HitView;
 use aidp_core::{ExitStatus, Format};
 use aidp_memory::agent_roles::{narrow_by_route, parse_domains, role_of};
+use aidp_memory::context::safe_issue;
 use aidp_memory::embedding_index::{embed_pending, lacks_vectors};
 use aidp_memory::glossary;
 use aidp_memory::models::constants::paths::NOTES_DIR;
+use aidp_memory::models::constants::remote::{EMBED_READ_TIMEOUT_SECS, HOOK_EMBED_TIMEOUT_MS};
 use aidp_memory::models::constants::schema::GLOBAL_PROJECT;
 use aidp_memory::models::memory_filter::MemoryFilter;
 use aidp_memory::models::memory_patch::MemoryPatch;
 use aidp_memory::models::memory_ref::MemoryRef;
 use aidp_memory::{
-    build_retriever, is_registered, load_default_embedder, model_status, pack, render_markdown,
+    build_retriever, is_registered, pack, quiet_remote_embedder, remote_embedder, render_markdown,
     resolve_project, ContextRequest, IndexOptions, IndexRoot, Indexer, Memory, MemoryError,
     MemoryKind, MemoryManager, MemoryStatus, MemoryStore, NewMemory, ProjectRef, RefType,
     Retriever, Route, SearchQuery, Source,
 };
 use std::path::PathBuf;
+use std::time::Duration;
 
 const PIPELINES_PREFIX: &str = "Pipelines";
 const TICKETS_DIR: &str = "TODO";
@@ -28,11 +31,10 @@ const REF_SEPARATOR: char = ':';
 const NO_RESULT: &str = "Aucun resultat.";
 const NO_MEMORY: &str = "Aucune memoire.";
 const MODEL_REQUIRED: &str =
-    "--embed needs the embedding model; install it under the memory models folder (see `aidp memory model status`)";
+    "--embed needs the embedding model running in the daemon; start it with `aidp memory model start` (see `aidp memory model status`)";
 const ISSUE_NOT_MIRRORED: &str = "issue not found in the ticket mirror; searching without its text";
 
 pub(super) struct Opened {
-    pub(super) gateway: PathBuf,
     pub(super) store: MemoryStore,
     pub(super) project: ProjectRef,
     pub(super) known_root: bool,
@@ -54,7 +56,7 @@ pub fn run_rag(ctx: &Ctx, op: RagOp) -> anyhow::Result<CommandOutput> {
                 extra_roots: extra_roots(ctx, &opened.project),
                 global_knowledge: global_knowledge_root(ctx),
             };
-            let embedder = load_default_embedder(&opened.gateway);
+            let embedder = remote_embedder();
             if embed && embedder.is_none() {
                 return Err(MemoryError::Invalid(MODEL_REQUIRED.to_string()).into());
             }
@@ -222,7 +224,8 @@ fn embed_memories(opened: &Opened) -> anyhow::Result<()> {
     if !lacks_vectors(&opened.store, key, Source::Memory)? {
         return Ok(());
     }
-    if let Some(embedder) = load_default_embedder(&opened.gateway) {
+    let patience = Duration::from_secs(EMBED_READ_TIMEOUT_SECS);
+    if let Some(embedder) = quiet_remote_embedder(patience) {
         embed_pending(&opened.store, embedder.as_ref(), key, Some(Source::Memory))?;
     }
     Ok(())
@@ -265,36 +268,7 @@ fn dispatch_memory(ctx: &Ctx, op: MemoryOp) -> anyhow::Result<CommandOutput> {
             session,
             project,
         } => super::memory_hook::distill(ctx, &journal, &session, &project),
-        MemoryOp::Model { op } => match op {
-            MemoryModelOp::Status => {
-                let gateway = aidp_gateway::paths::state_dir()?;
-                let store = MemoryStore::open_in(&gateway)?;
-                let status = model_status(&store, &gateway)?;
-                if wants_json(ctx) {
-                    return Ok(CommandOutput::json(
-                        ctx.format(),
-                        serde_json::to_value(&status)?,
-                    ));
-                }
-                Ok(CommandOutput::text(format!(
-                    "modele: {}
-chemin: {}
-installe: {}
-dimension: {}
-chunks vectorises: {} / {}
-chunks d'un autre modele: {}",
-                    status.model,
-                    status.path.display(),
-                    if status.present { "oui" } else { "non" },
-                    status
-                        .dim
-                        .map_or_else(|| "inconnue".to_string(), |dim| dim.to_string()),
-                    status.embedded_chunks,
-                    status.total_chunks,
-                    status.stale_chunks,
-                )))
-            }
-        },
+        MemoryOp::Model { op } => super::memory_model::run(ctx, op),
         MemoryOp::Sync { project } => {
             let opened = open(ctx, &project, false)?;
             let dir = notes_dir(ctx, &opened).ok_or_else(|| {
@@ -526,7 +500,6 @@ pub(super) fn open(ctx: &Ctx, argument: &ProjectArg, strict: bool) -> anyhow::Re
     }
     Ok(Opened {
         store: MemoryStore::open_in(&gateway)?,
-        gateway,
         project,
         known_root,
     })
@@ -534,11 +507,14 @@ pub(super) fn open(ctx: &Ctx, argument: &ProjectArg, strict: bool) -> anyhow::Re
 
 pub(super) fn retriever(opened: &Opened, lexical: bool) -> Box<dyn Retriever + '_> {
     let root = opened.known_root.then(|| opened.project.root.clone());
-    let embedder = if lexical {
-        None
-    } else {
-        load_default_embedder(&opened.gateway)
-    };
+    let embedder = if lexical { None } else { remote_embedder() };
+    build_retriever(&opened.store, root, embedder)
+}
+
+/// Hybrid retrieval through the running daemon, lexical when it does not answer at once; never warns, never waits long.
+pub(super) fn hook_retriever(opened: &Opened) -> Box<dyn Retriever + '_> {
+    let root = opened.known_root.then(|| opened.project.root.clone());
+    let embedder = quiet_remote_embedder(Duration::from_millis(HOOK_EMBED_TIMEOUT_MS));
     build_retriever(&opened.store, root, embedder)
 }
 
@@ -601,6 +577,7 @@ pub(super) fn global_knowledge_root(ctx: &Ctx) -> Option<IndexRoot> {
 
 fn ticket_mirror(ctx: &Ctx, project: &ProjectRef, issue: &str) -> Option<String> {
     let vault = ctx.vault_override()?;
+    let issue = safe_issue(issue)?;
     let repo = aidp_core::vault::repo_segment(&project.root);
     let file: PathBuf = vault
         .root
