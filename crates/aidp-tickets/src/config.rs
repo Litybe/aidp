@@ -44,6 +44,9 @@ pub struct DispatcherConfig {
     /// editor, so the default is 1). Dev flows are bounded by `slots`.
     #[serde(default = "DispatcherConfig::default_test_slots")]
     pub test_slots: u32,
+    /// Bug lane: bug tickets launched at once, beside the dev lane (they never take a dev slot).
+    #[serde(default = "DispatcherConfig::default_bug_slots")]
+    pub bug_slots: u32,
     #[serde(default = "DispatcherConfig::default_tick_seconds")]
     pub tick_seconds: u32,
     #[serde(default = "DispatcherConfig::default_permission_mode")]
@@ -118,6 +121,9 @@ impl DispatcherConfig {
     fn default_test_slots() -> u32 {
         1
     }
+    fn default_bug_slots() -> u32 {
+        crate::models::constants::lane::DEFAULT_BUG_SLOTS
+    }
     fn default_tick_seconds() -> u32 {
         60
     }
@@ -143,6 +149,7 @@ impl Default for DispatcherConfig {
         DispatcherConfig {
             slots: Self::default_slots(),
             test_slots: Self::default_test_slots(),
+            bug_slots: Self::default_bug_slots(),
             tick_seconds: Self::default_tick_seconds(),
             permission_mode: Self::default_permission_mode(),
             model: Self::default_model(),
@@ -638,6 +645,7 @@ pub fn default_yaml() -> &'static str {
 dispatcher:
   slots: 3                      # dev lane: flows (worktrees) running at once, across every service
   test_slots: 1                 # test lane: test flows at once per project (main checkout, Unity editor)
+  bug_slots: 1                  # bug lane: bug tickets at once, beside the dev lane (never a dev slot)
   tick_seconds: 60
   permission_mode: bypassPermissions
   model: claude-sonnet-5

@@ -45,7 +45,7 @@ use aidp_flows::{
 use executor::{Executor, Ports};
 use registry::Registry;
 use serde_json::{json, Value};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use store::{is_active, FlowStore, IndexEntry, JournalLine};
@@ -393,7 +393,17 @@ impl FlowEngine {
     /// What the live runs occupy: dev flows (worktrees) and, per project, the test flows that
     /// hold or wait for its main checkout.
     pub fn lane_load(&self) -> (usize, HashMap<String, usize>) {
+        let (dev, _, test) = self.lane_load_with_bugs(&HashSet::new());
+        (dev, test)
+    }
+
+    /// [`Self::lane_load`] with the dev flows of the `bug_keys` tickets counted apart: `(dev, bug, test)`.
+    pub fn lane_load_with_bugs(
+        &self,
+        bug_keys: &HashSet<String>,
+    ) -> (usize, usize, HashMap<String, usize>) {
         let mut dev = 0;
+        let mut bug = 0;
         let mut test: HashMap<String, usize> = HashMap::new();
         for entry in self.executor.store.index().into_values() {
             if entry.status.is_terminal() {
@@ -409,10 +419,14 @@ impl FlowEngine {
                         .or_insert(0) += 1;
                 }
             } else if !waits_on_merge(&state) {
-                dev += 1;
+                if bug_keys.contains(&entry.key) {
+                    bug += 1;
+                } else {
+                    dev += 1;
+                }
             }
         }
-        (dev, test)
+        (dev, bug, test)
     }
 
     pub fn journal(&self, key: &str) -> anyhow::Result<Vec<JournalLine>> {

@@ -60,6 +60,11 @@ pub struct SlotsState {
     pub test_used: usize,
     #[serde(default)]
     pub test_max: usize,
+    /// Bug lane: bug tickets running and the ceiling.
+    #[serde(default)]
+    pub bug_used: usize,
+    #[serde(default)]
+    pub bug_max: usize,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]

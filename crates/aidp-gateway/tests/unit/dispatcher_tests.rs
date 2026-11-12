@@ -261,6 +261,8 @@ fn dispatcher_state_shape_is_stable() {
             max: 5,
             test_used: 0,
             test_max: 1,
+            bug_used: 0,
+            bug_max: 1,
         },
         running: vec![RunningEntry {
             key: "PIXEL-5677".to_string(),
@@ -834,6 +836,8 @@ fn dispatcher_waiting_with_template(
             max: 5,
             test_used: 0,
             test_max: 1,
+            bug_used: 0,
+            bug_max: 1,
         },
         ..DispatcherState::default()
     };

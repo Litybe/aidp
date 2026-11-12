@@ -1200,9 +1200,15 @@ impl Dispatcher {
             &mut holders,
             store.config().dispatcher.max_worktrees_per_project,
         );
-        let (dev_flows, test_flows) = lock(&self.flows)
+        let bug_keys: HashSet<String> = store
+            .list(&ListFilter::default())
+            .into_iter()
+            .filter(model::Ticket::is_bug)
+            .map(|ticket| ticket.key)
+            .collect();
+        let (dev_flows, bug_flows, test_flows) = lock(&self.flows)
             .as_ref()
-            .map(|engine| engine.lane_load())
+            .map(|engine| engine.lane_load_with_bugs(&bug_keys))
             .unwrap_or_default();
         let mut dispatch_plan = plan::plan_with_lanes(
             &candidates,
@@ -1215,6 +1221,8 @@ impl Dispatcher {
                 routing: Some(store.routing()),
                 dev_flows,
                 test_flows,
+                bug_flows,
+                bug_keys,
             },
         );
         dispatch_plan.skipped.extend(
@@ -1379,6 +1387,8 @@ impl Dispatcher {
                     max: cfg.slots as usize,
                     test_used: 0,
                     test_max: cfg.test_slots as usize,
+                    bug_used: 0,
+                    bug_max: cfg.bug_slots as usize,
                 },
                 running: Vec::new(),
                 last_plan: LastPlan::default(),
@@ -1502,6 +1512,8 @@ impl Dispatcher {
                 max: dispatch_plan.slots_max,
                 test_used: dispatch_plan.test_slots_used,
                 test_max: dispatch_plan.test_slots_max,
+                bug_used: dispatch_plan.bug_slots_used,
+                bug_max: dispatch_plan.bug_slots_max,
             },
             running: state_running,
             last_plan: LastPlan {
@@ -1701,6 +1713,8 @@ impl Dispatcher {
                 max: prev.slots.max,
                 test_used: prev.slots.test_used,
                 test_max: prev.slots.test_max,
+                bug_used: prev.slots.bug_used,
+                bug_max: prev.slots.bug_max,
             },
             running: state_running,
             last_plan: LastPlan {
@@ -1789,6 +1803,8 @@ impl Dispatcher {
                 max: slots_max,
                 test_used: 0,
                 test_max: cfg.test_slots as usize,
+                bug_used: 0,
+                bug_max: cfg.bug_slots as usize,
             },
             running: state_running,
             last_plan: LastPlan {

@@ -593,6 +593,15 @@ impl Ticket {
             format!("service/{}", self.service),
             format!("source/{}", self.source.as_str()),
         ];
+        if self.is_bug() {
+            self.tags
+                .push(crate::models::constants::lane::BUG_TAG.to_string());
+        }
+    }
+
+    /// A bug ticket: runs in the bug lane and is tested before any other.
+    pub fn is_bug(&self) -> bool {
+        self.r#type == IssueType::Bug
     }
 }
 

@@ -208,6 +208,11 @@ pub struct DispatchPlan {
     pub test_slots_used: usize,
     #[serde(default)]
     pub test_slots_max: usize,
+    /// Bug lane: bug tickets running (sessions and flows) and the ceiling.
+    #[serde(default)]
+    pub bug_slots_used: usize,
+    #[serde(default)]
+    pub bug_slots_max: usize,
 }
 
 /// What the flow engine runs right now, per lane, for [`plan_with_lanes`].
@@ -219,6 +224,10 @@ pub struct LaneLoad<'a> {
     pub dev_flows: usize,
     /// Test flows holding or waiting for the main checkout, per project.
     pub test_flows: HashMap<String, usize>,
+    /// Bug flows running (worktrees): they use `dispatcher.bug_slots`, never a dev slot.
+    pub bug_flows: usize,
+    /// Keys of the bug tickets: a dispatcher session on one of them uses a bug slot.
+    pub bug_keys: HashSet<String>,
 }
 
 /// The token-budget guard's verdict for this tick — a STUB for lot 10a,
@@ -612,8 +621,9 @@ pub fn plan_with_blockers(
 /// Origin of the sessions a flow starts: governed by the flow lanes, not by project occupancy.
 const FLOW_ORIGIN: &str = "flow";
 
-/// [`plan_with_blockers`] with the two lanes. Dev lane: `Todo`/`Queued` tickets, bounded by
-/// `cfg.slots` (dispatcher sessions plus `lanes.dev_flows`). Test lane: tickets in phase `to-test`
+/// [`plan_with_blockers`] with the three lanes. Dev lane: `Todo`/`Queued` tickets, bounded by
+/// `cfg.slots` (dispatcher sessions plus `lanes.dev_flows`). Bug lane: the bug tickets of that
+/// queue, launched first and bounded by `cfg.bug_slots` beside the dev lane. Test lane, bugs first: tickets in phase `to-test`
 /// (any of `Todo`/`Queued`/`InProgress`), launched with their `test_flow`, at most
 /// `cfg.test_slots` per project, oldest first, a manual promotion ahead. A test launch never
 /// uses a dev slot; the budget ceiling covers both.
@@ -627,11 +637,23 @@ pub fn plan_with_lanes(
     lanes: &LaneLoad<'_>,
 ) -> DispatchPlan {
     let graph = blocker_graph(candidates);
+    let bug_sessions = running
+        .iter()
+        .filter(|r| r.origin_kind == "dispatcher")
+        .filter(|r| {
+            r.ticket_key
+                .as_ref()
+                .is_some_and(|key| lanes.bug_keys.contains(key))
+        })
+        .count();
     let slots_used = running
         .iter()
         .filter(|r| r.origin_kind == "dispatcher")
         .count()
+        - bug_sessions
         + lanes.dev_flows;
+    let bug_slots_used = bug_sessions + lanes.bug_flows;
+    let bug_slots_max = cfg.bug_slots as usize;
     let slots_max = cfg.slots as usize;
     let test_slots_max = cfg.test_slots as usize;
     let test_slots_used: usize = lanes.test_flows.values().sum();
@@ -648,6 +670,8 @@ pub fn plan_with_lanes(
             slots_max,
             test_slots_used,
             test_slots_max,
+            bug_slots_used,
+            bug_slots_max,
         };
     }
 
@@ -669,6 +693,7 @@ pub fn plan_with_lanes(
     test_candidates.sort_by_key(|t| {
         (
             u8::from(t.autopilot.manual_priority != Some(true)),
+            u8::from(!t.is_bug()),
             t.autopilot.phase_at.unwrap_or(t.updated),
             t.key.clone(),
         )
@@ -709,10 +734,11 @@ pub fn plan_with_lanes(
     }
 
     let mut free = slots_max.saturating_sub(slots_used);
-    free = free.min(budget_left);
+    let mut bug_free = bug_slots_max.saturating_sub(bug_slots_used);
 
     let mut sorted: Vec<Ticket> = candidates.to_vec();
     crate::order::sort(&mut sorted);
+    sorted.sort_by_key(|t| !t.is_bug());
 
     let mut occupied: HashSet<String> = running
         .iter()
@@ -764,7 +790,8 @@ pub fn plan_with_lanes(
             continue;
         }
 
-        if free == 0 {
+        let lane_free = if t.is_bug() { bug_free } else { free };
+        if lane_free == 0 || budget_left == 0 {
             if budget_left == 0 {
                 let reason = budget.reason.clone().unwrap_or_default();
                 skipped.push((t.key.clone(), SkipReason::Budget(reason)));
@@ -777,7 +804,12 @@ pub fn plan_with_lanes(
         if !flow_launch {
             occupied.insert(launch.service.clone());
         }
-        free -= 1;
+        if t.is_bug() {
+            bug_free -= 1;
+        } else {
+            free -= 1;
+        }
+        budget_left -= 1;
         launches.push(launch);
     }
 
@@ -788,6 +820,8 @@ pub fn plan_with_lanes(
         slots_max,
         test_slots_used,
         test_slots_max,
+        bug_slots_used,
+        bug_slots_max,
     }
 }
 

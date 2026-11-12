@@ -3,4 +3,5 @@
 
 pub mod cli;
 pub mod github;
+pub mod lane;
 pub mod messages;

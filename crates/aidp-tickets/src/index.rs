@@ -908,6 +908,8 @@ mod tests {
                 max: 5,
                 test_used: 0,
                 test_max: 1,
+                bug_used: 0,
+                bug_max: 1,
             },
             running: vec![crate::dispatcher_state::RunningEntry {
                 key: "PIXEL-5677".to_string(),
