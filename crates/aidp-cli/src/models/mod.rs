@@ -17,6 +17,7 @@ pub mod project_stack;
 pub mod run_start_envelope;
 pub mod scope_check_refusal;
 pub mod ticket_heading;
+pub mod unity_focus_report;
 pub mod unity_refresh_report;
 pub mod validate_all_summary;
 pub mod vault_location;

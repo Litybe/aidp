@@ -42,6 +42,8 @@ pub enum Op {
         #[arg(long = "wait-multiplier", value_name = "N", default_value_t = 1)]
         wait_multiplier: u32,
     },
+    /// Bring the Unity editor open on the workspace to the foreground and answer its reload or save dialogs, so that a PlayMode run starts with the keyboard focus. Prints `focused`; run it before every PlayMode run.
+    UnityFocus,
     /// Publish the worktree's branch as one commit GitHub signs, through its API: never `git push`.
     GitPush {
         /// Branch the worktree must be on; the current branch when omitted.

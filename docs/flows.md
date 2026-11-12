@@ -234,9 +234,12 @@ aidp flow pause KEY
 aidp flow resume KEY
 aidp flow abort KEY
 aidp flow unity-refresh [--timeout SECONDS]   # local, in the project checkout
+aidp flow unity-focus                       # local: editor to the foreground, reload/save dialogs answered
 ```
 
 `validate` and `show` run without the daemon. The others call it, as `aidp ticket start` does.
+
+`unity-focus` prints `{focused, editor_found, dialogs, message}`. An embedded PowerShell script (win32 and UI Automation, `unsafe` being forbidden) brings the editor open on the workspace to the foreground and answers its reload or save dialogs; a Unity test agent runs it before every PlayMode run, and `unity-refresh` runs it before its compile request (`focused` in its output). Its log is `.aidp/editor/focus.log`.
 
 Retrying a failed `pipeline` step continues the previous attempt's native run when that run is paused: its failed and cancelled stages run again, the stages already done are kept, and the journal records `<step> resumed paused run <id>`. Otherwise the retry starts the pipeline from its first stage.
 
