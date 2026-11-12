@@ -1,5 +1,5 @@
 use crate::models::enums::{FlowError, WorkspaceMode};
-use crate::models::Step;
+use crate::models::{FlowEntry, Step};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -22,6 +22,9 @@ pub struct FlowDef {
     /// holds the project's `unity-editor` resource until `git.restore` gives the checkout back.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workspace: Option<WorkspaceMode>,
+    /// Named entries a run can be started from by hand (a forced move of its ticket).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub entries: BTreeMap<String, FlowEntry>,
 }
 
 impl FlowDef {

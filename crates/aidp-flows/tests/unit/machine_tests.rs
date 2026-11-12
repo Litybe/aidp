@@ -46,6 +46,15 @@ const CI_WATCH: &str = "ci@build/ci_watch";
 const LOOP_PUSH: &str = "publish@fix/git_push";
 const PUBLISH_FAILURE: &str = "exit 5: gh api graphql failed";
 const OUTPUT_GREEN: &str = "green";
+const ENTRY_MERGE: &str = include_str!("../fixtures/entry_merge.yaml");
+const ENTRY_MERGE_NAME: &str = "merge";
+const ENTRY_UNKNOWN: &str = "nowhere";
+const STEP_CHECKOUT: &str = "checkout";
+const STEP_TEST: &str = "test";
+const STEP_TEST_LOOP: &str = "test_loop";
+const STEP_READY: &str = "ready";
+const STEP_MERGE: &str = "merge";
+const OUTPUT_PASSED: &str = "passed";
 
 type Stepped = (FlowState, Vec<Effect>);
 
@@ -78,6 +87,7 @@ fn start_with(def: &FlowDef, source: &str) -> Stepped {
     let event = Event::Start {
         ticket: json!({"source": source, "key": KEY}),
         at: AT.to_string(),
+        entry: None,
     };
     advance(def, FlowState::new(KEY, def.clone()), event).unwrap()
 }
@@ -185,6 +195,7 @@ fn start_twice_is_rejected() {
     let event = Event::Start {
         ticket: json!({}),
         at: AT.to_string(),
+        entry: None,
     };
 
     assert_eq!(
@@ -1561,4 +1572,44 @@ fn ticket_ceiling_on_a_step_that_is_not_starting_is_rejected() {
     );
 
     assert!(result.is_err());
+}
+
+fn start_at(def: &FlowDef, entry: &str) -> Result<Stepped, FlowError> {
+    let event = Event::Start {
+        ticket: json!({"source": SOURCE_JIRA, "key": KEY}),
+        at: AT.to_string(),
+        entry: Some(entry.to_string()),
+    };
+    advance(def, FlowState::new(KEY, def.clone()), event)
+}
+
+#[test]
+fn entry_start_runs_kept_steps_then_lands_with_assumed_outputs() {
+    let def = def_of(ENTRY_MERGE);
+    let stepped = start_at(&def, ENTRY_MERGE_NAME).unwrap();
+    assert_eq!(stepped.0.entry.as_deref(), Some(ENTRY_MERGE_NAME));
+    assert_eq!(stepped.0.current.as_deref(), Some(STEP_CHECKOUT));
+
+    let stepped = send(&def, stepped, finish(STEP_CHECKOUT, 0));
+    let skipped = step_state(&stepped, STEP_TEST_LOOP);
+    assert_eq!(skipped.status, StepStatus::Skipped);
+    assert_eq!(skipped.reason.as_deref(), Some(StepReason::Forced.as_str()));
+    assert_eq!(
+        step_state(&stepped, STEP_TEST).outputs[OUTPUT_PASSED],
+        json!(true)
+    );
+    assert_eq!(stepped.0.current.as_deref(), Some(STEP_READY));
+
+    let stepped = send(&def, stepped, finish(STEP_READY, 0));
+    assert_eq!(stepped.0.current.as_deref(), Some(STEP_MERGE));
+}
+
+#[test]
+fn entry_start_refuses_an_unknown_entry() {
+    let def = def_of(ENTRY_MERGE);
+    let reason = start_at(&def, ENTRY_UNKNOWN)
+        .unwrap_err()
+        .reject_reason()
+        .expect("a rejected event");
+    assert_eq!(reason, RejectReason::UnknownEntry);
 }

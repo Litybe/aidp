@@ -1298,3 +1298,63 @@ fn headless_launches_never_get_a_prompting_policy() {
         PermissionPolicy::Bypass
     );
 }
+
+/// A manager with one project, a registered test checkout and an unrelated directory.
+fn checkout_roots_fixture(
+    label: &str,
+) -> (
+    TempWorkspace,
+    Arc<SessionManager>,
+    crate::projects::Project,
+    PathBuf,
+    PathBuf,
+) {
+    let workspace = TempWorkspace::new(label);
+    let state_dir = workspace.path().join("state");
+    let project_dir = workspace.path().join("project");
+    let checkout_dir = workspace.path().join("checkout");
+    let unrelated_dir = workspace.path().join("unrelated");
+    for dir in [&state_dir, &project_dir, &checkout_dir, &unrelated_dir] {
+        ensure_dir(dir);
+    }
+    let projects = Arc::new(crate::projects::Projects::load(&state_dir));
+    let added = projects.add(project_dir.to_str().unwrap());
+    let project = projects
+        .set_test_checkout(&added.id, checkout_dir.to_str())
+        .expect("absolute checkout")
+        .expect("known project");
+    let manager = SessionManager::load(&state_dir, Arc::new(Bus::new()), projects);
+    (workspace, manager, project, checkout_dir, unrelated_dir)
+}
+
+fn path_workspace(path: &Path) -> WorkspaceRequest {
+    WorkspaceRequest {
+        kind: WorkspaceKind::Path,
+        ticket: None,
+        name: None,
+        path: Some(path.to_string_lossy().into_owned()),
+    }
+}
+
+#[test]
+fn an_explicit_workspace_on_a_project_test_checkout_is_accepted() {
+    let (_workspace, manager, project, checkout, _) = checkout_roots_fixture("gw-checkout-ok");
+    let resolved = manager
+        .resolve_requested_workspace(&path_workspace(&checkout), &project)
+        .expect("test checkout is an allowed root");
+    assert_eq!(
+        resolved.workspace.path,
+        checkout.canonicalize().expect("canonical checkout")
+    );
+}
+
+#[test]
+fn an_explicit_workspace_on_an_unrelated_path_is_still_refused() {
+    let (_workspace, manager, project, _, unrelated) = checkout_roots_fixture("gw-checkout-no");
+    let error = manager
+        .resolve_requested_workspace(&path_workspace(&unrelated), &project)
+        .err()
+        .expect("unrelated path must be refused");
+    let refusal = error.downcast_ref::<ApiRefusal>().expect("typed refusal");
+    assert_eq!(refusal.status, crate::models::enums::ApiStatus::Forbidden);
+}

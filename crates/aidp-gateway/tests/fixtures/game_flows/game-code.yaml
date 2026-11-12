@@ -16,6 +16,8 @@ inputs:
   ticket: { required: true }
 settings:
   max_review_rounds: 2
+entries:
+  review: { step: review_loop, keep: [worktree, branch] }
 steps:
   - { id: claim, kind: action, use: gh.issue_label, with: { state: in-progress }, phase: Préparation }
   - { id: worktree, kind: action, use: git.worktree, phase: Préparation }

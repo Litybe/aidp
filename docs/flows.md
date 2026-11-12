@@ -207,6 +207,26 @@ A `pipeline` step with `resource: unity-editor` holds the Unity editor lock of i
 - `POST /api/unity/lock/release` frees a lock by hand, for an orphan (see [gateway-api.md](gateway-api.md#unity-editor-lock-and-status)). The release is journaled on the holder's run. That run is not given the lock back while it runs.
 - Each change publishes `unity.lock_changed`.
 
+## Entries (forced start)
+
+`entries:` names the places a run can be started from by hand, for a forced move of the ticket
+([tickets.md](tickets.md#forced-move)); the entry name is the target (`review`, `testing`, `merge`).
+
+```yaml
+entries:
+  merge: { step: ready, keep: [worktree, branch], outputs: { test: { passed: true } } }
+```
+
+- `step`: the top-level step the run lands on. Every top-level step before it is `skipped`, reason
+  `forced`, detail `skipped by entry <name>`; nothing in a skipped loop runs.
+- `keep`: top-level steps before `step` that still run (workspace preparation, checkout).
+- `outputs`: outputs stored on skipped steps (by step id, loop body steps included), read by the
+  conditions after `step` as if those steps had run.
+- The run records `entry` in `state.json`. `POST /api/flows` (and `POST /api/tickets/:key/flow`)
+  accept `entry`; an unknown entry answers `404`.
+- Validation refuses (`bad_entry`) a `step` that is not a top-level step, a `keep` that is not a
+  top-level step before it, and `outputs` of an unknown step.
+
 ## Pause, abort, manual
 
 - `pause`: the current step finishes, then the run stops.

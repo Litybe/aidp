@@ -41,6 +41,7 @@ impl Validator<'_> {
         self.report_duplicates(&main_ids, DuplicateScope::Flow);
         let main_known: BTreeSet<String> = main_ids.into_iter().collect();
         self.check_steps(&def.steps, &main_known);
+        self.check_entries(&main_known);
         for (name, steps) in &def.blocks {
             let mut block_ids = Vec::new();
             collect_ids(steps, &mut block_ids);
@@ -48,6 +49,45 @@ impl Validator<'_> {
             let mut known: BTreeSet<String> = block_ids.into_iter().collect();
             known.extend(main_known.iter().cloned());
             self.check_steps(steps, &known);
+        }
+    }
+
+    fn check_entries(&mut self, known: &BTreeSet<String>) {
+        let def = self.def;
+        let top: Vec<&str> = def.steps.iter().map(|step| step.id.as_str()).collect();
+        for (name, entry) in &def.entries {
+            let Some(landing) = top.iter().position(|id| *id == entry.step) else {
+                self.error(
+                    IssueCode::BadEntry,
+                    Some(&entry.step),
+                    format!(
+                        "entry `{name}` lands on `{}`, not a top-level step",
+                        entry.step
+                    ),
+                );
+                continue;
+            };
+            for kept in &entry.keep {
+                if !top[..landing].contains(&kept.as_str()) {
+                    self.error(
+                        IssueCode::BadEntry,
+                        Some(kept),
+                        format!(
+                            "entry `{name}` keeps `{kept}`, not a top-level step before `{}`",
+                            entry.step
+                        ),
+                    );
+                }
+            }
+            for assumed in entry.outputs.keys() {
+                if !known.contains(assumed) {
+                    self.error(
+                        IssueCode::BadEntry,
+                        Some(assumed),
+                        format!("entry `{name}` assumes outputs of unknown step `{assumed}`"),
+                    );
+                }
+            }
         }
     }
 

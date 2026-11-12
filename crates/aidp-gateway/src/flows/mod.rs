@@ -209,7 +209,12 @@ impl FlowEngine {
             if state.is_fresh() {
                 return self
                     .executor
-                    .start_run(&existing.repo, state, request.ticket.clone())
+                    .start_run(
+                        &existing.repo,
+                        state,
+                        request.ticket.clone(),
+                        request.entry.clone(),
+                    )
                     .map(Some);
             }
             return Ok(Some(state));
@@ -309,6 +314,15 @@ impl FlowEngine {
                 .into());
             }
         }
+        if let Some(entry) = request.entry.as_deref() {
+            if !def.entries.contains_key(entry) {
+                return Err(FlowEngineError::NotFound(format!(
+                    "flow `{}` has no entry `{entry}`",
+                    def.id
+                ))
+                .into());
+            }
+        }
         let mut state = FlowState::new(key, def);
         if let Some(settings) = request.settings.clone() {
             let Value::Object(map) = settings else {
@@ -322,7 +336,15 @@ impl FlowEngine {
             .store
             .save_runtime(&project.repo, &state.key, &runtime)?;
         self.executor
-            .start_run(&project.repo, state, request.ticket)
+            .start_run(&project.repo, state, request.ticket, request.entry)
+    }
+
+    /// The first of `flows` whose definition declares `entry`.
+    pub fn flow_with_entry<'a>(&self, flows: &[&'a str], entry: &str) -> Option<&'a str> {
+        flows.iter().copied().find(|name| {
+            self.load_definition(name)
+                .is_ok_and(|def| def.entries.contains_key(entry))
+        })
     }
 
     pub fn get(&self, key: &str) -> anyhow::Result<FlowState> {

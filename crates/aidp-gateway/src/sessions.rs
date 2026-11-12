@@ -1854,6 +1854,7 @@ impl SessionManager {
     }
 
     /// Resolves an explicit workspace request; runs before the admission lock.
+    /// Allowed roots: every project path and every project test checkout.
     fn resolve_requested_workspace(
         &self,
         requested: &WorkspaceRequest,
@@ -1869,7 +1870,10 @@ impl SessionManager {
             .projects
             .list()
             .iter()
-            .map(|known| PathBuf::from(&known.path))
+            .flat_map(|known| {
+                std::iter::once(PathBuf::from(&known.path))
+                    .chain(known.test_checkout.as_deref().map(PathBuf::from))
+            })
             .collect();
         let vault = self.configured_vault()?;
         let workspace = crate::workspace_resolver::resolve_workspace(

@@ -17,6 +17,20 @@
       "additionalProperties": { "type": "array", "items": { "$ref": "#/$defs/step" } }
     },
     "steps": { "type": "array", "items": { "$ref": "#/$defs/step" } },
+    "entries": {
+      "type": "object",
+      "description": "Named places a run can be started from by hand (POST /api/tickets/:key/force, target = entry name): the top-level steps before `step` are skipped (reason `forced`), except `keep`.",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["step"],
+        "additionalProperties": false,
+        "properties": {
+          "step": { "type": "string", "description": "Top-level step the run lands on." },
+          "keep": { "type": "array", "items": { "type": "string" }, "description": "Top-level steps before `step` that still run (workspace preparation)." },
+          "outputs": { "type": "object", "additionalProperties": { "type": "object" }, "description": "Outputs assumed for skipped steps, keyed by step id, so the conditions after `step` hold." }
+        }
+      }
+    },
     "workspace": { "type": "string", "enum": ["project"], "description": "project: the steps run in the main checkout of the project (no worktree); the run holds the project's unity-editor resource from its first step until git.restore gives the checkout back (also done by the daemon when the run ends)." }
   },
   "$defs": {

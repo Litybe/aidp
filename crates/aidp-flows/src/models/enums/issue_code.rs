@@ -13,4 +13,5 @@ pub enum IssueCode {
     UnknownPipelineTemplate,
     CatalogUnreadable,
     BadResource,
+    BadEntry,
 }

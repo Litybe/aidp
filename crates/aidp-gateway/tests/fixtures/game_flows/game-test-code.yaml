@@ -15,6 +15,9 @@ inputs:
   ticket: { required: true }
 settings:
   max_test_rounds: 2
+entries:
+  testing: { step: test_loop, keep: [checkout, checkout_label, checkout_comment, checkout_stop] }
+  merge: { step: ready, outputs: { test: { passed: true } } }
 workspace: project
 steps:
   - { id: checkout, kind: action, use: git.checkout, phase: Préparation }

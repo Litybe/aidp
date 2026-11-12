@@ -533,6 +533,32 @@ waiting. Either way the one-project-one-session rule is never bypassed: a forced
 project already has a running session is still skipped (reported as `queue-race`), because both
 paths only ever submit to `SessionManager::start`, never admit directly.
 
+## Forced move
+
+`POST /api/tickets/:key/force {"target": "<column>", "reason": "..."}` (the board's « Forcer vers… »)
+unblocks a ticket by hand: it moves the ticket to a board column whatever its status, skipping the
+steps between, and leaves it valid there so its path goes on. No transition guard applies; the move
+is journalled with actor `human` and reason `forced:<target>` (followed by the given reason).
+
+| Target | Status | Phase | Label | Flow |
+|---|---|---|---|---|
+| `ready` | `todo` | `dev` | `aidp:ready` | none: the dispatcher starts the dev lane from scratch |
+| `review` | `in-progress` | `dev` | `aidp:review` | delivery flow, entry `review` |
+| `to-test` | `in-progress` | `to-test` | `aidp:to-test` | none: the test lane takes it |
+| `testing` | `in-progress` | `testing` | `aidp:testing` | test flow (else delivery flow), entry `testing` |
+| `merge` | `in-progress` | `testing` | `aidp:awaiting-merge` | test flow (else delivery flow), entry `merge` |
+| `blocked` | `blocked` (`blocked_reason: forced`) | kept | `aidp:blocked` | none |
+| `done` | `done` | kept | `aidp:done` | none; the issue and the PR are left as they are |
+
+In order: the target's flow is resolved first (the route's `flow:` and `test_flow:` in
+`routing.yaml`, the first whose definition declares the entry; none answers `409` and nothing
+changes), the active flow run of the ticket is aborted (its session is cancelled, worktree and PR
+kept), the note is written, the label is set on the issue of a GitHub mirror (a failure is left to
+the next write-back), then the flow restarts from the entry: the top-level steps before it are
+skipped with reason `forced`, except the ones the entry keeps, and the outputs the entry assumes
+(`test.passed: true` for `merge`) make the later conditions hold. See
+[flows.md](flows.md#entries-forced-start).
+
 ## The dispatcher
 
 ### Two lanes (dev and test)
