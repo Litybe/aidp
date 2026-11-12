@@ -28,7 +28,7 @@ d'environnement utilisateur se posent avec un script relançable :
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\setup-gamedev-toolchain.ps1
 ```
 
-Il pose notamment `CARGO_TARGET_DIR=D:\AIDP\target`, `AIDP_SRC=D:\AIDP\src\aidp`,
+Il retire `CARGO_TARGET_DIR` (chaque dépôt et worktree compile dans son propre `target\`) et pose notamment `AIDP_SRC=D:\AIDP\src\aidp`,
 `AIDP_INSTALL_DIR=D:\AIDP\bin` et `AIDP_GATEWAY_DIR=D:\AIDP\gateway` (état du daemon). Le vault est
 `D:\AIDP\Vault` (`AIDP_VAULT`).
 

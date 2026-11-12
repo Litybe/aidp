@@ -26,7 +26,7 @@ fixtures/               # test inputs only:
 scripts/                # aidp-install.ps1 / aidp-install.sh: sourceable install + PATH-migration
                         #   functions the bootstrap uses; covered by crates/aidp-cli/tests/it_bootstrap.rs
                         # setup-gamedev-toolchain.ps1: Rust GNU, MinGW and cargo-nextest on D:, and the
-                        #   user variables (CARGO_TARGET_DIR, AIDP_INSTALL_DIR, AIDP_GATEWAY_DIR...)
+                        #   user variables (AIDP_INSTALL_DIR, AIDP_GATEWAY_DIR...); removes CARGO_TARGET_DIR
 bootstrap.ps1 / .sh     # build, install into AIDP_INSTALL_DIR (D:\AIDP\bin), put it on PATH
 docs/                   # PLAN-GAMEDEV, gateway-api, tickets, flows, providers, native-execution,
                         #   exit-codes, adr/
@@ -114,7 +114,8 @@ Run, in order:
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo hakari generate --diff && cargo hakari manage-deps --dry-run && cargo hakari verify
-cargo nextest run --workspace --profile ci
+cargo nextest run --workspace
+cargo nextest run --workspace -P integration
 cargo test --workspace --doc
 cargo deny check
 ```
@@ -163,7 +164,7 @@ Commands, from the repository root:
 - Check with `cargo check -p <crate>`; it skips codegen and linking. Build the whole workspace only at the end.
 - Test the crate you changed: `cargo nextest run -p <crate>`. Narrow further with `--test integration -E 'test(/^run_fs_reconcile::/)'` or `--lib -E 'test(<name>)'`.
 - Run `cargo nextest run --workspace` and `cargo test --workspace --doc` once, at the end, never in a loop. Plain `cargo test` works but is slower, and it runs a crate's integration tests as threads of one process (see below).
-- Never run two cargo commands at once on the same target directory: they block on its lock. Give each worktree its own target directory, which is the default.
+- Never run two cargo commands at once on the same target directory: they block on its lock. Each checkout and worktree uses its own `target/`: `scripts/setup-gamedev-toolchain.ps1` removes the user variable `CARGO_TARGET_DIR` because a shared target made sessions block on its lock and rebuild everything each time another one built. Never set it to a shared directory.
 - `concurrency_background::scenario_10_scheduler_never_overlaps_one_automation` is `#[ignore]` (about 2 min waiting for cron boundaries). Run it with `cargo nextest run -p aidp-gateway --test concurrency_background --run-ignored only --profile ci`, only when touching the automation scheduler.
 
 What makes it fast, and what must stay true:
@@ -175,7 +176,10 @@ What makes it fast, and what must stay true:
 - **Hermetic transcripts.** `.cargo/config.toml` sets `AIDP_CLAUDE_PROJECTS_DIR` to the empty `.cargo/test-claude-projects/` for every test run. Without it, in-process `reconcile` tests scanned the real `~/.claude/projects` (3 GB here). A test that needs transcripts sets the variable itself.
 - **Dev profile.** `debug = "line-tables-only"` for the workspace and no debuginfo for dependencies keep `target/debug` small (full debuginfo reached 61 GB). Incremental compilation stays on: turning it off tripled the edit loop. `opt-level` for dependencies was measured and rejected: the slow tests spend their time in `aidp-core` itself, and it cost a 5-minute rebuild of every dependency.
 - **sccache, opt-in.** With `rustc-wrapper = "sccache"` in your own `~/.cargo/config.toml` (never in the repo: other machines do not have it), a new worktree reuses the dependencies another one compiled. `.cargo/config.toml` sets `SCCACHE_BASEDIRS` to the checkout, without which the cache keys hold the target path and nothing ever hits. Measured: a new worktree's first build went from 180 s to 147 s (159 of 184 units from the cache). The workspace crates themselves are incremental, which sccache does not cache.
-- `.cargo/config.toml` also caps `RUST_TEST_THREADS` at 4 for plain `cargo test`, and links with `rust-lld` on the Windows MSVC target.
+- `.cargo/config.toml` sets `[build] jobs = 8`, so two sessions building at once leave the 16-core machine usable, caps `RUST_TEST_THREADS` at 4 for plain `cargo test` (doc-tests), and links with `rust-lld` on the Windows MSVC target.
+- nextest concurrency is pinned to `num-cpus` (`.config/nextest.toml`); cargo builds are capped at 8 jobs (`.cargo/config.toml`). Do not pass thread flags or variables.
+- A nextest test group capping the daemon-backed `aidp-gateway` tests at 2 was measured slower (282 s vs 192 s) because it serialized the longest tests.
+- **The fake `gh` of the `aidp gh` tests** is compiled once per source hash into `$CARGO_TARGET_TMPDIR/gh_shim_cache`, under a per-hash file lock, then copied into each test. It used to be rustc once per test (about 30 s each). Cold cache: 3 compiles; warm: the 24 `it_gh_` tests run in under 2 s.
 - On a network that intercepts TLS, `cargo install cargo-nextest` (or `cargo-hakari`) can fail with `CRYPT_E_NO_REVOCATION_CHECK`; the one-off workaround is `CARGO_HTTP_CHECK_REVOKE=false` on that command only.
 - Tests that loop over templates run them on a bounded `std::thread::scope` pool: at most 4 workers, one temp workspace each, no environment mutation inside a worker. Failures are collected and reported in a single panic that lists every failing template.
 - No cross-test cache is shared between these tests, because nextest runs each test in its own process. `rayon` is deliberately not a dependency.

@@ -16,6 +16,13 @@ const PROGRAM: &str = "aidp";
 const TICKET: &str = "PIXEL-12";
 const STATUS_KEY: &str = "in-progress";
 
+/// Actions that spawn no command: `unity.refresh` waits on the editor through the wait extensions.
+const NON_SPAWNING_ACTIONS: [BuiltinAction; 3] = [
+    BuiltinAction::Noop,
+    BuiltinAction::Fail,
+    BuiltinAction::UnityRefresh,
+];
+
 /// Records the spawned arguments and reports a clean exit.
 #[derive(Default)]
 struct RecordingRunner {
@@ -106,6 +113,8 @@ fn every_subprocess_action_spawns_a_command_the_cli_accepts() {
         }
         checked += 1;
     }
-    // Every action but `noop` and `fail` spawns a command.
-    assert_eq!(checked, BuiltinAction::ALL.len() - 2);
+    assert_eq!(
+        checked,
+        BuiltinAction::ALL.len() - NON_SPAWNING_ACTIONS.len()
+    );
 }

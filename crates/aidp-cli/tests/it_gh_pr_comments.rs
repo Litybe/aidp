@@ -5,11 +5,9 @@ use aidp_testkit::TempWorkspace;
 use common::*;
 use serde_json::Value;
 use std::fs;
-use std::process::{Command, Output};
+use std::process::Output;
 
 const GH: &str = "gh";
-const SHIM_SOURCE_FILE: &str = "gh_shim.rs";
-const SHIM_EXE: &str = if cfg!(windows) { "gh.exe" } else { "gh" };
 const RULES_FILE: &str = "gh.rules";
 const PATH_VAR: &str = "PATH";
 const GATEWAY_DIR_VAR: &str = "AIDP_GATEWAY_DIR";
@@ -57,15 +55,7 @@ impl FakeGh {
     fn new(ws: &TempWorkspace) -> Self {
         let dir = ws.path().join("bin");
         fs::create_dir_all(&dir).expect("create shim dir");
-        let source = dir.join(SHIM_SOURCE_FILE);
-        fs::write(&source, SHIM_SOURCE).expect("write shim source");
-        let status = Command::new("rustc")
-            .arg(&source)
-            .arg("-o")
-            .arg(dir.join(SHIM_EXE))
-            .status()
-            .expect("run rustc");
-        assert!(status.success(), "shim must compile");
+        gh_shim::install_compiled_shim(&dir, SHIM_SOURCE);
         Self {
             dir,
             rules: Vec::new(),

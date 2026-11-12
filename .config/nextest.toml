@@ -1,6 +1,8 @@
 nextest-version = "0.9.100"
 
 [profile.default]
+# Pinned so every run uses the same concurrency.
+test-threads = "num-cpus"
 fail-fast = false
 slow-timeout = { period = "60s" }
 default-filter = "not (kind(test) | test(/(^|::)it_/))"

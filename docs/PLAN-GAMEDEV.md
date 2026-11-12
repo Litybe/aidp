@@ -384,7 +384,7 @@ F2 suit P4 et P5.
 | Sources aidp + skill | `D:\AIDP\src\aidp`, `D:\AIDP\skill` (dépôts git) | `AIDP_SRC`, `AIDP_SKILL_ROOT` |
 | Toolchain Rust | `D:\DevTools\rust\rustup`, `D:\DevTools\rust\cargo` | `RUSTUP_HOME`, `CARGO_HOME` posés **avant** `rustup-init` (sinon il installe dans `C:\Users`) |
 | Compilateur C (pour la crate `ring`) | `D:\DevTools\winlibs` (MinGW-w64 portable, un zip) | Toolchain `1.95.0-x86_64-pc-windows-gnu` : pas de Visual Studio Build Tools ni de Windows SDK, absents de la machine et qui s'installent sur C: |
-| Cibles de build | `D:\AIDP\target` | `CARGO_TARGET_DIR` |
+| Cibles de build | `<dépôt ou worktree>\target` | `CARGO_TARGET_DIR` non posée : une cible partagée bloque les sessions concurrentes |
 | Binaire | `D:\AIDP\bin\aidp.exe` (déjà là) | PATH utilisateur |
 | État du daemon | `D:\AIDP\gateway` | `AIDP_GATEWAY_DIR` (sinon `~/.aidp/gateway` sur C:) |
 | Vault | `D:\AIDP\Vault` (déjà là) | `AIDP_VAULT` |
@@ -483,11 +483,11 @@ employeur ; P1 les retire, la publication GitHub se fait sans l'historique local
 | Rust | 1.95.0 `x86_64-pc-windows-gnu`, rustup 1.29.3, toolchain par défaut | `D:\DevTools\rust\{rustup,cargo}` |
 | gcc (pour `ring`) | WinLibs 16.2.0 MSVCRT | `D:\DevTools\winlibs\mingw64` |
 | cargo-nextest | 0.9.151 | `D:\DevTools\rust\cargo\bin` |
-| Builds | — | `D:\AIDP\target` |
+| Builds | — | `<dépôt ou worktree>\target` |
 | Téléchargements | 286 Mo, supprimables | `D:\DevTools\_downloads` |
 
 Aucun `~/.rustup` ni `~/.cargo` créé. Variables utilisateur posées : `RUSTUP_HOME`, `CARGO_HOME`,
-`CARGO_TARGET_DIR`, `AIDP_SRC`, `AIDP_INSTALL_DIR=D:\AIDP\bin`, `AIDP_GATEWAY_DIR=D:\AIDP\gateway`,
+`AIDP_SRC`, `AIDP_INSTALL_DIR=D:\AIDP\bin`, `AIDP_GATEWAY_DIR=D:\AIDP\gateway`,
 `npm_config_cache=D:\DevTools\npm-cache` ; PATH utilisateur : `cargo\bin` et `winlibs\mingw64\bin`
 en tête. `AIDP_SKILL_ROOT` est inchangé (toujours la copie de `~/.claude/skills`) : la bascule vers
 `D:\AIDP\skill` est en P1, avec le lien qui garde Claude Code et le binaire sur la même copie.

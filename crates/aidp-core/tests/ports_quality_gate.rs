@@ -131,19 +131,26 @@ fn production_code_keeps_impure_calls_inside_the_port_files() {
     );
 }
 
-/// Counts `impl <trait_name> for` occurrences across every Rust source under
-/// `crates_dir`.
-fn count_trait_impls(crates_dir: &Path, trait_name: &str) -> usize {
+/// Every Rust source under `crates_dir` with its content, each file read once.
+fn read_rust_sources(crates_dir: &Path) -> Vec<(PathBuf, String)> {
     let mut sources = Vec::new();
     collect_rust_sources(crates_dir, &mut sources);
+    sources
+        .into_iter()
+        .map(|source| {
+            let content = fs::read_to_string(&source)
+                .unwrap_or_else(|_| panic!("Failed to read source: {}", source.display()));
+            (source, content)
+        })
+        .collect()
+}
+
+/// Counts `impl <trait_name> for` occurrences across the given sources.
+fn count_trait_impls(sources: &[(PathBuf, String)], trait_name: &str) -> usize {
     let needle = format!("impl {trait_name} for");
     sources
         .iter()
-        .map(|source| {
-            let content = fs::read_to_string(source)
-                .unwrap_or_else(|_| panic!("Failed to read source: {}", source.display()));
-            content.matches(needle.as_str()).count()
-        })
+        .map(|(_, content)| content.matches(needle.as_str()).count())
         .sum()
 }
 
@@ -162,17 +169,15 @@ fn every_port_trait_has_at_least_two_implementations() {
     let crates_dir = repo_root().join(CRATES_DIR);
     let mut failures = Vec::new();
 
+    let sources = read_rust_sources(&crates_dir);
+
     for (trait_name, owner_file_name) in PORT_TRAITS {
-        let mut owner_sources = Vec::new();
-        collect_rust_sources(&crates_dir, &mut owner_sources);
-        let declared = owner_sources.iter().any(|source| {
+        let declared = sources.iter().any(|(source, content)| {
             source
                 .file_name()
                 .and_then(|name| name.to_str())
                 .is_some_and(|name| name == *owner_file_name)
-                && fs::read_to_string(source)
-                    .map(|content| declares_trait(&content, trait_name))
-                    .unwrap_or(false)
+                && declares_trait(content, trait_name)
         });
         if !declared {
             failures.push(format!(
@@ -182,7 +187,7 @@ fn every_port_trait_has_at_least_two_implementations() {
             continue;
         }
 
-        let impl_count = count_trait_impls(&crates_dir, trait_name);
+        let impl_count = count_trait_impls(&sources, trait_name);
         if impl_count < MINIMUM_IMPL_COUNT {
             failures.push(format!(
                 "trait {trait_name} has only {impl_count} `impl {trait_name} for` occurrence(s), expected at least {MINIMUM_IMPL_COUNT}"

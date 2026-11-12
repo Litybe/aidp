@@ -30,7 +30,6 @@ $repoRoot = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
 $userVars = [ordered]@{
     RUSTUP_HOME      = $rustupHome
     CARGO_HOME       = $cargoHome
-    CARGO_TARGET_DIR = Join-Path $AidpRoot 'target'
     AIDP_SRC         = Join-Path $AidpRoot 'src\aidp'
     AIDP_INSTALL_DIR = Join-Path $AidpRoot 'bin'
     AIDP_GATEWAY_DIR = Join-Path $AidpRoot 'gateway'
@@ -80,6 +79,13 @@ foreach ($name in $userVars.Keys) {
     else { [Environment]::SetEnvironmentVariable($name, $value, 'User'); Write-OK "$name = $value" }
     Set-Item -Path "env:$name" -Value $value
 }
+# Chaque dépôt et chaque worktree compile dans son propre target\ : une cible partagée fait attendre
+# les sessions concurrentes sur son verrou et recompiler.
+if ([Environment]::GetEnvironmentVariable('CARGO_TARGET_DIR', 'User')) {
+    [Environment]::SetEnvironmentVariable('CARGO_TARGET_DIR', $null, 'User')
+    Write-OK 'CARGO_TARGET_DIR retirée : chaque dépôt et worktree utilise son propre target\ (une cible partagée bloque les sessions concurrentes sur son verrou et force des recompilations)'
+}
+Remove-Item -Path 'env:CARGO_TARGET_DIR' -ErrorAction SilentlyContinue
 Add-UserPath $winlibsBin
 Add-UserPath $cargoBin
 $env:Path = "$cargoBin;$winlibsBin;$env:Path"

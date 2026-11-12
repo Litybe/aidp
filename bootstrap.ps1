@@ -5,7 +5,8 @@
 
 $ErrorActionPreference = 'Stop'
 $repoRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
-$releaseDir = Join-Path $repoRoot 'target\release'
+$targetDir = if ($env:CARGO_TARGET_DIR) { $env:CARGO_TARGET_DIR } else { Join-Path $repoRoot 'target' }
+$releaseDir = Join-Path $targetDir 'release'
 $builtAidp = Join-Path $releaseDir 'aidp.exe'
 $installDir = if ($env:AIDP_INSTALL_DIR) { $env:AIDP_INSTALL_DIR } else { Join-Path $HOME '.aidp\bin' }
 
