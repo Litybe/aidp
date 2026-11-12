@@ -59,6 +59,7 @@ pub struct DispatcherConfig {
     pub max_attempts: u32,
     #[serde(default = "DispatcherConfig::default_gate_timeout_hours")]
     pub gate_timeout_hours: u32,
+    /// Stops the claim of new tickets only; started flows keep running.
     #[serde(default)]
     pub paused: bool,
     /// Most tickets of one project that may own a worktree at once.

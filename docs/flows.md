@@ -338,8 +338,9 @@ A game ticket goes through two flows (decision of 2026-11-08, contract C13).
   with the `unity-editor` resource. `dispatcher.test_slots` (default 1) such test flows at a time per project. The
   dispatcher starts the oldest `to-test` issue first (a manual start promotes one ahead), as soon as the lane of its
   project is free. A project test flow counts in the test lane while it holds, or waits for, the checkout; once it
-  ran `git.restore` (the merge approval is pending) it no longer does. It never takes a dev slot. Pause, budget and
-  night mode apply to both lanes.
+  ran `git.restore` (the merge approval is pending) it no longer does. It never takes a dev slot. Budget and
+  night mode apply to both lanes. The dispatcher pause only stops the claim of new dev and bug tickets: the test lane
+  of a ticket already started still launches.
 
 **Test checkout.** A project may have a `testCheckout` (absolute path of a dedicated clone of the same repository,
 for example on an SSD) in the registry `projects.json`. Set it with `aidp gateway projects test-checkout <project id>

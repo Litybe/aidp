@@ -1292,18 +1292,15 @@ impl Dispatcher {
             Ok(s) => s,
             Err(e) => return json!({ FIELD_ERROR: e.to_string() }),
         };
-        if store.config().dispatcher.paused {
-            return json!({
-                FIELD_MODE: DispatcherMode::Paused.as_str(),
-                FIELD_LAUNCHES: [],
-                FIELD_SKIPPED: [],
-                FIELD_SLOTS_USED: 0,
-                FIELD_SLOTS_MAX: store.config().dispatcher.slots,
-            });
-        }
         let built = self.build_plan(&store);
         let mut v = serde_json::to_value(&built.dispatch_plan).unwrap_or_else(|_| json!({}));
         if let Some(obj) = v.as_object_mut() {
+            if store.config().dispatcher.paused {
+                obj.insert(
+                    FIELD_MODE.to_string(),
+                    json!(DispatcherMode::Paused.as_str()),
+                );
+            }
             obj.insert(
                 "budget".to_string(),
                 serde_json::to_value(&built.budget_state).unwrap_or_else(|_| json!({})),
@@ -1375,37 +1372,8 @@ impl Dispatcher {
             return report;
         }
 
-        if cfg.paused {
-            let state = DispatcherState {
-                mode: DispatcherMode::Paused.as_str().to_string(),
-                paused: true,
-                wait_until: None,
-                last_tick_at: now_iso(),
-                last_reason: reason.to_string(),
-                slots: SlotsState {
-                    used: 0,
-                    max: cfg.slots as usize,
-                    test_used: 0,
-                    test_max: cfg.test_slots as usize,
-                    bug_used: 0,
-                    bug_max: cfg.bug_slots as usize,
-                },
-                running: Vec::new(),
-                last_plan: LastPlan::default(),
-                budget: lock(&self.state).budget.clone(),
-            };
-            self.write_state(&store, &state);
-            let report = json!({
-                FIELD_MODE: DispatcherMode::Paused.as_str(),
-                FIELD_LAUNCHED: Vec::<String>::new(),
-                FIELD_SKIPPED: Vec::<SkippedEntry>::new(),
-                FIELD_SLOTS_USED: 0,
-                FIELD_SLOTS_MAX: state.slots.max,
-            });
-            self.bus.emit(EVENT_DISPATCHER_TICK, report.clone());
-            return report;
-        }
-
+        // A paused dispatcher only stops claiming new tickets (the plan skips them as `paused`):
+        // the sweeps, the probes and the lanes of the flows already started go on.
         if self.first_tick.swap(false, Ordering::SeqCst) {
             self.sweep_orphans(&store);
         }
@@ -1498,12 +1466,14 @@ impl Dispatcher {
             self.record_launch_warnings(&mut state_running, &launched_sessions, &manual_warnings);
 
         let state = DispatcherState {
-            mode: if is_waiting {
+            mode: if cfg.paused {
+                DispatcherMode::Paused.as_str().to_string()
+            } else if is_waiting {
                 DispatcherMode::Waiting.as_str().to_string()
             } else {
                 DispatcherMode::Normal.as_str().to_string()
             },
-            paused: false,
+            paused: cfg.paused,
             wait_until: if is_waiting { wait_until } else { None },
             last_tick_at: now_iso(),
             last_reason: reason.to_string(),
@@ -1524,7 +1494,7 @@ impl Dispatcher {
         };
         self.write_state(&store, &state);
 
-        let report = with_warnings(
+        let mut report = with_warnings(
             json!({
                 FIELD_LAUNCHED: launched,
                 FIELD_SKIPPED: skipped,
@@ -1534,6 +1504,9 @@ impl Dispatcher {
             }),
             &launch_warnings,
         );
+        if cfg.paused {
+            report[FIELD_MODE] = json!(DispatcherMode::Paused.as_str());
+        }
         self.bus.emit(EVENT_DISPATCHER_TICK, report.clone());
         report
     }

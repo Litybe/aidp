@@ -409,3 +409,38 @@ fn a_to_test_ticket_goes_back_to_its_test_flow_once_the_bug_is_closed() {
     assert_eq!(result.launches[0].flow.as_deref(), Some("game-test-code"));
     assert!(result.launches[0].test);
 }
+
+#[test]
+fn a_paused_dispatcher_claims_no_new_ticket() {
+    let mut cfg = config(3, 1);
+    cfg.paused = true;
+    let tickets = [
+        ticket("D-1", Phase::Dev, Status::Todo, 5),
+        bug("B-1", Phase::Dev, Status::Queued, 1),
+    ];
+    let result = plan(&tickets, &cfg, 0, &[]);
+    assert!(result.launches.is_empty());
+    assert_eq!(result.skipped.len(), 2);
+    assert!(result
+        .skipped
+        .iter()
+        .all(|(_, reason)| *reason == SkipReason::Paused));
+}
+
+#[test]
+fn a_paused_dispatcher_still_starts_the_test_lane_of_a_started_ticket() {
+    let mut cfg = config(3, 1);
+    cfg.paused = true;
+    let tickets = [
+        ticket("T-1", Phase::ToTest, Status::InProgress, 5),
+        ticket("D-1", Phase::Dev, Status::Todo, 5),
+    ];
+    let result = plan(&tickets, &cfg, 1, &[]);
+    let launched: Vec<&str> = result.launches.iter().map(|l| l.key.as_str()).collect();
+    assert_eq!(launched, vec!["T-1"]);
+    assert!(result.launches[0].test);
+    assert!(result
+        .skipped
+        .iter()
+        .any(|(key, reason)| key == "D-1" && *reason == SkipReason::Paused));
+}

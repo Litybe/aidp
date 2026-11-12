@@ -678,6 +678,38 @@ fn dev_flow_stops_at_to_test_and_never_touches_the_main_checkout() {
 }
 
 #[test]
+fn a_paused_dispatcher_does_not_stop_a_started_flow_from_starting_its_next_steps() {
+    let world = world(
+        "game-code-paused-dispatcher",
+        Script {
+            reviews: vec!["done"],
+            tests: vec![true],
+            hold: None,
+        },
+        &["GH-1"],
+    );
+    let todo = world.vault.join("TODO");
+    std::fs::create_dir_all(&todo).unwrap();
+    std::fs::write(
+        todo.join("config.yaml"),
+        "dispatcher:
+  paused: true
+",
+    )
+    .unwrap();
+    world.start("GH-1");
+    let done = world.wait("the end", |state| state.status == FlowStatus::Done, "GH-1");
+
+    assert_eq!(
+        world.provider.labels(),
+        ["implement", "review"],
+        "every pipeline step of the started flow ran while the dispatcher was paused"
+    );
+    assert_eq!(status_of(&done, "to_test"), StepStatus::Done);
+    world.finish();
+}
+
+#[test]
 fn test_flow_runs_the_test_loop_then_the_merge_in_the_main_checkout() {
     let world = world(
         "game-test-code-happy",
