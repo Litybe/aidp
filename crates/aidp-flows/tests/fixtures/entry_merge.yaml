@@ -1,0 +1,22 @@
+id: entry-merge
+version: 1
+entries:
+  merge:
+    step: ready
+    keep: [checkout]
+    outputs:
+      test: { passed: true }
+  inside_loop:
+    step: test
+  keeps_later:
+    step: ready
+    keep: [merge]
+  assumes_unknown:
+    step: ready
+    outputs:
+      ghost: { passed: true }
+steps:
+  - { id: checkout, kind: action, use: noop }
+  - { id: test_loop, kind: loop, max: 1, body: [{ id: test, kind: pipeline, use: dev }] }
+  - { id: ready, kind: action, use: noop, when: "steps.test.outputs.passed == true" }
+  - { id: merge, kind: action, use: noop, when: "steps.test.outputs.passed == true" }

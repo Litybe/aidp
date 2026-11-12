@@ -59,6 +59,8 @@ fn registry_with_pr() -> Registry {
 const HEAD_SHA: &str = "0123abcd0123abcd0123abcd0123abcd0123abcd";
 const COST_LINE: &str = "Coût : 1,2 M tokens";
 const UNITY_REASON: &str = "resource:unity-editor";
+const ENTRY_MERGE: &str = "merge";
+const ENTRY_REVIEW: &str = "review";
 
 /// The `aidp` CLI as the flow actions see it. Each verb does what the real one does: label and
 /// comment write on the GitHub mock (the comment body is read from `--body-file`, as the real
@@ -520,6 +522,10 @@ impl World {
     }
 
     fn start_flow(&self, key: &str, flow: &str) {
+        self.start_flow_at(key, flow, None);
+    }
+
+    fn start_flow_at(&self, key: &str, flow: &str, entry: Option<&str>) {
         let number = self.cli.issues[key];
         let ticket = json!({
             "key": key, "service": self.project_id, "summary": "game feature",
@@ -532,6 +538,7 @@ impl World {
                 provider: Some(PROVIDER_ID.to_string()),
                 ..FlowExecutionPolicy::default()
             }),
+            entry: entry.map(str::to_string),
             ..TicketFlowRequest::default()
         };
         self.engine
@@ -1072,4 +1079,74 @@ fn dump_runs(dir: &Path) -> String {
         }
     }
     found
+}
+
+#[test]
+fn merge_entry_skips_the_checkout_and_the_unity_test_then_merges() {
+    let world = world(
+        "game-test-code-forced-merge",
+        Script {
+            reviews: vec!["done"],
+            tests: vec![false],
+            hold: None,
+        },
+        &["GH-1"],
+    );
+    world.start_flow_at("GH-1", TEST_FLOW, Some(ENTRY_MERGE));
+    let gate = world.wait_gate("GH-1");
+
+    assert!(world.provider.labels().is_empty(), "no pipeline runs");
+    assert_eq!(world.mock_labels("GH-1"), ["aidp:awaiting-merge"]);
+    assert_eq!(status_of(&gate, "checkout"), StepStatus::Skipped);
+    assert_eq!(status_of(&gate, "test_loop"), StepStatus::Skipped);
+    assert_eq!(status_of(&gate, "test_exhausted"), StepStatus::Skipped);
+    assert_eq!(gate.entry.as_deref(), Some(ENTRY_MERGE));
+
+    world
+        .engine
+        .approve("GH-1", "merge_approval", "test")
+        .unwrap();
+    let done = world.wait("the end", |state| state.status == FlowStatus::Done, "GH-1");
+
+    let verbs = world.cli.verbs();
+    assert!(!verbs.contains(&"checkout:GH-1".to_string()), "{verbs:?}");
+    assert!(
+        verbs.contains(&format!("pr-ready:{PR_NUMBER}")),
+        "{verbs:?}"
+    );
+    assert!(
+        verbs.contains(&format!("pr-merge:{PR_NUMBER}:{HEAD_SHA}")),
+        "{verbs:?}"
+    );
+    assert_eq!(status_of(&done, "merge"), StepStatus::Done);
+    assert_eq!(world.mock_labels("GH-1"), ["aidp:done"]);
+    world.finish();
+}
+
+#[test]
+fn review_entry_prepares_the_worktree_then_reviews_without_implementing() {
+    let world = world(
+        "game-code-forced-review",
+        Script {
+            reviews: vec!["done"],
+            tests: vec![true],
+            hold: None,
+        },
+        &["GH-1"],
+    );
+    world.start_flow_at("GH-1", DEV_FLOW, Some(ENTRY_REVIEW));
+    let done = world.wait("the end", |state| state.status == FlowStatus::Done, "GH-1");
+
+    assert_eq!(world.provider.labels(), ["review"], "implement is skipped");
+    let verbs = world.cli.verbs();
+    assert!(verbs.contains(&"worktree:GH-1".to_string()), "{verbs:?}");
+    assert!(verbs.contains(&"branch:GH-1".to_string()), "{verbs:?}");
+    assert!(
+        !verbs.contains(&"label:aidp:in-progress".to_string()),
+        "{verbs:?}"
+    );
+    assert_eq!(status_of(&done, "implement"), StepStatus::Skipped);
+    assert_eq!(status_of(&done, "to_test"), StepStatus::Done);
+    assert_eq!(world.mock_labels("GH-1"), ["aidp:to-test"]);
+    world.finish();
 }

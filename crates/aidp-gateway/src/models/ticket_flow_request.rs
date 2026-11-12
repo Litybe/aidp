@@ -19,4 +19,7 @@ pub struct TicketFlowRequest {
     pub settings: Option<Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub policy: Option<FlowExecutionPolicy>,
+    /// The entry of the flow definition to start from (a forced move of the ticket).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub entry: Option<String>,
 }

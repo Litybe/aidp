@@ -253,6 +253,7 @@ impl Executor {
         repo: &str,
         state: FlowState,
         ticket: Value,
+        entry: Option<String>,
     ) -> anyhow::Result<FlowState> {
         let _transition = self.transition()?;
         let key = state.key.clone();
@@ -264,6 +265,7 @@ impl Executor {
             Event::Start {
                 ticket,
                 at: self.now(),
+                entry,
             },
         )
     }

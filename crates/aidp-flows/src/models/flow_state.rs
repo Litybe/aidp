@@ -39,6 +39,9 @@ pub struct FlowState {
     pub started_at: Option<String>,
     #[serde(default)]
     pub ended_at: Option<String>,
+    /// The entry of `def.entries` the run was started from by hand, if any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub entry: Option<String>,
 }
 
 impl FlowState {
@@ -62,6 +65,7 @@ impl FlowState {
             manual_publish: BTreeSet::new(),
             started_at: None,
             ended_at: None,
+            entry: None,
         }
     }
 

@@ -3601,6 +3601,24 @@ fn route(
             }
         }
 
+        (Method::Post, ["tickets", key, "force"]) => {
+            let store = ticket_store_or_503!(app);
+            let request: crate::models::TicketForceRequest = match serde_json::from_value(body) {
+                Ok(request) => request,
+                Err(error) => return Ok(err(HTTP_BAD_REQUEST, format!("invalid body: {error}"))),
+            };
+            match crate::ticket_force::force_ticket(
+                &store,
+                &app.bus,
+                app.flows.as_ref(),
+                key,
+                &request,
+            ) {
+                Ok(reply) => Reply::Json(HTTP_OK, serde_json::to_value(reply)?),
+                Err(e) => api_err(e),
+            }
+        }
+
         (Method::Get, ["dispatcher"]) => Reply::Json(HTTP_OK, app.dispatcher.state_json()),
         (Method::Get, ["dispatcher", "plan"]) => Reply::Json(HTTP_OK, app.dispatcher.plan_only()),
         (Method::Get, ["dispatcher", "budget"]) => {

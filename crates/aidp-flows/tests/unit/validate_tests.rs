@@ -4,6 +4,8 @@ const BASIC: &str = include_str!("../fixtures/basic.yaml");
 const LOOP_MAX: &str = include_str!("../fixtures/loop_max.yaml");
 const INVALID_DUPLICATE: &str = include_str!("../fixtures/invalid_duplicate.yaml");
 const INVALID_LOOP: &str = include_str!("../fixtures/invalid_loop.yaml");
+const ENTRY_MERGE: &str = include_str!("../fixtures/entry_merge.yaml");
+const BAD_ENTRY_ISSUES: usize = 3;
 
 fn names(items: &[&str]) -> BTreeSet<String> {
     items.iter().map(|item| item.to_string()).collect()
@@ -208,4 +210,15 @@ steps:
     let report = validate(&def, &catalog());
 
     assert_eq!(codes(&report.errors), vec![IssueCode::BadResource]);
+}
+
+#[test]
+fn refuses_entries_landing_inside_a_loop_keeping_later_steps_or_assuming_unknown_steps() {
+    let report = validate(&def_of(ENTRY_MERGE), &catalog());
+    let bad: Vec<IssueCode> = codes(&report.errors)
+        .into_iter()
+        .filter(|code| *code == IssueCode::BadEntry)
+        .collect();
+    assert_eq!(bad.len(), BAD_ENTRY_ISSUES);
+    assert_eq!(report.errors.len(), BAD_ENTRY_ISSUES);
 }

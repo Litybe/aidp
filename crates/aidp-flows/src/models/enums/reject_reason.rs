@@ -10,4 +10,5 @@ pub enum RejectReason {
     UnknownStep,
     InvalidChoice,
     NotPaused,
+    UnknownEntry,
 }

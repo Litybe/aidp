@@ -10,6 +10,9 @@ pub enum Event {
     Start {
         ticket: Value,
         at: String,
+        /// The entry of the definition to start from, skipping the steps before it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        entry: Option<String>,
     },
     ActionFinished {
         effect_id: String,

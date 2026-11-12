@@ -148,6 +148,7 @@ fn execution_request(pipeline: bool, human: bool) -> crate::models::TicketFlowRe
             headless: true,
             ..Default::default()
         }),
+        entry: None,
     }
 }
 

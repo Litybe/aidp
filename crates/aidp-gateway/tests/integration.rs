@@ -31,6 +31,7 @@ mod session_process_runner;
 mod session_start_validation;
 mod settings_http;
 mod static_ui;
+mod ticket_force_route;
 mod ticket_start_route;
 mod token_costs;
 mod unity_http_routes;

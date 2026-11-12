@@ -4,6 +4,7 @@ use crate::model::{
     FlowDef, FlowState, FlowStatus, Frame, FrameKind, OnError, Step, StepKind, StepState,
     StepStatus, CI_BLOCK, CI_STEP_PREFIX, PUBLISH_BLOCK, PUBLISH_STEP_PREFIX,
 };
+use crate::models::constants::entry::FORCED_DETAIL_PREFIX;
 use crate::models::constants::human::{REJECTED_DETAIL, REJECTED_SKIP_REFUSAL};
 use crate::models::constants::manual::{PUBLISH_ACTION, PUBLISH_SUFFIX};
 use crate::models::constants::resource;
@@ -82,7 +83,7 @@ impl Run<'_> {
     fn apply(&mut self, event: Event) -> Result<(), FlowError> {
         self.guard(&event)?;
         match event {
-            Event::Start { ticket, .. } => self.start(ticket),
+            Event::Start { ticket, entry, .. } => self.start(ticket, entry),
             Event::ActionFinished {
                 effect_id, outcome, ..
             } => self.action_finished(&effect_id, outcome),
@@ -157,7 +158,10 @@ impl Run<'_> {
         }
     }
 
-    fn start(&mut self, ticket: Value) -> Result<(), FlowError> {
+    fn start(&mut self, ticket: Value, entry: Option<String>) -> Result<(), FlowError> {
+        if let Some(name) = entry {
+            self.seed_entry(&name)?;
+        }
         self.state.ticket = ticket;
         self.state.status = FlowStatus::Running;
         self.state.started_at = Some(self.at.clone());
@@ -172,6 +176,43 @@ impl Run<'_> {
         self.emit(FlowEvent::Started, None, None);
         self.drive();
         Ok(())
+    }
+
+    /// Records the entry the run starts from and stores the outputs it assumes for skipped steps.
+    fn seed_entry(&mut self, name: &str) -> Result<(), FlowError> {
+        let Some(entry) = self.def.entries.get(name) else {
+            return Err(rejected(
+                RejectReason::UnknownEntry,
+                format!("flow `{}` has no entry `{name}`", self.def.id),
+            ));
+        };
+        for (rid, outputs) in &entry.outputs {
+            self.state.steps.insert(
+                rid.clone(),
+                StepState {
+                    status: StepStatus::Skipped,
+                    reason: Some(StepReason::Forced.as_str().to_string()),
+                    detail: Some(format!("{FORCED_DETAIL_PREFIX}{name}")),
+                    outputs: outputs.clone(),
+                    finished_at: Some(self.at.clone()),
+                    ..StepState::default()
+                },
+            );
+        }
+        self.state.entry = Some(name.to_string());
+        Ok(())
+    }
+
+    /// The detail of a top-level step skipped because the run started from an entry past it.
+    fn forced_skip(&self, step: &Step, prefix: &str) -> Option<String> {
+        let name = self.state.entry.as_deref()?;
+        let entry = self.def.entries.get(name)?;
+        let at_root = prefix.is_empty() && self.state.stack.len() == 1;
+        let reached = step.id == entry.step || self.state.steps.contains_key(&entry.step);
+        if !at_root || reached || entry.keep.contains(&step.id) {
+            return None;
+        }
+        Some(format!("{FORCED_DETAIL_PREFIX}{name}"))
     }
 
     fn push_effect(&mut self, id: String, kind: EffectKind) {
@@ -293,6 +334,20 @@ impl Run<'_> {
 
     fn enter_step(&mut self, step: Step, prefix: String) {
         let rid = format!("{prefix}{}", step.id);
+        if let Some(detail) = self.forced_skip(&step, &prefix) {
+            let seeded = self.state.steps.remove(&rid).map(|state| state.outputs);
+            self.state.steps.insert(
+                rid.clone(),
+                StepState {
+                    outputs: seeded.unwrap_or_default(),
+                    phase: step.phase.clone(),
+                    ..StepState::default()
+                },
+            );
+            self.mark_skipped(&rid, StepReason::Forced, detail);
+            self.leave();
+            return;
+        }
         let iteration = self
             .state
             .steps

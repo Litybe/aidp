@@ -21,6 +21,8 @@ pub enum StepReason {
     Rejected,
     /// A pipeline step waits for a human because its ticket reached its token ceiling.
     TicketBudget,
+    /// A top-level step before the entry a run was started from by hand.
+    Forced,
 }
 
 impl StepReason {
@@ -43,6 +45,7 @@ impl StepReason {
             StepReason::Aborted => "aborted",
             StepReason::Rejected => "rejected",
             StepReason::TicketBudget => "ticket-budget",
+            StepReason::Forced => "forced",
         }
     }
 }

@@ -49,4 +49,5 @@ pub mod model_service;
 pub mod flow_manual;
 pub mod settings;
 pub mod swr_cache;
+pub mod ticket_force;
 pub mod vault_index;
