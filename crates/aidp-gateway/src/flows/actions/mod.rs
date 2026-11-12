@@ -154,6 +154,40 @@ impl FlowAction for IssueCommentAction {
     }
 }
 
+/// `gh.pr_comment`: posts a report on the ticket's pull request (`repo` and `pr` come from the run's
+/// facts). `with.body` is a report path, a file name looked up under `with.body_dir`, or the text.
+pub struct PrCommentAction;
+
+impl PrCommentAction {
+    fn command() -> SubprocessAction {
+        SubprocessAction::new([
+            VERB_GH,
+            VERB_GH_PR_COMMENT,
+            PLACEHOLDER_REPO_ARG,
+            PLACEHOLDER_PR_ARG,
+            FLAG_BODY_FILE,
+            PLACEHOLDER_BODY_FILE_ARG,
+        ])
+    }
+}
+
+impl FlowAction for PrCommentAction {
+    fn placeholders(&self) -> Vec<String> {
+        Self::command().placeholders()
+    }
+
+    fn run(&self, context: &ActionContext<'_>, with: &BTreeMap<String, Value>) -> ActionOutcome {
+        let mut with = with.clone();
+        locate_body(&mut with);
+        let temporary = materialize_body(&mut with);
+        let outcome = Self::command().run(context, &with);
+        if let Some(path) = temporary {
+            let _ = std::fs::remove_file(path);
+        }
+        outcome
+    }
+}
+
 /// `--body-file` reads a file, but `with.body` is the comment text of a template (a report file
 /// path stays as it is): text that is no existing file goes to a temporary file whose path
 /// replaces it. Returns that file, to delete after the call.
@@ -419,6 +453,10 @@ pub fn register(registry: &mut Registry) {
     registry.register_action(
         BuiltinAction::GhIssueComment.as_str(),
         Arc::new(IssueCommentAction),
+    );
+    registry.register_action(
+        BuiltinAction::GhPrComment.as_str(),
+        Arc::new(PrCommentAction),
     );
     registry.register_action(BuiltinAction::BugCreate.as_str(), Arc::new(BugCreateAction));
     // A bug merged into its parent's branch does not close its issue by itself.

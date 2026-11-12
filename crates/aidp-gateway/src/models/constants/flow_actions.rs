@@ -12,6 +12,8 @@ pub const ACTION_GH_PR_READY: &str = "gh.pr_ready";
 pub const ACTION_GH_MERGE: &str = "gh.merge";
 pub const ACTION_GH_ISSUE_LABEL: &str = "gh.issue_label";
 pub const ACTION_GH_ISSUE_COMMENT: &str = "gh.issue_comment";
+/// Posts a report as a conversation comment on the ticket's pull request.
+pub const ACTION_GH_PR_COMMENT: &str = "gh.pr_comment";
 pub const ACTION_WORKTREE_REMOVE: &str = "worktree.remove";
 pub const ACTION_TICKET_TO_TEST: &str = "ticket.to_test";
 /// Raises the bug issue of a failed test, as a sub-issue of the ticket under test.
@@ -43,6 +45,7 @@ pub const VERB_TICKET_COMMENT: &str = "comment";
 pub const VERB_TICKET_CLOSE: &str = "close";
 pub const VERB_GH: &str = "gh";
 pub const VERB_GH_PR_READY: &str = "pr-ready";
+pub const VERB_GH_PR_COMMENT: &str = "pr-comment";
 pub const VERB_GH_PR_MERGE: &str = "pr-merge";
 
 pub const FLAG_BODY_FILE: &str = "--body-file";
@@ -60,6 +63,7 @@ pub const FLAG_ALLOW_EXTRA: &str = "--allow-extra";
 
 pub const PLACEHOLDER_KEY_ARG: &str = "{key}";
 pub const PLACEHOLDER_PR_ARG: &str = "{pr}";
+pub const PLACEHOLDER_REPO_ARG: &str = "{repo}";
 pub const PLACEHOLDER_BRANCH_ARG: &str = "{branch}";
 pub const PLACEHOLDER_SHA_ARG: &str = "{sha}";
 pub const PLACEHOLDER_PR_BODY_ARG: &str = "{pr_body}";

@@ -426,6 +426,57 @@ fn issue_comment_writes_a_text_body_to_a_file_for_body_file() {
     assert!(args[at + 1].contains("aidp-comment-"));
 }
 
+#[test]
+fn pr_comment_posts_a_report_named_in_the_stage_folder_on_the_pull_request() {
+    let runner = RecordingRunner::new(EXIT_OK, "{}");
+    let dir = tempfile::tempdir().unwrap();
+    let nested = dir.path().join("review");
+    std::fs::create_dir_all(&nested).unwrap();
+    let report = nested.join("review.md");
+    std::fs::write(&report, "## Revue avocat du diable").unwrap();
+    let with = BTreeMap::from([
+        ("repo".to_string(), json!("Litybe/PixelHood")),
+        ("pr".to_string(), json!(390)),
+        ("body".to_string(), json!("review.md")),
+        (
+            "body_dir".to_string(),
+            json!(dir.path().to_string_lossy().to_string()),
+        ),
+    ]);
+    run_with(
+        registered(BuiltinAction::GhPrComment).as_ref(),
+        &runner,
+        "GH-12",
+        with,
+    );
+    let args = runner.spawned_args();
+    let report = report.to_string_lossy().to_string();
+    assert!(args.windows(6).any(|w| w
+        == strings(&[
+            "gh",
+            "pr-comment",
+            "Litybe/PixelHood",
+            "390",
+            "--body-file",
+            report.as_str()
+        ])
+        .as_slice()));
+}
+
+#[test]
+fn pr_comment_without_a_pull_request_is_a_technical_error() {
+    let runner = RecordingRunner::new(EXIT_OK, "{}");
+    let with = BTreeMap::from([("body".to_string(), json!("Revue : done"))]);
+    let outcome = run_with(
+        registered(BuiltinAction::GhPrComment).as_ref(),
+        &runner,
+        "GH-12",
+        with,
+    );
+    assert!(matches!(outcome, ActionOutcome::TechnicalError(_)));
+    assert_eq!(runner.spawn_count(), 0);
+}
+
 /// The refresh runs the flow verb alone: the checkout it works in is the action's workspace.
 #[test]
 fn unity_refresh_runs_the_flow_verb_without_placeholders() {
