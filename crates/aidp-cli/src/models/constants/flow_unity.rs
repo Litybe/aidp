@@ -28,3 +28,23 @@ pub const HEARTBEAT_STATE_RELOADING: &str = "reloading";
 pub const REASON_NOT_UNITY_PROJECT: &str = "not-a-unity-project";
 pub const REASON_EDITOR_CLOSED: &str = "unity-editor-closed";
 pub const BLOCKED_UNITY_EDITOR: &str = "blocked: unity-editor";
+
+/// The PowerShell script that brings the editor to the foreground, embedded in the binary.
+pub const FOCUS_SCRIPT: &str = include_str!("../../../assets/unity-focus.ps1");
+pub const FOCUS_SCRIPT_FILE: &str = "aidp-unity-focus.ps1";
+pub const FOCUS_LOG: [&str; 3] = [".aidp", "editor", "focus.log"];
+pub const POWERSHELL_PROGRAM: &str = "powershell.exe";
+pub const POWERSHELL_ARGS: [&str; 4] = [
+    "-NoProfile",
+    "-NonInteractive",
+    "-ExecutionPolicy",
+    "Bypass",
+];
+pub const POWERSHELL_FILE_FLAG: &str = "-File";
+pub const POWERSHELL_PROJECT_FLAG: &str = "-Project";
+pub const POWERSHELL_LOG_FLAG: &str = "-LogFile";
+pub const FOCUS_RESULT_OK: &str = "FOCUS=True";
+pub const FOCUS_RESULT_PREFIX: &str = "FOCUS=";
+pub const FOCUS_ABSENT: &str = "ABSENT";
+pub const FOCUS_NO_WINDOW: &str = "NOWINDOW";
+pub const FOCUS_DIALOG_PREFIXES: [&str; 2] = ["DIALOG ", "WIN32DIALOG "];

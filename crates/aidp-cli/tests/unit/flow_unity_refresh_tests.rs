@@ -36,6 +36,7 @@ fn environment<'a>(processes: &'a dyn ProcessSource, timeout_millis: u64) -> Env
         timeout: Duration::from_millis(timeout_millis),
         poll: Duration::from_millis(10),
         wait_multiplier: 1,
+        focus: false,
     }
 }
 

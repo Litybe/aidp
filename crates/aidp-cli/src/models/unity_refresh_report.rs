@@ -13,6 +13,9 @@ pub struct UnityRefreshReport {
     pub skipped: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
+    /// Whether the focus script put the editor in the foreground; absent when no script ran.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub focused: Option<bool>,
     pub errors: Vec<Value>,
     pub warnings: u64,
     pub duration_ms: u64,

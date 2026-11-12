@@ -25,6 +25,7 @@ use std::str::FromStr;
 
 mod bug;
 mod checkout;
+mod unity_focus;
 mod unity_refresh;
 
 const HTTP_CONFLICT_PREFIX: &str = "HTTP 409";
@@ -49,6 +50,7 @@ pub fn run(ctx: &Ctx, op: Op) -> anyhow::Result<CommandOutput> {
             timeout,
             wait_multiplier,
         } => unity_refresh::unity_refresh(&ctx.workspace(), timeout, wait_multiplier),
+        Op::UnityFocus => unity_focus::unity_focus(&ctx.workspace()),
         Op::GitPush { branch } => git_push(ctx, branch.as_deref()),
         Op::BugCreate {
             key,

@@ -20,6 +20,8 @@ pub(super) struct Environment<'a> {
     pub poll: Duration,
     /// Times the heartbeat tolerance is stretched: 1 by default, more when the doctor granted a longer wait.
     pub wait_multiplier: i64,
+    /// Brings the editor to the foreground before the request.
+    pub focus: bool,
 }
 
 pub(super) fn unity_refresh(
@@ -33,6 +35,7 @@ pub(super) fn unity_refresh(
         timeout: Duration::from_secs(timeout_seconds * u64::from(multiplier)),
         poll: Duration::from_millis(POLL_INTERVAL_MILLIS),
         wait_multiplier: i64::from(multiplier),
+        focus: cfg!(windows),
     };
     output(&run(workspace, &environment))
 }
@@ -53,11 +56,16 @@ pub(super) fn run(workspace: &Path, environment: &Environment<'_>) -> UnityRefre
         );
     }
 
+    let focused = environment
+        .focus
+        .then(|| super::unity_focus::focus_editor(workspace).focused);
+
     let request_id = request_id();
     if let Err(error) = write_request(workspace, &request_id) {
         return UnityRefreshReport {
             request_id: Some(request_id),
             blocked: true,
+            focused,
             message: format!("{BLOCKED_UNITY_EDITOR}: cannot write the compile request: {error}"),
             ..UnityRefreshReport::default()
         };
@@ -67,29 +75,38 @@ pub(super) fn run(workspace: &Path, environment: &Environment<'_>) -> UnityRefre
     let result_path = result_file(workspace, &request_id);
     loop {
         if let Some(result) = read_json(&result_path) {
-            return from_result(request_id, &result);
+            return UnityRefreshReport {
+                focused,
+                ..from_result(request_id, &result)
+            };
         }
         let heartbeat = read_json(&heartbeat_file(workspace)).unwrap_or(Value::Null);
         if let Some(age) =
             stale_heartbeat_age_scaled(&heartbeat, chrono::Utc::now(), environment.wait_multiplier)
         {
-            return blocked(
-                request_id,
-                format!(
-                    "{BLOCKED_UNITY_EDITOR}: the editor heartbeat is {age} s old, its main thread is stuck (dialog box or freeze)"
-                ),
-                heartbeat,
-            );
+            return UnityRefreshReport {
+                focused,
+                ..blocked(
+                    request_id,
+                    format!(
+                        "{BLOCKED_UNITY_EDITOR}: the editor heartbeat is {age} s old, its main thread is stuck (dialog box or freeze)"
+                    ),
+                    heartbeat,
+                )
+            };
         }
         if started.elapsed() >= environment.timeout {
-            return blocked(
-                request_id,
-                format!(
-                    "{BLOCKED_UNITY_EDITOR}: no compile result after {} s",
-                    environment.timeout.as_secs()
-                ),
-                heartbeat,
-            );
+            return UnityRefreshReport {
+                focused,
+                ..blocked(
+                    request_id,
+                    format!(
+                        "{BLOCKED_UNITY_EDITOR}: no compile result after {} s",
+                        environment.timeout.as_secs()
+                    ),
+                    heartbeat,
+                )
+            };
         }
         std::thread::sleep(environment.poll);
     }
