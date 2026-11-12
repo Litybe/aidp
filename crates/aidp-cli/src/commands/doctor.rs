@@ -192,7 +192,8 @@ fn install_checks(ctx: &Ctx) -> Vec<DoctorCheck> {
             }),
         ));
     }
-    let ag_dir = claude_agents_dir(ctx).unwrap_or_else(|| PathBuf::from(CLAUDE_DIR).join(AGENTS_DIR));
+    let ag_dir =
+        claude_agents_dir(ctx).unwrap_or_else(|| PathBuf::from(CLAUDE_DIR).join(AGENTS_DIR));
     let ag_count = count_files(&ag_dir, &MARKDOWN_EXTENSIONS);
     checks.push(DoctorCheck::new(
         DoctorCheckName::Agents,
