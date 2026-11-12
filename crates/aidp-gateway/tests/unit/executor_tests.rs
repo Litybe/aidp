@@ -1887,3 +1887,71 @@ fn it_a_failed_end_restore_is_journaled_once_held_in_the_test_lane_and_retried()
     assert_eq!(failures(&engine), 1, "journaled once");
     assert_eq!(engine.lane_load().1.values().sum::<usize>(), 0);
 }
+
+#[test]
+fn it_an_aborted_run_forgets_its_start_wait_reason() {
+    let harness = Harness::new("flows_busy_forget");
+    let held = workspace_key(&harness.sessions.vault, REPO, "LOC-33");
+    assert!(harness.sessions.lock.try_acquire(&held));
+    let engine = harness.engine();
+    engine
+        .start(ticket("LOC-33"), Some("test-flow"), None)
+        .unwrap();
+    tick(&engine);
+    wait_for("the busy line", || {
+        engine
+            .journal("LOC-33")
+            .unwrap()
+            .iter()
+            .any(|line| line.line.contains("waiting to start"))
+    });
+    engine.abort("LOC-33", ACTOR).unwrap();
+    assert!(!engine.executor().has_start_wait("LOC-33"));
+}
+
+/// A `git.restore` that takes a while.
+struct SlowRestore(AtomicUsize);
+
+impl FlowAction for SlowRestore {
+    fn writes(&self) -> bool {
+        false
+    }
+
+    fn run(&self, _context: &ActionContext<'_>, _with: &BTreeMap<String, Value>) -> ActionOutcome {
+        self.0.fetch_add(1, Ordering::SeqCst);
+        std::thread::sleep(Duration::from_millis(600));
+        ActionOutcome::TechnicalError("slow failure".to_string())
+    }
+}
+
+#[test]
+fn it_a_slow_restore_is_not_respawned_by_every_retry() {
+    let harness = Harness::new("flows_restore_inflight");
+    let slow = Arc::new(SlowRestore(AtomicUsize::new(0)));
+    *harness.restore.lock().unwrap() = Some(slow.clone());
+    let engine = harness.engine();
+    let flow = FlowDef {
+        id: "inline".to_string(),
+        version: 1,
+        workspace: Some(aidp_flows::models::enums::WorkspaceMode::Project),
+        steps: vec![
+            action_step("count", COUNT_ACTION),
+            Step::new("gate", StepKind::Human),
+        ],
+        ..FlowDef::default()
+    };
+    engine.start_with_def(ticket("LOC-34"), flow, None).unwrap();
+    wait_step(&engine, "LOC-34", "gate", StepStatus::WaitingHuman);
+    engine.abort("LOC-34", ACTOR).unwrap();
+    wait_for("the first failure", || {
+        !engine.executor().failed_restores().is_empty()
+    });
+    wait_for("the retry to start", || {
+        engine.retry_failed_restores();
+        slow.0.load(Ordering::SeqCst) == 2
+    });
+    for _ in 0..5 {
+        engine.retry_failed_restores();
+    }
+    assert_eq!(slow.0.load(Ordering::SeqCst), 2);
+}

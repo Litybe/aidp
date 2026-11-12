@@ -373,9 +373,9 @@ fn git_checked_retrying(
     }
 }
 
-/// The lock that serializes the creations of one worktree (project and ticket key): two tickets,
-/// hence two lanes, never wait on each other, while two creations of the same path still do.
-fn worktree_lock(project: &Path, key: &str) -> std::sync::Arc<std::sync::Mutex<()>> {
+/// The lock that serializes the `git worktree add` calls of one project (concurrent adds contend
+/// on the repository's index and ref locks). The `git fetch` never runs under it.
+fn project_lock(project: &Path) -> std::sync::Arc<std::sync::Mutex<()>> {
     static LOCKS: std::sync::OnceLock<
         std::sync::Mutex<std::collections::HashMap<String, std::sync::Arc<std::sync::Mutex<()>>>>,
     > = std::sync::OnceLock::new();
@@ -383,10 +383,7 @@ fn worktree_lock(project: &Path, key: &str) -> std::sync::Arc<std::sync::Mutex<(
         .get_or_init(Default::default)
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
-    locks
-        .entry(format!("{} {key}", normalize_path(project)))
-        .or_default()
-        .clone()
+    locks.entry(normalize_path(project)).or_default().clone()
 }
 
 /// The branch checked out at `dir`, or `None` when it cannot be read or HEAD is detached.
@@ -470,9 +467,9 @@ fn worktree_workspace(path: PathBuf, branch: String) -> Workspace {
 
 /// Reuse or create the worktree of `key` on `feat/<key>`.
 /// Refuses, creating nothing, when the branch is checked out elsewhere.
-/// Creations of one worktree are serialized (per project and key), the `git fetch` runs outside the
-/// lock: tickets of different lanes never wait on each other. `git worktree add` calls of one
-/// project that hit git's own index or ref lock are retried.
+/// Creations of one project are serialized (concurrent `git worktree add` contend on its index and
+/// ref locks), but the `git fetch` runs outside the lock: a slow fetch of one ticket never makes
+/// another ticket, hence another lane, wait.
 pub fn ensure(
     runner: &dyn ProcessRunner,
     project: &Path,
@@ -535,7 +532,7 @@ pub fn ensure_with_sleeper_based(
     safe_name::check(KEY_FIELD, key).map_err(|error| EnsureError::InvalidKey(error.to_string()))?;
     // The fetch is outside the lock: it can be slow and does not touch the worktree being added.
     let _ = git(runner, project, &[GIT_FETCH, ORIGIN_REMOTE]);
-    let lock = worktree_lock(project, key);
+    let lock = project_lock(project);
     let _guard = lock.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     ensure_locked(runner, sleeper, project, vault, repo, key, copy, base)
 }

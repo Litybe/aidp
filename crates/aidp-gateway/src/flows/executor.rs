@@ -313,6 +313,9 @@ impl Executor {
         self.sync_ticket_status(&next);
         self.sync_resources(&next);
         self.end_project_checkout(&repo, &next);
+        if next.status.is_terminal() {
+            lock(&self.start_waits).remove(key);
+        }
         self.apply_effects(&repo, key, effects)?;
         self.load(key).map(|(_, state)| state)
     }
@@ -869,9 +872,15 @@ impl Executor {
         });
     }
 
+    /// Whether a start-wait reason is still remembered for run `key`.
+    pub fn has_start_wait(&self, key: &str) -> bool {
+        lock(&self.start_waits).contains_key(key)
+    }
+
     /// The abort of run `key` is over (done or refused): pipeline starts are allowed again.
     pub fn end_abort(&self, key: &str) {
         lock(&self.aborting).remove(key);
+        lock(&self.start_waits).remove(key);
     }
 
     /// A retried pipeline step continues the previous iteration's run when that run is paused,

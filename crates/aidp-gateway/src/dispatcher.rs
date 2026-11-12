@@ -268,6 +268,12 @@ impl WorktreeOps {
     }
 }
 
+/// Whether a session at `cwd` works where the test lane does: the test checkout of the project,
+/// else its main checkout. An unknown project counts as occupied.
+fn in_test_checkout(project: Option<&crate::projects::Project>, cwd: &str) -> bool {
+    project.is_none_or(|p| plan::is_main_checkout(cwd, p.checkout_path()))
+}
+
 /// The cap warning of a manual start over the per-project worktree cap, `None` when it fits.
 fn manual_cap_warning(
     holders: &[String],
@@ -1123,15 +1129,11 @@ impl Dispatcher {
                     .map(|p| plan::is_main_checkout(&rec.cwd, &p.path))
                     // Unknown project: keep the old behaviour (the session occupies it).
                     .unwrap_or(true),
-                test_checkout: self
-                    .projects
-                    .get(&rec.project_name)
-                    .and_then(|p| {
-                        p.test_checkout
-                            .as_deref()
-                            .map(|checkout| plan::is_main_checkout(&rec.cwd, checkout))
-                    })
-                    .unwrap_or(false),
+                // Without a `test_checkout` the test lane works in the main checkout.
+                test_checkout: in_test_checkout(
+                    self.projects.get(&rec.project_name).as_ref(),
+                    &rec.cwd,
+                ),
             })
             .collect();
 
