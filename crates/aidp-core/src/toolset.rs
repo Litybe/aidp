@@ -169,10 +169,23 @@ pub fn render_registry_md(role: &str, model: &str, source_body: &str) -> Option<
 /// `main.rs::home_dir`'s one-line rule; the two cannot disagree because
 /// both read the same two env vars in the same order).
 pub fn registry_dir() -> Option<PathBuf> {
+    claude_subdir(AGENTS_SUBDIR)
+}
+
+/// The slash-command directory Claude Code reads, `~/.claude/commands/`: the one source of commands.
+pub fn commands_dir() -> Option<PathBuf> {
+    claude_subdir(COMMANDS_SUBDIR)
+}
+
+fn claude_subdir(subdir: &str) -> Option<PathBuf> {
     std::env::var_os("USERPROFILE")
         .or_else(|| std::env::var_os("HOME"))
-        .map(|h| PathBuf::from(h).join(".claude").join("agents"))
+        .map(|h| PathBuf::from(h).join(CLAUDE_HOME_DIR).join(subdir))
 }
+
+const CLAUDE_HOME_DIR: &str = ".claude";
+const AGENTS_SUBDIR: &str = "agents";
+const COMMANDS_SUBDIR: &str = "commands";
 
 /// True when `<dir>/<agent_type>.md` exists AND declares a `tools:` line.
 /// This is the exact rule both `doctor`'s `agent_toolsets` check (main.rs)

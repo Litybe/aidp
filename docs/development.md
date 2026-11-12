@@ -214,3 +214,9 @@ change that needs a new binary raises `min_aidp_version` once that binary is ins
 
 To ship a version: bump it on a branch, merge it into `main`, then run `bootstrap.ps1`, which builds
 the release binary and installs it into `AIDP_INSTALL_DIR` (`D:\AIDP\bin`).
+
+## Agents, commands and skills: one source
+
+Agent personas, slash commands and skills are read from Claude's own directories
+(`~/.claude/agents`, `~/.claude/commands`, `~/.claude/skills`), never from the skill root.
+The skill root (`AIDP_SKILL_ROOT`) holds only the pipeline templates and flows.

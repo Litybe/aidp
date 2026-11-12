@@ -10,7 +10,7 @@ pub const SKILL_ROOT_ENV: &str = "AIDP_SKILL_ROOT";
 const DEV_TEMPLATE_RELATIVE: &str = "templates/dev.yaml";
 /// Directory of the pipeline templates under the skill root.
 pub const TEMPLATES_DIR: &str = "templates";
-/// Directory of the agent personas under the skill root.
+/// Directory of the agent personas under the Claude home directory.
 pub const AGENTS_DIR: &str = "agents";
 /// Directory of the JSON schemas under the skill root.
 /// Per-user Claude Code configuration directory under the home directory.
@@ -152,6 +152,13 @@ impl Ctx {
         roots.push(workspace.join(PROJECT_FLOW_DIR));
         roots
     }
+}
+
+/// The one agent source, Claude's own `~/.claude/agents`, never a directory of the skill root.
+pub fn claude_agents_dir(ctx: &Ctx) -> Option<PathBuf> {
+    ctx.home
+        .as_ref()
+        .map(|home| home.join(CLAUDE_DIR).join(AGENTS_DIR))
 }
 
 /// Looks for a skill root above the running executable.

@@ -1,6 +1,6 @@
 use super::vault::collect_vault_status;
 use super::CommandOutput;
-use crate::ctx::{Ctx, AGENTS_DIR, CLAUDE_DIR, SKILL_ROOT_ENV, TEMPLATES_DIR};
+use crate::ctx::{claude_agents_dir, Ctx, AGENTS_DIR, CLAUDE_DIR, SKILL_ROOT_ENV, TEMPLATES_DIR};
 use aidp_agents::PROVIDER_VERSION_ARG;
 use aidp_core::hooks::{RUN_SUMMARY_MARKER, SCOPE_CHECK_MARKER};
 use aidp_core::models::enums::SkillCompat;
@@ -191,15 +191,16 @@ fn install_checks(ctx: &Ctx) -> Vec<DoctorCheck> {
                 "templates/ directory is empty — run /pipeline-new or restore templates.".into()
             }),
         ));
-        let ag_dir = r.join(AGENTS_DIR);
-        let ag_count = count_files(&ag_dir, &MARKDOWN_EXTENSIONS);
-        checks.push(DoctorCheck::new(
-            DoctorCheckName::Agents,
-            ag_count > 0,
-            format!("{} agent(s) at {}", ag_count, ag_dir.display()),
-            (ag_count == 0).then(|| "agents/ directory is empty — run /agent-new.".into()),
-        ));
     }
+    let ag_dir =
+        claude_agents_dir(ctx).unwrap_or_else(|| PathBuf::from(CLAUDE_DIR).join(AGENTS_DIR));
+    let ag_count = count_files(&ag_dir, &MARKDOWN_EXTENSIONS);
+    checks.push(DoctorCheck::new(
+        DoctorCheckName::Agents,
+        ag_count > 0,
+        format!("{} agent(s) at {}", ag_count, ag_dir.display()),
+        (ag_count == 0).then(|| "~/.claude/agents is empty — run /agent-new.".into()),
+    ));
     checks
 }
 
