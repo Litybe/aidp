@@ -2777,6 +2777,7 @@ The write is atomic (a `.settings-tmp` file in the same directory, then a rename
   "dispatcher": {
     "slots": 3,
     "test_slots": 1,
+    "bug_slots": 1,
     "stop_at_7d_percent": null,
     "night": { "enabled": false, "start": "22:00", "end": "07:00", "heavy_after_reset": true, "heavy_window_minutes": 30 }
   }
