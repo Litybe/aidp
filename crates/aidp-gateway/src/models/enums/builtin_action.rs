@@ -1,9 +1,9 @@
 use crate::models::constants::flow_actions::{
     ACTION_BUG_CREATE, ACTION_FAIL, ACTION_GH_ISSUE_CLOSE, ACTION_GH_ISSUE_COMMENT,
-    ACTION_GH_ISSUE_LABEL, ACTION_GH_MERGE, ACTION_GH_PR_CREATE, ACTION_GH_PR_READY,
-    ACTION_GIT_BRANCH, ACTION_GIT_CHECKOUT, ACTION_GIT_PUSH, ACTION_GIT_RESTORE,
-    ACTION_GIT_WORKTREE, ACTION_NOOP, ACTION_TICKET_TO_TEST, ACTION_UNITY_REFRESH,
-    ACTION_WORKTREE_REMOVE,
+    ACTION_GH_ISSUE_LABEL, ACTION_GH_MERGE, ACTION_GH_PR_COMMENT, ACTION_GH_PR_CREATE,
+    ACTION_GH_PR_READY, ACTION_GIT_BRANCH, ACTION_GIT_CHECKOUT, ACTION_GIT_PUSH,
+    ACTION_GIT_RESTORE, ACTION_GIT_WORKTREE, ACTION_NOOP, ACTION_TICKET_TO_TEST,
+    ACTION_UNITY_REFRESH, ACTION_WORKTREE_REMOVE,
 };
 
 /// Actions every registry holds.
@@ -21,6 +21,8 @@ pub enum BuiltinAction {
     GhMerge,
     GhIssueLabel,
     GhIssueComment,
+    /// Posts a report on the pull request, where the fix stage reads the review.
+    GhPrComment,
     WorktreeRemove,
     /// Dev flow done: the ticket enters the `to-test` phase (label and phase).
     TicketToTest,
@@ -34,7 +36,7 @@ pub enum BuiltinAction {
 
 impl BuiltinAction {
     /// Every action the registry registers by name.
-    pub const ALL: [BuiltinAction; 17] = [
+    pub const ALL: [BuiltinAction; 18] = [
         BuiltinAction::Noop,
         BuiltinAction::Fail,
         BuiltinAction::GitWorktree,
@@ -47,6 +49,7 @@ impl BuiltinAction {
         BuiltinAction::GhMerge,
         BuiltinAction::GhIssueLabel,
         BuiltinAction::GhIssueComment,
+        BuiltinAction::GhPrComment,
         BuiltinAction::WorktreeRemove,
         BuiltinAction::TicketToTest,
         BuiltinAction::UnityRefresh,
@@ -69,6 +72,7 @@ impl BuiltinAction {
             BuiltinAction::GhMerge => ACTION_GH_MERGE,
             BuiltinAction::GhIssueLabel => ACTION_GH_ISSUE_LABEL,
             BuiltinAction::GhIssueComment => ACTION_GH_ISSUE_COMMENT,
+            BuiltinAction::GhPrComment => ACTION_GH_PR_COMMENT,
             BuiltinAction::WorktreeRemove => ACTION_WORKTREE_REMOVE,
             BuiltinAction::TicketToTest => ACTION_TICKET_TO_TEST,
             BuiltinAction::UnityRefresh => ACTION_UNITY_REFRESH,
