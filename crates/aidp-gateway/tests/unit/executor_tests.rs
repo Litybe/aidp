@@ -506,6 +506,7 @@ struct Harness {
     bus: Arc<Bus>,
     runs: Arc<AtomicUsize>,
     writes: Arc<AtomicUsize>,
+    restore: Mutex<Option<Arc<dyn FlowAction>>>,
 }
 
 impl Harness {
@@ -529,6 +530,7 @@ impl Harness {
             bus: Arc::new(Bus::new()),
             runs: Arc::new(AtomicUsize::new(0)),
             writes: Arc::new(AtomicUsize::new(0)),
+            restore: Mutex::new(None),
         }
     }
 
@@ -555,6 +557,12 @@ impl Harness {
                 writes: true,
             }),
         );
+        if let Some(restore) = self.restore.lock().unwrap().clone() {
+            registry.register_action(
+                crate::models::constants::flow_actions::ACTION_GIT_RESTORE,
+                restore,
+            );
+        }
         let ports = Ports {
             sessions: self.sessions.clone(),
             budget: Arc::new(Switch(self.budget.clone(), self.ceiling.clone())),
@@ -1764,4 +1772,186 @@ fn a_merge_step_ended_on_a_conflict_keeps_the_ticket_open() {
         ticket_status_of(&run_with_merge_outputs(true, false)),
         Some(aidp_tickets::model::Status::Done)
     );
+}
+
+#[test]
+fn it_a_busy_workspace_is_journaled_once_not_at_every_retry() {
+    let harness = Harness::new("flows_busy_journal");
+    let held = workspace_key(&harness.sessions.vault, REPO, "LOC-30");
+    assert!(harness.sessions.lock.try_acquire(&held));
+    let engine = harness.engine();
+    engine
+        .start(ticket("LOC-30"), Some("test-flow"), None)
+        .unwrap();
+    for _ in 0..3 {
+        tick(&engine);
+    }
+    let waiting = |engine: &FlowEngine| {
+        engine
+            .journal("LOC-30")
+            .unwrap()
+            .iter()
+            .filter(|line| line.line.contains("waiting to start: workspace busy"))
+            .count()
+    };
+    wait_for("the busy line", || waiting(&engine) >= 1);
+    for _ in 0..3 {
+        tick(&engine);
+    }
+    assert_eq!(waiting(&engine), 1);
+    assert_eq!(harness.sessions.launch_count(), 0);
+}
+
+#[test]
+fn it_a_worktree_flow_pipeline_denies_the_unity_mcp() {
+    let harness = Harness::new("flows_deny_unity_mcp");
+    let engine = harness.engine();
+    engine
+        .start(ticket("LOC-31"), Some("test-flow"), None)
+        .unwrap();
+    wait_for("the session", || harness.sessions.launch_count() == 1);
+    let launches = harness.sessions.launches.lock().unwrap();
+    assert!(!launches[0].project_checkout);
+    assert_eq!(
+        launches[0].denied_mcp_tools.get("unity-mcp"),
+        Some(&vec!["*".to_string()])
+    );
+}
+
+/// A `git.restore` that fails `failures` times, then works.
+struct FlakyRestore {
+    failures: AtomicUsize,
+    runs: AtomicUsize,
+}
+
+impl FlowAction for FlakyRestore {
+    fn writes(&self) -> bool {
+        false
+    }
+
+    fn run(&self, _context: &ActionContext<'_>, _with: &BTreeMap<String, Value>) -> ActionOutcome {
+        self.runs.fetch_add(1, Ordering::SeqCst);
+        let left = self.failures.load(Ordering::SeqCst);
+        if left > 0 {
+            self.failures.store(left - 1, Ordering::SeqCst);
+            return ActionOutcome::TechnicalError("git restore failed".to_string());
+        }
+        ActionOutcome::Ok(BTreeMap::new())
+    }
+}
+
+#[test]
+fn it_a_failed_end_restore_is_journaled_once_held_in_the_test_lane_and_retried() {
+    let harness = Harness::new("flows_restore_retry");
+    let restore = Arc::new(FlakyRestore {
+        failures: AtomicUsize::new(2),
+        runs: AtomicUsize::new(0),
+    });
+    *harness.restore.lock().unwrap() = Some(restore.clone());
+    let engine = harness.engine();
+    let flow = FlowDef {
+        id: "inline".to_string(),
+        version: 1,
+        workspace: Some(aidp_flows::models::enums::WorkspaceMode::Project),
+        steps: vec![
+            action_step("count", COUNT_ACTION),
+            Step::new("gate", StepKind::Human),
+        ],
+        ..FlowDef::default()
+    };
+    engine.start_with_def(ticket("LOC-32"), flow, None).unwrap();
+    wait_step(&engine, "LOC-32", "gate", StepStatus::WaitingHuman);
+    assert_eq!(engine.lane_load().1.values().sum::<usize>(), 1);
+
+    engine.abort("LOC-32", ACTOR).unwrap();
+    wait_for("the failed restore", || {
+        !engine.executor().failed_restores().is_empty()
+    });
+    let failures = |engine: &FlowEngine| {
+        engine
+            .journal("LOC-32")
+            .unwrap()
+            .iter()
+            .filter(|line| line.line.contains("git.restore failed"))
+            .count()
+    };
+    assert_eq!(failures(&engine), 1);
+    // The ended run still occupies the test checkout.
+    assert_eq!(engine.lane_load().1.values().sum::<usize>(), 1);
+
+    wait_for("the restore to work", || {
+        engine.retry_failed_restores();
+        engine.executor().failed_restores().is_empty()
+    });
+    assert_eq!(restore.runs.load(Ordering::SeqCst), 3);
+    assert_eq!(failures(&engine), 1, "journaled once");
+    assert_eq!(engine.lane_load().1.values().sum::<usize>(), 0);
+}
+
+#[test]
+fn it_an_aborted_run_forgets_its_start_wait_reason() {
+    let harness = Harness::new("flows_busy_forget");
+    let held = workspace_key(&harness.sessions.vault, REPO, "LOC-33");
+    assert!(harness.sessions.lock.try_acquire(&held));
+    let engine = harness.engine();
+    engine
+        .start(ticket("LOC-33"), Some("test-flow"), None)
+        .unwrap();
+    tick(&engine);
+    wait_for("the busy line", || {
+        engine
+            .journal("LOC-33")
+            .unwrap()
+            .iter()
+            .any(|line| line.line.contains("waiting to start"))
+    });
+    engine.abort("LOC-33", ACTOR).unwrap();
+    assert!(!engine.executor().has_start_wait("LOC-33"));
+}
+
+/// A `git.restore` that takes a while.
+struct SlowRestore(AtomicUsize);
+
+impl FlowAction for SlowRestore {
+    fn writes(&self) -> bool {
+        false
+    }
+
+    fn run(&self, _context: &ActionContext<'_>, _with: &BTreeMap<String, Value>) -> ActionOutcome {
+        self.0.fetch_add(1, Ordering::SeqCst);
+        std::thread::sleep(Duration::from_millis(600));
+        ActionOutcome::TechnicalError("slow failure".to_string())
+    }
+}
+
+#[test]
+fn it_a_slow_restore_is_not_respawned_by_every_retry() {
+    let harness = Harness::new("flows_restore_inflight");
+    let slow = Arc::new(SlowRestore(AtomicUsize::new(0)));
+    *harness.restore.lock().unwrap() = Some(slow.clone());
+    let engine = harness.engine();
+    let flow = FlowDef {
+        id: "inline".to_string(),
+        version: 1,
+        workspace: Some(aidp_flows::models::enums::WorkspaceMode::Project),
+        steps: vec![
+            action_step("count", COUNT_ACTION),
+            Step::new("gate", StepKind::Human),
+        ],
+        ..FlowDef::default()
+    };
+    engine.start_with_def(ticket("LOC-34"), flow, None).unwrap();
+    wait_step(&engine, "LOC-34", "gate", StepStatus::WaitingHuman);
+    engine.abort("LOC-34", ACTOR).unwrap();
+    wait_for("the first failure", || {
+        !engine.executor().failed_restores().is_empty()
+    });
+    wait_for("the retry to start", || {
+        engine.retry_failed_restores();
+        slow.0.load(Ordering::SeqCst) == 2
+    });
+    for _ in 0..5 {
+        engine.retry_failed_restores();
+    }
+    assert_eq!(slow.0.load(Ordering::SeqCst), 2);
 }

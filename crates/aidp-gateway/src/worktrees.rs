@@ -373,7 +373,8 @@ fn git_checked_retrying(
     }
 }
 
-/// The lock that serializes the worktree creations of one project.
+/// The lock that serializes the `git worktree add` calls of one project (concurrent adds contend
+/// on the repository's index and ref locks). The `git fetch` never runs under it.
 fn project_lock(project: &Path) -> std::sync::Arc<std::sync::Mutex<()>> {
     static LOCKS: std::sync::OnceLock<
         std::sync::Mutex<std::collections::HashMap<String, std::sync::Arc<std::sync::Mutex<()>>>>,
@@ -466,8 +467,9 @@ fn worktree_workspace(path: PathBuf, branch: String) -> Workspace {
 
 /// Reuse or create the worktree of `key` on `feat/<key>`.
 /// Refuses, creating nothing, when the branch is checked out elsewhere.
-/// Creations of one project are serialized: concurrent `git worktree add` on a large repository
-/// contend on its index and ref locks and outlast the caller's read timeout.
+/// Creations of one project are serialized (concurrent `git worktree add` contend on its index and
+/// ref locks), but the `git fetch` runs outside the lock: a slow fetch of one ticket never makes
+/// another ticket, hence another lane, wait.
 pub fn ensure(
     runner: &dyn ProcessRunner,
     project: &Path,
@@ -528,6 +530,8 @@ pub fn ensure_with_sleeper_based(
     base: Option<&str>,
 ) -> Result<Ensured, EnsureError> {
     safe_name::check(KEY_FIELD, key).map_err(|error| EnsureError::InvalidKey(error.to_string()))?;
+    // The fetch is outside the lock: it can be slow and does not touch the worktree being added.
+    let _ = git(runner, project, &[GIT_FETCH, ORIGIN_REMOTE]);
     let lock = project_lock(project);
     let _guard = lock.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     ensure_locked(runner, sleeper, project, vault, repo, key, copy, base)
@@ -546,7 +550,6 @@ fn ensure_locked(
 ) -> Result<Ensured, EnsureError> {
     let path = worktree_path(vault, repo, key);
     let branch = branch_for(key);
-    let _ = git(runner, project, &[GIT_FETCH, ORIGIN_REMOTE]);
     let entries = all_entries(runner, project);
     let wanted = normalize_path(&path);
     if entries

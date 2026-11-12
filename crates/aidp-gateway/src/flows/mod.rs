@@ -390,6 +390,11 @@ impl FlowEngine {
             .is_some_and(|entry| is_active(entry.status))
     }
 
+    /// Redoes the checkout restore of ended test runs whose restore failed (dispatcher tick).
+    pub fn retry_failed_restores(&self) {
+        self.executor.retry_failed_restores();
+    }
+
     /// What the live runs occupy: dev flows (worktrees) and, per project, the test flows that
     /// hold or wait for its main checkout.
     pub fn lane_load(&self) -> (usize, HashMap<String, usize>) {
@@ -405,6 +410,12 @@ impl FlowEngine {
         let mut dev = 0;
         let mut bug = 0;
         let mut test: HashMap<String, usize> = HashMap::new();
+        // An ended test run whose checkout restore failed still occupies the checkout.
+        for key in self.executor.failed_restores() {
+            if let Some(entry) = self.executor.store.index_get(&key) {
+                *test.entry(entry.service.unwrap_or_default()).or_insert(0) += 1;
+            }
+        }
         for entry in self.executor.store.index().into_values() {
             if entry.status.is_terminal() {
                 continue;
@@ -412,6 +423,9 @@ impl FlowEngine {
             let Ok((_, state)) = self.executor.load(&entry.key) else {
                 continue;
             };
+            if state.status.is_terminal() {
+                continue;
+            }
             if state.def.workspace == Some(aidp_flows::models::enums::WorkspaceMode::Project) {
                 if self.executor.project_checkout_held(&state) {
                     *test
@@ -465,7 +479,12 @@ impl FlowEngine {
     /// Cancels the running session and ends the run; worktree and PR stay.
     pub fn abort(&self, key: &str, actor: &str) -> anyhow::Result<FlowState> {
         let at = self.executor.now();
-        let state = self.control(key, actor, Event::Abort { at }, format!("abort by {actor}"))?;
+        // Before the key lock: a pipeline launch holding it must not start more work, and the
+        // sessions are cancelled from a side thread.
+        self.executor.begin_abort(key);
+        let result = self.control(key, actor, Event::Abort { at }, format!("abort by {actor}"));
+        self.executor.end_abort(key);
+        let state = result?;
         self.executor.cancel_manual(key);
         Ok(state)
     }
@@ -627,14 +646,12 @@ impl FlowEngine {
     }
 }
 
-/// A flow parked on its merge approval has finished its work: it holds no dev slot.
+/// A dev/bug flow that is not working holds no slot: parked on a human gate (the merge approval
+/// included) or paused, it waits on a person, not on the lane. Terminal flows hold none either.
 pub(crate) fn waits_on_merge(state: &aidp_flows::FlowState) -> bool {
-    use crate::models::constants::plan_slots::MERGE_PHASE;
-    state.status == aidp_flows::FlowStatus::WaitingHuman
-        && state
-            .current
-            .as_ref()
-            .and_then(|step| state.steps.get(step))
-            .and_then(|step| step.phase.as_deref())
-            .is_some_and(|phase| phase.eq_ignore_ascii_case(MERGE_PHASE))
+    state.status.is_terminal()
+        || matches!(
+            state.status,
+            aidp_flows::FlowStatus::WaitingHuman | aidp_flows::FlowStatus::Paused
+        )
 }

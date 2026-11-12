@@ -1286,6 +1286,11 @@ mode; all six routes need a valid `AIDP_UI_TOKEN` from an off-loopback caller. E
 **`POST /api/dispatcher/pause` sets the paused flag.** The body is `{"paused": boolean, "actor"?: string}`.
 `actor` defaults to `"api"`; the viewer sends `"viewer-rollback"`.
 
+A paused dispatcher only stops claiming **new** tickets (dev and bug lanes, skip reason `paused`). It never pauses a
+flow: flows already started go on with all their steps (pipelines, actions, merges, doctor), and the housekeeping and
+merge probes keep running on every tick. Pausing one flow is the separate, explicit `POST /api/flows/:key/pause`; the
+dispatcher pause never calls it.
+
 | Status | When |
 |---|---|
 | `200` | Body `{"paused": boolean}`: the effective state after the write. A call that changes nothing answers `200` without writing. |

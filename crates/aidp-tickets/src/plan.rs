@@ -54,6 +54,10 @@ pub struct RunningSlot {
     /// session occupies the project; a pipeline run in a worktree does not.
     #[serde(default = "default_main_checkout")]
     pub main_checkout: bool,
+    /// The session works in the project's test checkout (the Unity test lane's clone). Only such
+    /// a session blocks a test launch; it never blocks a dev or bug flow.
+    #[serde(default)]
+    pub test_checkout: bool,
 }
 
 fn default_main_checkout() -> bool {
@@ -160,6 +164,16 @@ pub fn cap_verdict(alive: &[String], max: usize, has_own: bool) -> CapVerdict {
     } else {
         CapVerdict::Cap(alive.to_vec())
     }
+}
+
+/// The worktree holders of one lane: the bug tickets of `holders` (those in `bug_keys`) when
+/// `bug`, the others otherwise.
+pub fn lane_holders(holders: &[String], bug_keys: &HashSet<String>, bug: bool) -> Vec<String> {
+    holders
+        .iter()
+        .filter(|key| bug_keys.contains(*key) == bug)
+        .cloned()
+        .collect()
 }
 
 impl SkipReason {
@@ -523,8 +537,10 @@ pub fn build_test_launch(
 
 /// Decide what to launch next, applying the rules in order:
 ///
-/// 1. `cfg.paused` -> every candidate is skipped as [`SkipReason::Paused`];
-///    `launches` is empty; `slots_used` is still reported honestly.
+/// 1. `cfg.paused` -> only the claim of a new ticket stops: every dev or bug candidate
+///    (`todo` / `queued`, not yet in the test phase) is skipped as [`SkipReason::Paused`].
+///    The test lane of a ticket already started (phase `to-test`) still launches;
+///    `slots_used` is reported honestly.
 /// 2. `slots_used` counts only `running` entries with
 ///    `origin_kind == "dispatcher"` (vision D4: a UI session occupies its
 ///    project but does not consume a slot). The free budget is
@@ -658,28 +674,13 @@ pub fn plan_with_lanes(
     let test_slots_max = cfg.test_slots as usize;
     let test_slots_used: usize = lanes.test_flows.values().sum();
 
-    if cfg.paused {
-        let skipped = candidates
-            .iter()
-            .map(|t| (t.key.clone(), SkipReason::Paused))
-            .collect();
-        return DispatchPlan {
-            launches: Vec::new(),
-            skipped,
-            slots_used,
-            slots_max,
-            test_slots_used,
-            test_slots_max,
-            bug_slots_used,
-            bug_slots_max,
-        };
-    }
-
     let mut budget_left = budget.max_launches();
     // Projects held by a session that is not a flow's: a flow lane must not start there either.
-    let session_busy: HashSet<String> = running
+    // Only the test lane is gated by it, and only by a session in the test checkout: dev and bug
+    // flows work in their own worktrees, so a session in the main checkout never blocks them.
+    let test_checkout_busy: HashSet<String> = running
         .iter()
-        .filter(|r| r.main_checkout && r.origin_kind != FLOW_ORIGIN)
+        .filter(|r| r.test_checkout && r.origin_kind != FLOW_ORIGIN)
         .map(|r| r.project.clone())
         .collect();
     let mut launches: Vec<Launch> = Vec::new();
@@ -713,7 +714,7 @@ pub fn plan_with_lanes(
             skipped.push((t.key.clone(), SkipReason::WaitingOn(open_keys)));
             continue;
         }
-        if session_busy.contains(&launch.service) {
+        if test_checkout_busy.contains(&launch.service) {
             skipped.push((t.key.clone(), SkipReason::ProjectBusy));
             continue;
         }
@@ -750,6 +751,10 @@ pub fn plan_with_lanes(
         matches!(t.status, Status::Todo | Status::Queued)
             && t.autopilot.phase() != crate::model::Phase::ToTest
     }) {
+        if cfg.paused {
+            skipped.push((t.key.clone(), SkipReason::Paused));
+            continue;
+        }
         let mut launch = match build_launch(t, templates) {
             Ok(launch) => launch,
             Err(skip_reason) => {
@@ -769,22 +774,24 @@ pub fn plan_with_lanes(
         }
 
         let flow_launch = launch.flow.is_some();
-        let busy = if flow_launch {
-            session_busy.contains(&launch.service)
-        } else {
-            occupied.contains(&launch.service)
-        };
+        // A flow works in its own worktree: it never waits on a session in the main checkout.
+        let busy = !flow_launch && occupied.contains(&launch.service);
         if busy {
             skipped.push((t.key.clone(), SkipReason::ProjectBusy));
             continue;
         }
 
-        let holders = worktree_holders
-            .get(&launch.service)
-            .map(Vec::as_slice)
-            .unwrap_or_default();
+        // The cap is per lane: dev and bug worktrees are counted apart.
+        let holders = lane_holders(
+            worktree_holders
+                .get(&launch.service)
+                .map(Vec::as_slice)
+                .unwrap_or_default(),
+            &lanes.bug_keys,
+            t.is_bug(),
+        );
         let has_own = holders.iter().any(|key| key == &t.key);
-        if let CapVerdict::Cap(keys) = cap_verdict(holders, cfg.max_worktrees_per_project, has_own)
+        if let CapVerdict::Cap(keys) = cap_verdict(&holders, cfg.max_worktrees_per_project, has_own)
         {
             skipped.push((t.key.clone(), SkipReason::WorktreeCap(keys)));
             continue;

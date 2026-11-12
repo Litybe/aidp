@@ -1235,7 +1235,12 @@ fn it_non_forced_start_during_pause_is_a_reportable_noop_not_launched() {
 
     assert_eq!(report["mode"], "paused");
     assert_eq!(report["launched"], json!([]));
-    assert_eq!(report["skipped"], json!([]));
+    // The plan now looks at the ticket and skips it as `paused`; the mode stays the seam.
+    let skipped = report["skipped"].as_array().expect("skipped array");
+    assert!(
+        skipped.iter().all(|entry| entry["reason"] == "paused"),
+        "{report}"
+    );
 }
 
 /// A `Dispatcher` wired exactly like [`dispatcher_waiting_with_template`],

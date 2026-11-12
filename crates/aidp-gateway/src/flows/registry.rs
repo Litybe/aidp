@@ -777,7 +777,7 @@ impl SessionPort for ManagerSessions {
             LaunchedRun::Session(Launch::Started(record)) => Ok(SessionStart::Started(record.id)),
             LaunchedRun::Session(Launch::Queued(queued)) => {
                 self.manager.queue_cancel(&queued.id);
-                Ok(SessionStart::Busy)
+                Ok(SessionStart::Queued)
             }
         }
     }

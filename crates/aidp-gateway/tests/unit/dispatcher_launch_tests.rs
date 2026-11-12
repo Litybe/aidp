@@ -506,7 +506,8 @@ fn three_dev_flows_run_in_parallel_while_a_test_runs() {
         Some("no-slot")
     );
     let (dev, test) = rig.engine.lane_load();
-    assert_eq!(dev, 3);
+    // The fixture dev flow parks on a human gate at once: parked flows hold no slot.
+    assert_eq!(dev, 0);
     assert_eq!(test.get(SERVICE), Some(&1));
     for key in launched.iter().filter(|key| key.starts_with("D-")) {
         assert_eq!(reload(&rig.store, key).autopilot.phase(), model::Phase::Dev);
@@ -548,4 +549,21 @@ fn a_forced_start_is_not_short_circuited_by_an_open_pr() {
 
     assert!(matches!(outcome, LaunchAttemptOutcome::Launched(_)));
     assert!(rig.engine.get("D-1").is_ok());
+}
+
+#[test]
+fn the_test_lane_checkout_is_the_main_checkout_unless_a_test_checkout_is_set() {
+    let mut project = crate::projects::Project {
+        id: "p1".to_string(),
+        name: "game".to_string(),
+        path: r"D:\game".to_string(),
+        runs_count: 0,
+        test_checkout: None,
+    };
+    assert!(super::in_test_checkout(Some(&project), r"D:\game"));
+    assert!(!super::in_test_checkout(Some(&project), r"D:\wt\GH-1"));
+    project.test_checkout = Some(r"C:\test".to_string());
+    assert!(!super::in_test_checkout(Some(&project), r"D:\game"));
+    assert!(super::in_test_checkout(Some(&project), r"C:\test"));
+    assert!(super::in_test_checkout(None, r"D:\anything"));
 }
