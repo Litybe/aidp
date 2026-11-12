@@ -54,6 +54,10 @@ pub struct RunningSlot {
     /// session occupies the project; a pipeline run in a worktree does not.
     #[serde(default = "default_main_checkout")]
     pub main_checkout: bool,
+    /// The session works in the project's test checkout (the Unity test lane's clone). Only such
+    /// a session blocks a test launch; it never blocks a dev or bug flow.
+    #[serde(default)]
+    pub test_checkout: bool,
 }
 
 fn default_main_checkout() -> bool {
@@ -160,6 +164,16 @@ pub fn cap_verdict(alive: &[String], max: usize, has_own: bool) -> CapVerdict {
     } else {
         CapVerdict::Cap(alive.to_vec())
     }
+}
+
+/// The worktree holders of one lane: the bug tickets of `holders` (those in `bug_keys`) when
+/// `bug`, the others otherwise.
+pub fn lane_holders(holders: &[String], bug_keys: &HashSet<String>, bug: bool) -> Vec<String> {
+    holders
+        .iter()
+        .filter(|key| bug_keys.contains(*key) == bug)
+        .cloned()
+        .collect()
 }
 
 impl SkipReason {
@@ -662,9 +676,11 @@ pub fn plan_with_lanes(
 
     let mut budget_left = budget.max_launches();
     // Projects held by a session that is not a flow's: a flow lane must not start there either.
-    let session_busy: HashSet<String> = running
+    // Only the test lane is gated by it, and only by a session in the test checkout: dev and bug
+    // flows work in their own worktrees, so a session in the main checkout never blocks them.
+    let test_checkout_busy: HashSet<String> = running
         .iter()
-        .filter(|r| r.main_checkout && r.origin_kind != FLOW_ORIGIN)
+        .filter(|r| r.test_checkout && r.origin_kind != FLOW_ORIGIN)
         .map(|r| r.project.clone())
         .collect();
     let mut launches: Vec<Launch> = Vec::new();
@@ -698,7 +714,7 @@ pub fn plan_with_lanes(
             skipped.push((t.key.clone(), SkipReason::WaitingOn(open_keys)));
             continue;
         }
-        if session_busy.contains(&launch.service) {
+        if test_checkout_busy.contains(&launch.service) {
             skipped.push((t.key.clone(), SkipReason::ProjectBusy));
             continue;
         }
@@ -758,22 +774,24 @@ pub fn plan_with_lanes(
         }
 
         let flow_launch = launch.flow.is_some();
-        let busy = if flow_launch {
-            session_busy.contains(&launch.service)
-        } else {
-            occupied.contains(&launch.service)
-        };
+        // A flow works in its own worktree: it never waits on a session in the main checkout.
+        let busy = !flow_launch && occupied.contains(&launch.service);
         if busy {
             skipped.push((t.key.clone(), SkipReason::ProjectBusy));
             continue;
         }
 
-        let holders = worktree_holders
-            .get(&launch.service)
-            .map(Vec::as_slice)
-            .unwrap_or_default();
+        // The cap is per lane: dev and bug worktrees are counted apart.
+        let holders = lane_holders(
+            worktree_holders
+                .get(&launch.service)
+                .map(Vec::as_slice)
+                .unwrap_or_default(),
+            &lanes.bug_keys,
+            t.is_bug(),
+        );
         let has_own = holders.iter().any(|key| key == &t.key);
-        if let CapVerdict::Cap(keys) = cap_verdict(holders, cfg.max_worktrees_per_project, has_own)
+        if let CapVerdict::Cap(keys) = cap_verdict(&holders, cfg.max_worktrees_per_project, has_own)
         {
             skipped.push((t.key.clone(), SkipReason::WorktreeCap(keys)));
             continue;

@@ -342,6 +342,17 @@ A game ticket goes through two flows (decision of 2026-11-08, contract C13).
   night mode apply to both lanes. The dispatcher pause only stops the claim of new dev and bug tickets: the test lane
   of a ticket already started still launches.
 
+**Lane independence.** The dev, bug and test lanes share nothing: a flow of one lane never waits on, holds or consumes
+another lane's slot or workspace. Each lane has its own slot count (`slots`, `bug_slots`, `test_slots`) and its own
+worktree cap (`max_worktrees_per_project` is counted apart for dev and bug tickets). A dev or bug flow works in its own
+per-ticket worktree, so no session in the project main checkout blocks it; the test lane is blocked only by a non-flow
+session working in the test checkout. A dev or bug flow parked on a human gate (the merge approval included) or paused
+holds no slot. The pipeline steps of worktree flows may not use the Unity MCP (`mcp__unity-mcp__*` is denied), which drives
+the single editor open on the test checkout. `git worktree add` locks per ticket, never per project, and the `git fetch`
+runs outside the lock. If the end-of-run `git.restore` of a test flow fails, the journal says so, the run keeps counting
+in the test lane and the dispatcher retries the restore on every tick before a new test flow can start. A pipeline step
+that cannot start (workspace busy, session queued) journals why once, then stays silent while it retries.
+
 **Test checkout.** A project may have a `testCheckout` (absolute path of a dedicated clone of the same repository,
 for example on an SSD) in the registry `projects.json`. Set it with `aidp gateway projects test-checkout <project id>
 <path>` (`--clear` removes it) or `PUT /api/projects/:id` with `{ "testCheckout": "<path>" }` (`null` clears it); it is

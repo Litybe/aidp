@@ -290,6 +290,7 @@ fn slot(origin_kind: &str, main_checkout: bool) -> aidp_tickets::plan::RunningSl
         ticket_key: None,
         started_at_ms: 0,
         main_checkout,
+        test_checkout: false,
     }
 }
 
@@ -319,25 +320,97 @@ fn a_run_session_in_a_worktree_does_not_block_the_test_lane() {
     assert_eq!(result.launches.len(), 1, "{:?}", result.skipped);
 }
 
+fn test_checkout_slot(origin_kind: &str) -> aidp_tickets::plan::RunningSlot {
+    aidp_tickets::plan::RunningSlot {
+        main_checkout: false,
+        test_checkout: true,
+        ..slot(origin_kind, false)
+    }
+}
+
 #[test]
-fn a_session_in_the_main_checkout_still_blocks_the_test_lane() {
+fn a_session_in_the_test_checkout_blocks_the_test_lane_only() {
     let tickets = [ticket("T-1", Phase::ToTest, Status::InProgress, 5)];
-    let result = plan_running(&tickets, &[slot("ui", true)]);
+    let result = plan_running(&tickets, &[test_checkout_slot("ui")]);
     assert!(result.launches.is_empty());
     assert!(result
         .skipped
         .contains(&("T-1".to_string(), SkipReason::ProjectBusy)));
-    let flow = plan_running(&tickets, &[slot("flow", true)]);
+    let flow = plan_running(&tickets, &[test_checkout_slot("flow")]);
     assert_eq!(flow.launches.len(), 1);
 }
 
 #[test]
-fn a_worktree_run_does_not_block_the_dev_lane_but_an_interactive_main_session_does() {
-    let tickets = [ticket("D-1", Phase::Dev, Status::Todo, 1)];
-    let free = plan_running(&tickets, &[slot("run", false)]);
-    assert_eq!(free.launches.len(), 1, "{:?}", free.skipped);
-    let busy = plan_running(&tickets, &[slot("ui", true)]);
-    assert!(busy.launches.is_empty());
+fn a_session_in_the_main_checkout_does_not_block_the_test_lane() {
+    let tickets = [ticket("T-1", Phase::ToTest, Status::InProgress, 5)];
+    let result = plan_running(&tickets, &[slot("ui", true)]);
+    assert_eq!(result.launches.len(), 1, "{:?}", result.skipped);
+}
+
+#[test]
+fn no_session_blocks_a_dev_or_bug_flow_launch() {
+    let tickets = [
+        ticket("D-1", Phase::Dev, Status::Todo, 1),
+        bug("B-1", Phase::Dev, Status::Todo, 1),
+    ];
+    for running in [
+        slot("ui", true),
+        slot("run", false),
+        test_checkout_slot("ui"),
+    ] {
+        let result = plan_running(&tickets, &[running]);
+        assert_eq!(result.launches.len(), 2, "{:?}", result.skipped);
+    }
+}
+
+fn plan_with_holders(
+    tickets: &[Ticket],
+    holders: &[&str],
+    bug_keys: &[&str],
+    max: usize,
+) -> aidp_tickets::plan::DispatchPlan {
+    let routing = routing();
+    let cfg = DispatcherConfig {
+        max_worktrees_per_project: max,
+        ..config(3, 1)
+    };
+    let holders = HashMap::from([(
+        "game".to_string(),
+        holders.iter().map(ToString::to_string).collect::<Vec<_>>(),
+    )]);
+    plan_with_lanes(
+        tickets,
+        &[],
+        &Verdict::unconstrained(),
+        &TemplateCatalog::empty(),
+        &cfg,
+        &holders,
+        &LaneLoad {
+            routing: Some(&routing),
+            bug_keys: bug_keys.iter().map(ToString::to_string).collect(),
+            ..LaneLoad::default()
+        },
+    )
+}
+
+#[test]
+fn the_worktree_cap_is_counted_per_lane() {
+    let tickets = [
+        ticket("D-9", Phase::Dev, Status::Todo, 1),
+        bug("B-9", Phase::Dev, Status::Todo, 1),
+    ];
+    // Two dev worktrees fill a cap of 2: the bug still launches, the dev ticket does not.
+    let result = plan_with_holders(&tickets, &["D-1", "D-2"], &[], 2);
+    let launched: Vec<&str> = result.launches.iter().map(|l| l.key.as_str()).collect();
+    assert_eq!(launched, vec!["B-9"], "{:?}", result.skipped);
+    assert!(result
+        .skipped
+        .iter()
+        .any(|(key, reason)| key == "D-9" && matches!(reason, SkipReason::WorktreeCap(_))));
+    // Two bug worktrees fill the bug cap: the dev ticket launches.
+    let result = plan_with_holders(&tickets, &["B-1", "B-2"], &["B-1", "B-2", "B-9"], 2);
+    let launched: Vec<&str> = result.launches.iter().map(|l| l.key.as_str()).collect();
+    assert_eq!(launched, vec!["D-9"], "{:?}", result.skipped);
 }
 
 #[test]

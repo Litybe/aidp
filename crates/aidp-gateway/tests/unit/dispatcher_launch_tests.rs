@@ -506,7 +506,8 @@ fn three_dev_flows_run_in_parallel_while_a_test_runs() {
         Some("no-slot")
     );
     let (dev, test) = rig.engine.lane_load();
-    assert_eq!(dev, 3);
+    // The fixture dev flow parks on a human gate at once: parked flows hold no slot.
+    assert_eq!(dev, 0);
     assert_eq!(test.get(SERVICE), Some(&1));
     for key in launched.iter().filter(|key| key.starts_with("D-")) {
         assert_eq!(reload(&rig.store, key).autopilot.phase(), model::Phase::Dev);

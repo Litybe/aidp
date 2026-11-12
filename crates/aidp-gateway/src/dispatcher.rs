@@ -269,7 +269,14 @@ impl WorktreeOps {
 }
 
 /// The cap warning of a manual start over the per-project worktree cap, `None` when it fits.
-fn manual_cap_warning(holders: &[String], max: usize, key: &str) -> Option<String> {
+fn manual_cap_warning(
+    holders: &[String],
+    max: usize,
+    key: &str,
+    bug_keys: &HashSet<String>,
+) -> Option<String> {
+    // The cap is per lane: only the holders of the ticket's own lane count.
+    let holders = &plan::lane_holders(holders, bug_keys, bug_keys.contains(key));
     let has_own = holders.iter().any(|holder| holder == key);
     match plan::cap_verdict(holders, max, has_own) {
         plan::CapVerdict::Allow => None,
@@ -282,6 +289,7 @@ fn exempt_manual_starts(
     candidates: &[aidp_tickets::model::Ticket],
     holders: &mut HashMap<String, Vec<String>>,
     max: usize,
+    bug_keys: &HashSet<String>,
 ) -> HashMap<String, String> {
     let mut warnings = HashMap::new();
     for ticket in candidates
@@ -289,7 +297,7 @@ fn exempt_manual_starts(
         .filter(|ticket| ticket.autopilot.manual_priority == Some(true))
     {
         let service_holders = holders.entry(ticket.service.clone()).or_default();
-        if let Some(warning) = manual_cap_warning(service_holders, max, &ticket.key) {
+        if let Some(warning) = manual_cap_warning(service_holders, max, &ticket.key, bug_keys) {
             warnings.insert(ticket.key.clone(), warning);
             service_holders.push(ticket.key.clone());
         }
@@ -1115,6 +1123,15 @@ impl Dispatcher {
                     .map(|p| plan::is_main_checkout(&rec.cwd, &p.path))
                     // Unknown project: keep the old behaviour (the session occupies it).
                     .unwrap_or(true),
+                test_checkout: self
+                    .projects
+                    .get(&rec.project_name)
+                    .and_then(|p| {
+                        p.test_checkout
+                            .as_deref()
+                            .map(|checkout| plan::is_main_checkout(&rec.cwd, checkout))
+                    })
+                    .unwrap_or(false),
             })
             .collect();
 
@@ -1194,18 +1211,19 @@ impl Dispatcher {
         );
 
         let catalog = self.catalog();
-        let mut holders = self.worktree_holders(store);
-        let mut manual_warnings = exempt_manual_starts(
-            &candidates,
-            &mut holders,
-            store.config().dispatcher.max_worktrees_per_project,
-        );
         let bug_keys: HashSet<String> = store
             .list(&ListFilter::default())
             .into_iter()
             .filter(model::Ticket::is_bug)
             .map(|ticket| ticket.key)
             .collect();
+        let mut holders = self.worktree_holders(store);
+        let mut manual_warnings = exempt_manual_starts(
+            &candidates,
+            &mut holders,
+            store.config().dispatcher.max_worktrees_per_project,
+            &bug_keys,
+        );
         let (dev_flows, bug_flows, test_flows) = lock(&self.flows)
             .as_ref()
             .map(|engine| engine.lane_load_with_bugs(&bug_keys))
@@ -1376,6 +1394,11 @@ impl Dispatcher {
         // the sweeps, the probes and the lanes of the flows already started go on.
         if self.first_tick.swap(false, Ordering::SeqCst) {
             self.sweep_orphans(&store);
+        }
+
+        // A test flow that ended with a failed checkout restore blocks the test lane until redone.
+        if let Some(engine) = lock(&self.flows).as_ref() {
+            engine.retry_failed_restores();
         }
 
         let tickets_synced: Option<Value> = None;
@@ -1551,10 +1574,17 @@ impl Dispatcher {
     ) -> Option<String> {
         let holders = self.worktree_holders(store);
         let service_holders = holders.get(&ticket.service).map(Vec::as_slice)?;
+        let bug_keys: HashSet<String> = store
+            .list(&ListFilter::default())
+            .into_iter()
+            .filter(model::Ticket::is_bug)
+            .map(|ticket| ticket.key)
+            .collect();
         manual_cap_warning(
             service_holders,
             store.config().dispatcher.max_worktrees_per_project,
             &ticket.key,
+            &bug_keys,
         )
     }
 

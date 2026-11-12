@@ -88,6 +88,7 @@ fn running_slot(project: &str, origin_kind: &str, ticket_key: Option<&str>) -> R
         ticket_key: ticket_key.map(|k| k.to_string()),
         started_at_ms: 0,
         main_checkout: true,
+        test_checkout: false,
     }
 }
 

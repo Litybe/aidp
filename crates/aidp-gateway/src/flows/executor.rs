@@ -72,7 +72,18 @@ pub struct Executor {
     action_workers: Mutex<Vec<JoinHandle<()>>>,
     action_processes: FlowActionProcesses,
     resources: ResourceManager,
+    /// Ended project runs whose `git.restore` failed: the checkout may be dirty, it is restored
+    /// again on every dispatcher tick and counts in the test lane until that works.
+    pub(super) restore_failed: Mutex<HashSet<String>>,
+    /// Last reason a non-manual pipeline step could not start, per run: journaled once per change.
+    start_waits: Mutex<HashMap<String, String>>,
+    /// Runs being aborted: no pipeline starts for them while the abort waits for the key lock.
+    aborting: Mutex<HashSet<String>>,
 }
+
+/// MCP server of the Unity editor, denied to the pipeline steps of worktree flows.
+const UNITY_MCP_SERVER: &str = "unity-mcp";
+const UNITY_MCP_ALL_TOOLS: &str = "*";
 
 /// Escapes every non-ASCII character as `\uXXXX`, so the file survives any shell or code page.
 pub fn ascii_json(value: &Value) -> String {
@@ -153,6 +164,9 @@ impl Executor {
             action_admission: Mutex::new(()),
             action_workers: Mutex::new(Vec::new()),
             resources: ResourceManager::default(),
+            restore_failed: Mutex::new(HashSet::new()),
+            start_waits: Mutex::new(HashMap::new()),
+            aborting: Mutex::new(HashSet::new()),
         })
     }
 
@@ -673,6 +687,9 @@ impl Executor {
         with: &BTreeMap<String, Value>,
     ) -> anyhow::Result<()> {
         let key = state.key.as_str();
+        if lock(&self.aborting).contains(key) {
+            return Ok(());
+        }
         let policy = self
             .store
             .load_runtime(repo, key)
@@ -769,20 +786,92 @@ impl Executor {
                 launch.agent_executor = AgentExecutor::External;
             }
         }
+        if !launch.project_checkout {
+            // The Unity MCP drives the one editor open on the test checkout: a worktree flow
+            // (dev or bug lane) must not touch it.
+            let tools = launch
+                .denied_mcp_tools
+                .entry(UNITY_MCP_SERVER.to_string())
+                .or_default();
+            if !tools.iter().any(|tool| tool == UNITY_MCP_ALL_TOOLS) {
+                tools.push(UNITY_MCP_ALL_TOOLS.to_string());
+            }
+        }
         match self.ports.sessions.start(&launch) {
             Ok(SessionStart::Started(session_id)) => {
+                lock(&self.start_waits).remove(key);
                 let mut runtime = self.store.load_runtime(repo, key);
                 runtime.sessions.insert(effect.to_string(), session_id);
                 self.store.save_runtime(repo, key, &runtime)
             }
-            Ok(SessionStart::Busy) => {
+            Ok(held @ (SessionStart::Busy | SessionStart::Queued)) => {
                 if step.starts_with(MANUAL_PREFIX) {
                     self.journal(key, None, format!("{step} not started: {WORKSPACE_BUSY}"));
+                } else {
+                    let reason = if held == SessionStart::Busy {
+                        format!(
+                            "{WORKSPACE_BUSY} ({})",
+                            crate::flows::lock::workspace_key(
+                                self.store.vault_root(),
+                                &launch.project.repo,
+                                key
+                            )
+                        )
+                    } else {
+                        "queued by the session manager".to_string()
+                    };
+                    self.note_start_wait(key, step, reason);
                 }
                 Ok(())
             }
             Err(error) => self.pipeline_start_failed(key, effect, error.to_string()),
         }
+    }
+
+    /// Journals why `step` of run `key` is not started, once per change of reason (the reconcile
+    /// retries every minute and would repeat the same line).
+    fn note_start_wait(&self, key: &str, step: &str, reason: String) {
+        let changed = {
+            let mut waits = lock(&self.start_waits);
+            if waits.get(key) == Some(&reason) {
+                false
+            } else {
+                waits.insert(key.to_string(), reason.clone());
+                true
+            }
+        };
+        if changed {
+            self.journal(key, None, format!("{step} waiting to start: {reason}"));
+        }
+    }
+
+    /// Marks run `key` as being aborted and cancels its known sessions from a side thread, so a
+    /// launch holding the key lock (or the native start guard) cannot delay the abort itself.
+    pub fn begin_abort(self: &Arc<Self>, key: &str) {
+        lock(&self.aborting).insert(key.to_string());
+        let Ok((repo, _)) = self.load(key) else {
+            return;
+        };
+        let sessions: Vec<String> = self
+            .store
+            .load_runtime(&repo, key)
+            .sessions
+            .into_values()
+            .collect();
+        if sessions.is_empty() {
+            return;
+        }
+        let executor = self.clone();
+        std::thread::spawn(move || {
+            for session_id in sessions {
+                executor.ports.sessions.cancel(&session_id);
+            }
+        });
+    }
+
+    /// The abort of run `key` is over (done or refused): pipeline starts are allowed again.
+    pub fn end_abort(&self, key: &str) {
+        lock(&self.aborting).remove(key);
     }
 
     /// A retried pipeline step continues the previous iteration's run when that run is paused,

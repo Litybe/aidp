@@ -579,6 +579,9 @@ Since the decision of 2026-11-08 a flow-driven game ticket has a **phase**, `aut
   (default 1) beside the dev lane: a bug never takes a dev slot and a full dev lane never holds it back. The project
   one-session rule still applies to a session launch. In the test lane a bug is tested before any other ticket, only
   a manual promotion goes ahead of it. `dispatcher.json` `slots` carries `bugUsed`/`bugMax`.
+- The lanes are independent: no flow of one lane waits on, holds or consumes the slot or workspace of another. A session
+  in the project main checkout does not block a dev or bug flow (they run in worktrees); only a non-flow session in the
+  test checkout blocks the test lane. A dev or bug flow waiting on a human gate or paused holds no slot.
 - Pause, budget and night mode apply to both lanes. `dispatcher.json` `slots` carries `used`/`max` (dev) and
   `testUsed`/`testMax` (test).
 - A manual or forced start, and any flow launch, is no longer short-circuited by the adoption of an open PR: a ticket in
@@ -626,7 +629,8 @@ checkout (details in [gateway-api.md](gateway-api.md#worktrees--lot-17a)). The u
 the workspace, so a UI session on the checkout no longer blocks the dispatcher.
 
 `dispatcher.max_worktrees_per_project` (default `3`) bounds the live worktrees of a project: tickets
-that are `in-progress`, `in-review` or `blocked` and own one. `dispatcher.worktree_copy` lists the
+that are `in-progress`, `in-review` or `blocked` and own one. The cap is per lane: dev and bug worktrees are counted
+apart, each against the cap, so dev tickets cannot starve bug launches. `dispatcher.worktree_copy` lists the
 untracked files copied into a new worktree.
 
 Skip reasons in `lastPlan.skipped`:

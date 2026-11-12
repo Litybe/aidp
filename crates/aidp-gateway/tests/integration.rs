@@ -37,3 +37,4 @@ mod token_costs;
 mod unity_http_routes;
 mod vault_disabled;
 mod worktrees_ensure_remove;
+mod worktrees_lane_isolation;

@@ -98,10 +98,10 @@ pub(crate) fn validate_policy_spec(spec: &AgentSpec) -> Result<(), AgentError> {
         .denied_shell_commands
         .iter()
         .any(|command| !safe(command))
-        || spec
-            .denied_mcp_tools
-            .iter()
-            .any(|(server, tools)| !safe(server) || tools.iter().any(|tool| !safe(tool)))
+        || spec.denied_mcp_tools.iter().any(|(server, tools)| {
+            // `*` alone denies every tool of the server.
+            !safe(server) || tools.iter().any(|tool| tool != "*" && !safe(tool))
+        })
     {
         return Err(AgentError::Config(
             launch_policy::INVALID_DENY_RULE.to_string(),

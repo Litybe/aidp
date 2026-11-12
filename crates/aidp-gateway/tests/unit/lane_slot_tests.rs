@@ -1,4 +1,4 @@
-//! A flow waiting on its merge approval holds no dev slot.
+//! A dev/bug flow parked on a human gate or paused holds no lane slot.
 
 use super::waits_on_merge;
 use aidp_flows::{FlowDef, FlowState, FlowStatus, StepState};
@@ -23,8 +23,27 @@ fn a_flow_waiting_on_its_merge_approval_holds_no_slot() {
 }
 
 #[test]
-fn a_human_gate_outside_the_merge_phase_keeps_its_slot() {
-    assert!(!waits_on_merge(&parked(FlowStatus::WaitingHuman, "Revue")));
+fn a_human_gate_outside_the_merge_phase_holds_no_slot() {
+    assert!(waits_on_merge(&parked(FlowStatus::WaitingHuman, "Revue")));
+}
+
+#[test]
+fn a_paused_flow_holds_no_slot() {
+    assert!(waits_on_merge(&parked(FlowStatus::Paused, "Code")));
+}
+
+#[test]
+fn a_terminal_flow_holds_no_slot() {
+    assert!(waits_on_merge(&parked(FlowStatus::Aborted, "Code")));
+}
+
+#[test]
+fn a_pausing_or_external_wait_keeps_its_slot() {
+    assert!(!waits_on_merge(&parked(FlowStatus::Pausing, "Code")));
+    assert!(!waits_on_merge(&parked(
+        FlowStatus::WaitingExternal,
+        "Code"
+    )));
 }
 
 #[test]
@@ -33,8 +52,8 @@ fn a_running_merge_step_keeps_its_slot() {
 }
 
 #[test]
-fn a_flow_without_a_current_step_keeps_its_slot() {
-    let mut state = parked(FlowStatus::WaitingHuman, "Merge");
+fn a_running_flow_without_a_current_step_keeps_its_slot() {
+    let mut state = parked(FlowStatus::Running, "Merge");
     state.current = None;
     assert!(!waits_on_merge(&state));
 }

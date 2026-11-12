@@ -196,11 +196,54 @@ impl Executor {
             self.set_released(&job.repo, &job.key, false);
         }
         let ended = job.effect_id == END_RESTORE_EFFECT;
+        if job.name == ACTION_GIT_RESTORE && ended && !ok {
+            // The checkout may still be dirty: keep it held (no release), say so once, retry later.
+            let first = crate::sync::lock(&self.restore_failed).insert(job.key.clone());
+            tracing::warn!(key = %job.key, "end-of-run git.restore failed: test checkout may be dirty, retrying");
+            if first {
+                self.journal(
+                    &job.key,
+                    None,
+                    "end-of-run git.restore failed: the test checkout may be left dirty; retried on every dispatcher tick, no new test flow starts before it succeeds".to_string(),
+                );
+            }
+            return;
+        }
         if job.name == ACTION_GIT_RESTORE && (ok || ended) {
+            crate::sync::lock(&self.restore_failed).remove(&job.key);
             self.set_released(&job.repo, &job.key, true);
             if let Ok((_, state)) = self.load(&job.key) {
                 self.sync_resources(&state);
             }
+        }
+    }
+
+    /// Keys of the ended project runs whose checkout restore is still to be redone.
+    pub fn failed_restores(&self) -> Vec<String> {
+        crate::sync::lock(&self.restore_failed)
+            .iter()
+            .cloned()
+            .collect()
+    }
+
+    /// Redoes, once, the end-of-run restore of every project run whose restore failed.
+    pub fn retry_failed_restores(self: &Arc<Self>) {
+        for key in self.failed_restores() {
+            let Ok((repo, state)) = self.load(&key) else {
+                crate::sync::lock(&self.restore_failed).remove(&key);
+                continue;
+            };
+            if state.effects_applied.contains(RELEASED_MARKER) {
+                crate::sync::lock(&self.restore_failed).remove(&key);
+                continue;
+            }
+            self.spawn_action(ActionJob {
+                key,
+                repo,
+                effect_id: END_RESTORE_EFFECT.to_string(),
+                name: ACTION_GIT_RESTORE.to_string(),
+                with: BTreeMap::new(),
+            });
         }
     }
 
