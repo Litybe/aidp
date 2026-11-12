@@ -38,7 +38,6 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tracing::warn;
 
-const AGENTS_DIR: &str = "agents";
 const PERSONA_EXTENSION: &str = "md";
 const TITLE_SEPARATOR: &str = " / ";
 const LAUNCH_RETRY_FIRST: Duration = Duration::from_millis(500);
@@ -226,10 +225,7 @@ impl Dispatcher {
     }
 
     fn persona(&self, role: &str) -> Option<String> {
-        let root = self.deps.skill_root.as_ref()?;
-        let file = root
-            .join(AGENTS_DIR)
-            .join(format!("{role}.{PERSONA_EXTENSION}"));
+        let file = aidp_core::toolset::registry_dir()?.join(format!("{role}.{PERSONA_EXTENSION}"));
         std::fs::read_to_string(file).ok()
     }
 

@@ -1,6 +1,6 @@
 use super::CommandOutput;
 use crate::args::AgentsOp;
-use crate::ctx::{Ctx, AGENTS_DIR};
+use crate::ctx::{claude_agents_dir, Ctx};
 
 const MARKDOWN_EXTENSION: &str = "md";
 
@@ -12,8 +12,7 @@ pub fn run(ctx: &Ctx, op: AgentsOp) -> anyhow::Result<CommandOutput> {
 
 fn list_agents(ctx: &Ctx) -> anyhow::Result<CommandOutput> {
     let mut out = vec![];
-    if let Some(root) = &ctx.skill_root {
-        let dir = root.join(AGENTS_DIR);
+    if let Some(dir) = claude_agents_dir(ctx) {
         if dir.exists() {
             for entry in walkdir::WalkDir::new(&dir)
                 .max_depth(1)

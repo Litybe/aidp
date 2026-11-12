@@ -48,15 +48,16 @@ pub fn skill_generation() -> String {
 /// Resolves the bundled command even when the skill directory is named by its content hash.
 pub(crate) fn configured_skill_generation(root: &std::path::Path) -> String {
     use crate::models::constants::skill_paths::*;
-    for generation in GENERATIONS {
-        if root
-            .join(COMMANDS_DIRECTORY)
-            .join(format!(
-                "{RUN_COMMAND_PREFIX}{generation}{COMMAND_EXTENSION}"
-            ))
-            .is_file()
-        {
-            return generation.to_string();
+    if let Some(commands) = aidp_core::toolset::commands_dir() {
+        for generation in GENERATIONS {
+            if commands
+                .join(format!(
+                    "{RUN_COMMAND_PREFIX}{generation}{COMMAND_EXTENSION}"
+                ))
+                .is_file()
+            {
+                return generation.to_string();
+            }
         }
     }
     root.file_name()

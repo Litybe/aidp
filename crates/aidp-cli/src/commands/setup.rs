@@ -1,6 +1,6 @@
 use super::CommandOutput;
 use crate::args::SetupOp;
-use crate::ctx::{Ctx, AGENTS_DIR, CLAUDE_DIR, SKILL_ROOT_ENV};
+use crate::ctx::{claude_agents_dir, Ctx, AGENTS_DIR, CLAUDE_DIR};
 use crate::models::envelopes::{MergeHooksDone, MergeHooksDryRun, SetupAgentsDone};
 use aidp_core::hooks::{merge_hooks, HookSettings};
 use aidp_core::models::enums::AgentRole;
@@ -100,18 +100,10 @@ fn merge_settings_hooks(
 /// `aidp setup agents`: writes the restricted `aidp-<role>-ro.md` personas to the registry.
 /// An existing target refuses the command unless `force` is set; `executor` has no entry.
 fn setup_agents(ctx: &Ctx, dest: Option<PathBuf>, force: bool) -> anyhow::Result<CommandOutput> {
-    let root = ctx.skill_root.as_ref().ok_or_else(|| {
-        anyhow::anyhow!(
-            "skill root not found — set {SKILL_ROOT_ENV} or run aidp from the skill directory"
-        )
+    let agents_dir = claude_agents_dir(ctx).ok_or_else(|| {
+        anyhow::anyhow!("home directory not found — cannot locate {CLAUDE_DIR}/{AGENTS_DIR}")
     })?;
-    let agents_dir = root.join(AGENTS_DIR);
-    let dest_dir = dest.unwrap_or_else(|| {
-        ctx.home
-            .as_ref()
-            .map(|h| h.join(CLAUDE_DIR).join(AGENTS_DIR))
-            .unwrap_or_else(|| PathBuf::from(CLAUDE_DIR).join(AGENTS_DIR))
-    });
+    let dest_dir = dest.unwrap_or_else(|| agents_dir.clone());
     std::fs::create_dir_all(&dest_dir)
         .map_err(|e| anyhow::anyhow!("create {}: {e}", dest_dir.display()))?;
 
