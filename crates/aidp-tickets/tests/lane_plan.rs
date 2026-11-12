@@ -7,6 +7,7 @@ use chrono::{Duration, Utc};
 
 use aidp_tickets::config::{DispatcherConfig, RepoRoute, Routing};
 use aidp_tickets::model::{Autopilot, IssueType, Phase, Priority, Source, Status, Ticket};
+use aidp_tickets::models::constants::lane::BUG_TAG;
 use aidp_tickets::plan::{plan_with_lanes, LaneLoad, SkipReason, TemplateCatalog, Verdict};
 
 fn ticket(key: &str, phase: Phase, status: Status, age_minutes: i64) -> Ticket {
@@ -82,8 +83,111 @@ fn plan(
                 .iter()
                 .map(|(project, count)| (project.to_string(), *count))
                 .collect(),
+            ..LaneLoad::default()
         },
     )
+}
+
+fn bug(key: &str, phase: Phase, status: Status, age_minutes: i64) -> Ticket {
+    let mut bug = ticket(key, phase, status, age_minutes);
+    bug.r#type = IssueType::Bug;
+    bug
+}
+
+#[test]
+fn a_bug_launches_beside_a_full_dev_lane() {
+    let tickets = [
+        ticket("D-1", Phase::Dev, Status::Todo, 5),
+        bug("B-1", Phase::Dev, Status::Todo, 1),
+    ];
+    let result = plan(&tickets, &config(1, 1), 1, &[]);
+    let launched: Vec<&str> = result.launches.iter().map(|l| l.key.as_str()).collect();
+    assert_eq!(launched, vec!["B-1"]);
+    assert_eq!(result.slots_used, 1);
+    assert_eq!(result.bug_slots_max, 1);
+}
+
+#[test]
+fn a_bug_does_not_take_a_dev_slot() {
+    let tickets = [
+        bug("B-1", Phase::Dev, Status::Todo, 5),
+        ticket("D-1", Phase::Dev, Status::Todo, 1),
+    ];
+    let result = plan(&tickets, &config(1, 1), 0, &[]);
+    assert_eq!(result.launches.len(), 2, "{:?}", result.skipped);
+}
+
+#[test]
+fn the_bug_lane_is_bounded_by_bug_slots() {
+    let tickets = [
+        bug("B-1", Phase::Dev, Status::Todo, 5),
+        bug("B-2", Phase::Dev, Status::Todo, 1),
+    ];
+    let cfg = DispatcherConfig {
+        bug_slots: 1,
+        ..config(3, 1)
+    };
+    let result = plan(&tickets, &cfg, 0, &[]);
+    assert_eq!(result.launches.len(), 1);
+    assert!(result
+        .skipped
+        .contains(&("B-2".to_string(), SkipReason::NoSlot)));
+}
+
+#[test]
+fn running_bug_flows_use_the_bug_slots_only() {
+    let tickets = [
+        bug("B-1", Phase::Dev, Status::Todo, 5),
+        ticket("D-1", Phase::Dev, Status::Todo, 1),
+    ];
+    let routing = routing();
+    let result = plan_with_lanes(
+        &tickets,
+        &[],
+        &Verdict::unconstrained(),
+        &TemplateCatalog::empty(),
+        &config(3, 1),
+        &HashMap::new(),
+        &LaneLoad {
+            routing: Some(&routing),
+            bug_flows: 1,
+            ..LaneLoad::default()
+        },
+    );
+    let launched: Vec<&str> = result.launches.iter().map(|l| l.key.as_str()).collect();
+    assert_eq!(launched, vec!["D-1"]);
+    assert_eq!(result.bug_slots_used, 1);
+    assert_eq!(result.slots_used, 0);
+}
+
+#[test]
+fn a_bug_is_tested_before_older_tickets() {
+    let tickets = [
+        ticket("T-old", Phase::ToTest, Status::InProgress, 30),
+        bug("B-new", Phase::ToTest, Status::InProgress, 1),
+    ];
+    let result = plan(&tickets, &config(3, 1), 0, &[]);
+    assert_eq!(result.launches.len(), 1);
+    assert_eq!(result.launches[0].key, "B-new");
+}
+
+#[test]
+fn a_manual_promotion_still_passes_a_bug_in_the_test_lane() {
+    let mut promoted = ticket("T-man", Phase::ToTest, Status::InProgress, 1);
+    promoted.autopilot.manual_priority = Some(true);
+    let tickets = [bug("B-1", Phase::ToTest, Status::InProgress, 30), promoted];
+    let result = plan(&tickets, &config(3, 1), 0, &[]);
+    assert_eq!(result.launches[0].key, "T-man");
+}
+
+#[test]
+fn a_bug_ticket_carries_the_bug_tag() {
+    let mut tagged = bug("B-1", Phase::Dev, Status::Todo, 1);
+    tagged.recompute_derived();
+    assert!(tagged.tags.iter().any(|tag| tag == BUG_TAG));
+    let mut plain = ticket("D-1", Phase::Dev, Status::Todo, 1);
+    plain.recompute_derived();
+    assert!(!plain.tags.iter().any(|tag| tag == BUG_TAG));
 }
 
 #[test]

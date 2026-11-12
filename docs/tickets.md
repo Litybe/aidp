@@ -286,6 +286,7 @@ Sort key: `(manual, milestone, priority, source, issue number, created, key)`, a
 dispatcher:
   slots: 3          # dev lane: flows in worktrees running at once
   test_slots: 1     # test lane: test flows at once per project (main checkout, Unity editor)
+  bug_slots: 1      # bug lane: bug tickets at once, beside the dev lane (never a dev slot)
   tick_seconds: 60
   permission_mode: acceptEdits
   auto_approve_gates: [pr]       # "*" for all; other gates block the ticket (gate:<stage>)
@@ -535,7 +536,7 @@ paths only ever submit to `SessionManager::start`, never admit directly.
 
 ## The dispatcher
 
-### Two lanes (dev and test)
+### Three lanes (dev, bug and test)
 
 Since the decision of 2026-11-08 a flow-driven game ticket has a **phase**, `autopilot.phase`: `dev` (default),
 `to-test`, `testing`. `GET /api/tickets` shows it as `phase`, with `branch`.
@@ -547,6 +548,11 @@ Since the decision of 2026-11-08 a flow-driven game ticket has a **phase**, `aut
   `aidp:to-test` on the issue), launched with the route's `test_flow:` (`routing.yaml`) in the main checkout, at most
   `dispatcher.test_slots` (default 1) per project, oldest first, a manual start (`POST /api/tickets/:key/start`) ahead.
   Refusal reason `no-test-slot`. The phase becomes `testing` when the test flow starts. A test flow never uses a dev slot.
+- Bug lane: a ticket of type `bug` (label `bug` on the issue) carries the tag `aidp/bug` (`tags` in `GET /api/tickets`,
+  next to `type: bug`) so a board shows it at a glance. It is launched first, bounded by `dispatcher.bug_slots`
+  (default 1) beside the dev lane: a bug never takes a dev slot and a full dev lane never holds it back. The project
+  one-session rule still applies to a session launch. In the test lane a bug is tested before any other ticket, only
+  a manual promotion goes ahead of it. `dispatcher.json` `slots` carries `bugUsed`/`bugMax`.
 - Pause, budget and night mode apply to both lanes. `dispatcher.json` `slots` carries `used`/`max` (dev) and
   `testUsed`/`testMax` (test).
 - A manual or forced start, and any flow launch, is no longer short-circuited by the adoption of an open PR: a ticket in
