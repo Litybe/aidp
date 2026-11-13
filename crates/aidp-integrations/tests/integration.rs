@@ -3,4 +3,3 @@
 mod gh_resolve_program;
 mod mock_issues;
 mod mock_routes;
-mod ureq_free_functions_tests;

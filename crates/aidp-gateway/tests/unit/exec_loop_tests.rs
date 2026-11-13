@@ -1,6 +1,6 @@
 use super::*;
 use crate::models::native_run_start::StartNativeRun;
-use aidp_core::process_runner::ProcessSpec;
+use aidp_core::process_runner::{OsProcessRunner, ProcessSpec};
 use aidp_core::run::{RunState, StageState};
 use serde_json::json;
 
@@ -612,11 +612,12 @@ fn verified_peer_write(isolated: bool) -> (TaskOutcome, bool) {
         Ok(TaskOutcome::succeeded(None, Vec::new()))
     };
     drive_tasks(&slots, &tasks, &never_cancelled, false, &worker);
-    let baseline = scope_guard::capture_task_baseline(dir.path(), &PROCESS_RUNNER, None);
+    let baseline = scope_guard::capture_task_baseline(dir.path(), &OsProcessRunner, None);
     std::fs::create_dir_all(dir.path().join("src")).unwrap();
     std::fs::write(dir.path().join("src/b.rs"), "peer file").unwrap();
     let mut outcome = TaskOutcome::succeeded(None, Vec::new());
     verify_task_scope(
+        &OsProcessRunner,
         dir.path(),
         &tasks[0],
         &schedule,

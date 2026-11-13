@@ -8,7 +8,7 @@ set -e
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$repo_root/scripts/aidp-install.sh"
-release_dir="$repo_root/target/release"
+release_dir="${CARGO_TARGET_DIR:-$repo_root/target}/release"
 built_aidp="$release_dir/aidp"
 install_dir="${AIDP_INSTALL_DIR:-$HOME/.aidp/bin}"
 

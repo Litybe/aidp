@@ -7,13 +7,12 @@
 //! - `workspace_forbids_unsafe_and_declares_msrv` ensures the workspace declares unsafe forbid and MSRV
 //! - `toolchain_pin_matches_declared_msrv` ensures the toolchain pin matches the workspace MSRV
 //! - `deny_config_traces_the_yaml_parser_risk` ensures supply chain config mentions known risks
-//! - `workspace_code_carries_no_panic_safety_net` ensures no crate hides a panic or slices a timestamp by bytes
 //! - `every_integration_test_file_is_compiled` ensures `autotests = false` never drops a test file
 //!
 //! All tests use only `std` and fail with clear error messages identifying missing files.
 
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 const AUTOTESTS_OFF: &str = "autotests = false";
 const INTEGRATION_ROOT: &str = "integration.rs";
@@ -197,115 +196,6 @@ fn deny_config_traces_the_yaml_parser_risk() {
     assert!(
         content.to_lowercase().contains("serde_yaml"),
         "deny.toml must mention serde_yaml to document the known YAML parser risk"
-    );
-}
-
-/// Source fragments no production crate may contain, each split with `concat!`
-/// so this file never carries the literal it forbids.
-const FORBIDDEN_PANIC_NET_FRAGMENTS: &[&str] = &[
-    concat!("catch", "_unwind"),
-    concat!("expect(\"model-prices.json", " must be valid\")"),
-    concat!("started_at", "[..10]"),
-];
-
-/// Crate whose panic-behaviour tests legitimately need the forbidden fragments.
-const TEST_HARNESS_CRATE_DIR: &str = "aidp-testkit";
-
-/// Integration-test directory of a crate, whose panic-behaviour tests may need the fragments.
-const INTEGRATION_TESTS_DIR: &str = "tests";
-
-/// Source directory of a crate, whose `tests` subdirectory holds its unit tests.
-const SOURCE_DIR: &str = "src";
-
-/// The single production file allowed to catch a panic: the gateway's resident-loop
-/// supervisor, which counts and logs every panic instead of hiding it.
-const RESIDENT_LOOP_SUPERVISOR: &str = "aidp-gateway/src/threads.rs";
-
-/// Relative path of the crates directory from the repository root.
-const CRATES_DIR: &str = "crates";
-
-/// Extension of the Rust source files the gate scans.
-const RUST_SOURCE_EXTENSION: &str = "rs";
-
-/// Collects every Rust source file under `dir`, recursing into subdirectories.
-fn collect_rust_sources(dir: &Path, sources: &mut Vec<PathBuf>) {
-    let entries =
-        fs::read_dir(dir).unwrap_or_else(|_| panic!("Failed to read directory: {}", dir.display()));
-    for entry in entries {
-        let path = entry.expect("Failed to read directory entry").path();
-        if path.is_dir() {
-            collect_rust_sources(&path, sources);
-        } else if path
-            .extension()
-            .is_some_and(|ext| ext == RUST_SOURCE_EXTENSION)
-        {
-            sources.push(path);
-        }
-    }
-}
-
-/// True for a crate's integration tests, its `src/tests` unit tests and the
-/// resident-loop supervisor.
-fn is_exempt_from_panic_gate(crates_dir: &Path, source: &Path) -> bool {
-    let relative = source.strip_prefix(crates_dir).unwrap_or(source);
-    let mut components = relative
-        .components()
-        .skip(1)
-        .map(|component| component.as_os_str());
-    let first = components.next();
-    let second = components.next();
-    let in_integration_tests = first.is_some_and(|name| name == INTEGRATION_TESTS_DIR);
-    let in_source_tests = first.is_some_and(|name| name == SOURCE_DIR)
-        && second.is_some_and(|name| name == INTEGRATION_TESTS_DIR);
-    in_integration_tests || in_source_tests || relative == Path::new(RESIDENT_LOOP_SUPERVISOR)
-}
-
-#[test]
-fn panic_gate_exempts_only_test_directories_at_crate_level() {
-    let crates_dir = Path::new("crates");
-    let exempt = |path: &str| is_exempt_from_panic_gate(crates_dir, Path::new(path));
-    assert!(exempt("crates/x/src/tests/units/a.rs"));
-    assert!(exempt("crates/x/tests/a.rs"));
-    assert!(!exempt("crates/x/src/lib.rs"));
-    assert!(!exempt("crates/x/src/deep/tests/a.rs"));
-}
-
-#[test]
-fn workspace_code_carries_no_panic_safety_net() {
-    let crates_dir = repo_root().join(CRATES_DIR);
-    let mut sources = Vec::new();
-    for entry in fs::read_dir(&crates_dir)
-        .unwrap_or_else(|_| panic!("Failed to read crates directory: {}", crates_dir.display()))
-    {
-        let crate_dir = entry.expect("Failed to read directory entry").path();
-        if crate_dir.is_dir() && !crate_dir.ends_with(TEST_HARNESS_CRATE_DIR) {
-            collect_rust_sources(&crate_dir, &mut sources);
-        }
-    }
-    sources.retain(|source| !is_exempt_from_panic_gate(&crates_dir, source));
-
-    assert!(
-        !sources.is_empty(),
-        "No Rust sources found under {}",
-        crates_dir.display()
-    );
-
-    let offenders: Vec<String> = sources
-        .iter()
-        .flat_map(|source| {
-            let content = fs::read_to_string(source)
-                .unwrap_or_else(|_| panic!("Failed to read source: {}", source.display()));
-            FORBIDDEN_PANIC_NET_FRAGMENTS
-                .iter()
-                .filter(move |fragment| content.contains(**fragment))
-                .map(move |fragment| format!("{}: contains `{fragment}`", source.display()))
-        })
-        .collect();
-
-    assert!(
-        offenders.is_empty(),
-        "Forbidden panic safety net found:\n{}",
-        offenders.join("\n")
     );
 }
 

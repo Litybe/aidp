@@ -32,7 +32,7 @@ use aidp_core::findings::{self, MergeInput};
 use aidp_core::models::enums::{AgentRole, ItemFailurePolicy};
 use aidp_core::pipeline::{self, Pipeline, Settings};
 use aidp_core::plan::{self, Schedule, ScheduledTask, Serialization, TaskStatus};
-use aidp_core::process_runner::{OsProcessRunner, ProcessRunner};
+use aidp_core::process_runner::ProcessRunner;
 use aidp_core::run::EnvelopeStatus;
 use aidp_core::workflow_emit::DiskPlanSource;
 use serde_json::Value;
@@ -42,7 +42,6 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tracing::{info, warn};
 
-const PROCESS_RUNNER: OsProcessRunner = OsProcessRunner;
 const MAX_PARALLEL_SETTING: &str = "max_parallel";
 const DEFAULT_MAX_PARALLEL: usize = 3;
 const GATE_POLL: Duration = Duration::from_millis(500);
@@ -416,7 +415,9 @@ fn peer_files(
 
 /// Checks what the task wrote in `workspace` against its files, restoring stray writes on a
 /// violation.
+#[allow(clippy::too_many_arguments)]
 fn verify_task_scope(
+    runner: &dyn ProcessRunner,
     workspace: &Path,
     scheduled: &ScheduledTask,
     schedule: &Schedule,
@@ -425,7 +426,7 @@ fn verify_task_scope(
     isolated: bool,
     outcome: &mut TaskOutcome,
 ) -> anyhow::Result<()> {
-    let mut written = scope_guard::changed_since(workspace, baseline, &PROCESS_RUNNER);
+    let mut written = scope_guard::changed_since(workspace, baseline, runner);
     let peer_files = peer_files(scheduled, schedule, slots, isolated);
     let verdict = scope_guard::verify_task_writes(
         &written,
@@ -443,12 +444,7 @@ fn verify_task_scope(
         outcome.written = written;
         return Ok(());
     }
-    scope_guard::restore_task_violations(
-        workspace,
-        &verdict.violations,
-        baseline,
-        &PROCESS_RUNNER,
-    )?;
+    scope_guard::restore_task_violations(workspace, &verdict.violations, baseline, runner)?;
     written.retain(|path| !verdict.violations.contains(path));
     outcome.written = written;
     // The restore above dropped them from the isolated tree, so they never reach the ticket worktree.
@@ -1316,8 +1312,11 @@ impl RunExec {
         let view = self.store.view();
         let workspace = view.workspace;
         let exempt = scope_guard::run_dir_exemption(&workspace, &view.run_dir);
-        let stage_baseline =
-            scope_guard::capture_task_baseline(&workspace, &PROCESS_RUNNER, exempt.as_deref());
+        let stage_baseline = scope_guard::capture_task_baseline(
+            &workspace,
+            self.deps.runner.as_ref(),
+            exempt.as_deref(),
+        );
         let settled: Vec<(String, TaskStatus)> = schedule
             .tasks
             .iter()
@@ -1330,7 +1329,7 @@ impl RunExec {
         let isolate = task_isolation::should_isolate(alone, schedule.effective_parallel());
         let iso_root = task_isolation::isolation_root(&view.run_dir);
         if isolate {
-            task_isolation::sweep(&workspace, &iso_root, &PROCESS_RUNNER);
+            task_isolation::sweep(&workspace, &iso_root, self.deps.runner.as_ref());
         }
         let ticket_lock = Mutex::new(());
         let isolation = isolate.then_some(IsolationSetup {
@@ -1367,7 +1366,7 @@ impl RunExec {
             &workspace,
             &overlapped,
             &stage_baseline,
-            &PROCESS_RUNNER,
+            self.deps.runner.as_ref(),
         )?;
         if let Some(error) = error {
             return Err(error);
@@ -1489,7 +1488,7 @@ impl RunExec {
                     setup.root,
                     id,
                     exempt.as_deref(),
-                    &PROCESS_RUNNER,
+                    self.deps.runner.as_ref(),
                 )
             };
             match prepared {
@@ -1497,7 +1496,7 @@ impl RunExec {
                     isolated = Some(IsolatedTask::new(
                         &workspace,
                         tree,
-                        &PROCESS_RUNNER,
+                        self.deps.runner.as_ref(),
                         setup.ticket_lock,
                     ))
                 }
@@ -1515,7 +1514,7 @@ impl RunExec {
             .map_or(workspace.as_path(), |task| task.tree.path.as_path());
         let baseline = (!alone).then(|| {
             let exempt = exempt.as_deref().filter(|_| isolated.is_none());
-            scope_guard::capture_task_baseline(task_workspace, &PROCESS_RUNNER, exempt)
+            scope_guard::capture_task_baseline(task_workspace, self.deps.runner.as_ref(), exempt)
         });
         let job = SessionJob {
             stage: spec.clone(),
@@ -1543,6 +1542,7 @@ impl RunExec {
         ) {
             let mut outcome = outcome_of(NativeRunStatus::Running, tokens);
             verify_task_scope(
+                self.deps.runner.as_ref(),
                 task_workspace,
                 scheduled,
                 schedule,
@@ -1553,7 +1553,12 @@ impl RunExec {
             )?;
             if outcome.is_success() {
                 let _ticket = lock_ticket(setup.ticket_lock);
-                apply_task(&workspace, &task.tree, &mut outcome, &PROCESS_RUNNER);
+                apply_task(
+                    &workspace,
+                    &task.tree,
+                    &mut outcome,
+                    self.deps.runner.as_ref(),
+                );
             }
             if !outcome.is_success() {
                 let reason = outcome.reason.unwrap_or(NativeReason::TaskFailed);
@@ -1575,6 +1580,7 @@ impl RunExec {
             (outcome.is_success(), baseline.as_ref(), isolated.as_ref())
         {
             verify_task_scope(
+                self.deps.runner.as_ref(),
                 task_workspace,
                 scheduled,
                 schedule,

@@ -5,7 +5,6 @@
 use std::collections::BTreeMap;
 use std::io::{Cursor, Read, Write};
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -28,7 +27,7 @@ use aidp_gateway::native_runs::{NativeDeps, NativeRunManager};
 use aidp_gateway::projects::Projects;
 use aidp_gateway::sessions::SessionManager;
 use aidp_integrations::mock::{serve_on, MockHandle};
-use aidp_testkit::{EnvGuard, TempWorkspace};
+use aidp_testkit::{EnvGuard, GitFixture, TempWorkspace};
 use serde_json::{json, Value};
 
 const DEV_FLOW: &str = include_str!("fixtures/game_flows/game-code.yaml");
@@ -38,6 +37,20 @@ const REPO: &str = "o/r";
 const SETTLE: Duration = Duration::from_secs(30);
 const POLL: Duration = Duration::from_millis(20);
 const PR_NUMBER: u64 = 7;
+const MAIN_BRANCH: &str = "main";
+const README_FILE: &str = "README.md";
+const README_CONTENTS: &str = "game
+";
+const GAME_IDENTITY_NAME: &str = "game";
+const GAME_IDENTITY_EMAIL: &str = "game@example.test";
+const GAME_FIXTURE: GitFixture<'static> = GitFixture {
+    files: &[(README_FILE, README_CONTENTS)],
+    empty_directories: &[],
+    branch: Some(MAIN_BRANCH),
+    user_name: GAME_IDENTITY_NAME,
+    user_email: GAME_IDENTITY_EMAIL,
+    autocrlf_off: true,
+};
 /// The pull request the dev lane opened: the test lane has no `pr.json` of its own and reads it live.
 struct DevPr;
 
@@ -375,19 +388,6 @@ struct World {
     _env: EnvGuard,
 }
 
-fn run_git(directory: &Path, arguments: &[&str]) {
-    let output = Command::new("git")
-        .args(arguments)
-        .current_dir(directory)
-        .output()
-        .expect("git runs");
-    assert!(
-        output.status.success(),
-        "git {arguments:?}: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-}
-
 fn world(tag: &str, script: Script, tickets: &[&str]) -> World {
     let root = TempWorkspace::new(tag);
     let vault = root.child("vault");
@@ -397,22 +397,8 @@ fn world(tag: &str, script: Script, tickets: &[&str]) -> World {
     for directory in [&vault, &home, &state_dir, &workspace] {
         std::fs::create_dir_all(directory).unwrap();
     }
-    std::fs::write(workspace.join("README.md"), "game\n").unwrap();
     let origin = root.child("origin.git");
-    std::fs::create_dir_all(&origin).unwrap();
-    run_git(&origin, &["init", "-q", "--bare", "-b", "main"]);
-    run_git(&workspace, &["init", "-q", "-b", "main"]);
-    run_git(&workspace, &["config", "user.email", "game@example.test"]);
-    run_git(&workspace, &["config", "user.name", "game"]);
-    run_git(&workspace, &["config", "core.autocrlf", "false"]);
-    run_git(&workspace, &["add", "."]);
-    run_git(&workspace, &["commit", "-q", "-m", "initial"]);
-    run_git(
-        &workspace,
-        &["remote", "add", "origin", origin.to_str().unwrap()],
-    );
-    run_git(&workspace, &["push", "-q", "-u", "origin", "main"]);
-    run_git(&workspace, &["remote", "set-head", "origin", "main"]);
+    GAME_FIXTURE.copy_with_origin_into(&workspace, &origin);
     let env = EnvGuard::with(&[
         ("AIDP_VAULT", Some(vault.to_str().unwrap())),
         ("HOME", Some(home.to_str().unwrap())),

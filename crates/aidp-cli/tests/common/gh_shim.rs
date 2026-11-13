@@ -1,6 +1,8 @@
 //! Compiles a scripted fake `gh` binary shared by the `aidp gh` end-to-end tests.
 
+use std::collections::hash_map::DefaultHasher;
 use std::fs;
+use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -14,6 +16,11 @@ pub const CALLS_FILE: &str = "gh.calls";
 const SHIM_SOURCE_FILE: &str = "gh_shim.rs";
 const SHIM_EXE: &str = if cfg!(windows) { "gh.exe" } else { "gh" };
 const OUTPUT_FLAG: &str = "-o";
+const CACHE_DIR: &str = "gh_shim_cache";
+const CACHE_EXE_PREFIX: &str = "gh-";
+const BUILD_EXE_PREFIX: &str = "build-";
+const LOCK_SUFFIX: &str = ".lock";
+const CACHE_EXE_SUFFIX: &str = if cfg!(windows) { ".exe" } else { "" };
 const INPUT_FLAG_TOKEN: &str = "@INPUT_FLAG@";
 const BODIES_FILE_TOKEN: &str = "@BODIES_FILE@";
 const REPLY_FILE_TOKEN: &str = "@REPLY_FILE@";
@@ -70,19 +77,65 @@ fn shim_source() -> String {
         .replace(CALLS_FILE_TOKEN, CALLS_FILE)
 }
 
-/// Compiles the fake `gh` into `<dir>/bin`, writes `reply` as its default stdout and returns the bin dir.
+/// Returns the shim executable compiled once per source and shared by every test process.
+fn cached_shim_exe(rendered: &str, source: &Path) -> PathBuf {
+    let mut hasher = DefaultHasher::new();
+    rendered.hash(&mut hasher);
+    let cache_dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join(CACHE_DIR);
+    fs::create_dir_all(&cache_dir).expect("create shim cache dir");
+    let cached = cache_dir.join(format!(
+        "{CACHE_EXE_PREFIX}{:016x}{CACHE_EXE_SUFFIX}",
+        hasher.finish()
+    ));
+    if cached.is_file() {
+        return cached;
+    }
+    let mut lock_name = cached.clone().into_os_string();
+    lock_name.push(LOCK_SUFFIX);
+    let lock_file = fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(PathBuf::from(lock_name))
+        .expect("open shim lock");
+    lock_file.lock().expect("lock shim compilation");
+    if !cached.is_file() {
+        let building = cache_dir.join(format!(
+            "{BUILD_EXE_PREFIX}{}{CACHE_EXE_SUFFIX}",
+            std::process::id()
+        ));
+        let compiled = Command::new(RUSTC)
+            .arg(source)
+            .arg(OUTPUT_FLAG)
+            .arg(&building)
+            .status()
+            .expect("run rustc");
+        assert!(compiled.success(), "shim must compile");
+        if fs::rename(&building, &cached).is_err() {
+            let _ = fs::remove_file(&building);
+        }
+    }
+    drop(lock_file);
+    assert!(cached.is_file(), "cached shim must exist");
+    cached
+}
+
+/// Writes `source_text` into `bin_dir` and installs its executable there as the fake `gh`, compiled once per source.
+pub fn install_compiled_shim(bin_dir: &Path, source_text: &str) {
+    let source = bin_dir.join(SHIM_SOURCE_FILE);
+    fs::write(&source, source_text).expect("write shim source");
+    fs::copy(
+        cached_shim_exe(source_text, &source),
+        bin_dir.join(SHIM_EXE),
+    )
+    .expect("copy cached shim");
+}
+
+/// Installs the fake `gh` into `<dir>/bin`, writes `reply` as its default stdout and returns the bin dir.
 pub fn install_gh_shim(dir: &Path, reply: &str) -> PathBuf {
     let bin_dir = dir.join(SHIM_DIR);
     fs::create_dir_all(&bin_dir).expect("create shim dir");
-    let source = bin_dir.join(SHIM_SOURCE_FILE);
-    fs::write(&source, shim_source()).expect("write shim source");
-    let compiled = Command::new(RUSTC)
-        .arg(&source)
-        .arg(OUTPUT_FLAG)
-        .arg(bin_dir.join(SHIM_EXE))
-        .status()
-        .expect("run rustc");
-    assert!(compiled.success(), "shim must compile");
+    install_compiled_shim(&bin_dir, &shim_source());
     fs::write(bin_dir.join(REPLY_FILE), reply).expect("write canned reply");
     bin_dir
 }

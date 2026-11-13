@@ -38,13 +38,19 @@ Run from the repository root.
   `tests/integration.rs`), never in `tests/unit/`. The `it_` prefix only marks existing
   unit-mounted tests not yet moved there.
 - No test reads the real skill, the real vault or a file outside the repository:
-  `workspace_boundary_gate` fails otherwise. Tests take templates from `aidp_testkit::fixtures`
+  `repository_sources_respect_every_gate` fails otherwise. Tests take templates from `aidp_testkit::fixtures`
   (§5).
 - Before declaring done: `cargo fmt --all -- --check`,
   `cargo clippy --workspace --all-targets --all-features -- -D warnings`,
   `cargo nextest run --workspace`, `cargo nextest run --workspace -P integration`,
   `cargo test --workspace --doc`, and `cargo run -p aidp-cli -- validate --all` with
   `AIDP_SKILL_ROOT` pointing at the skill.
+- Each checkout and worktree builds into its own `target/`. Never set or override `CARGO_TARGET_DIR`
+  to a directory shared with another checkout: sessions block on its lock and rebuild each other's work.
+- Thread counts come from `.config/nextest.toml` (`num-cpus` test threads) and
+  `.cargo/config.toml` (8 jobs): never pass `--test-threads`, `-j`, `--jobs`, `NEXTEST_TEST_THREADS`
+  or `RUST_TEST_THREADS`.
+- Tests run through `cargo nextest` only; plain `cargo test` is for `--doc`.
 - Never run two cargo commands at once on one target directory.
 - Never `cargo build --release` to check a change (thin LTO, one codegen unit: minutes).
   The installed `aidp` (`D:\AIDP\bin`, `AIDP_INSTALL_DIR`) is refreshed only by `bootstrap.ps1`.

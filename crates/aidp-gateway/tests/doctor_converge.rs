@@ -4,7 +4,9 @@
 
 use std::path::Path;
 
-use crate::doctor_flow::{run_git, world_full, Investigation, World, KEY, MALFORMED_REPLY};
+use crate::doctor_flow::{
+    world_full, world_on_real_git, Investigation, World, KEY, MALFORMED_REPLY,
+};
 use aidp_flows::FlowStatus;
 use aidp_gateway::models::enums::{DoctorAction, DoctorIncidentStatus, DoctorTrigger};
 use serde_json::{json, Value};
@@ -22,9 +24,9 @@ fn write(workspace: &Path, path: &str, bytes: usize) {
     std::fs::write(target, "x".repeat(bytes)).unwrap();
 }
 
-fn commit(workspace: &Path, message: &str) {
-    run_git(workspace, &["add", "."]);
-    run_git(workspace, &["commit", "-q", "-m", message]);
+fn commit(world: &World, message: &str) {
+    world.run_git(&world.workspace, &["add", "."]);
+    world.run_git(&world.workspace, &["commit", "-q", "-m", message]);
 }
 
 /// The GH-227 case: main holds the test scene, the feature branch merged three bugs and the first
@@ -33,23 +35,23 @@ fn broken_branch(world: &World) {
     let workspace = world.workspace.as_path();
     write(workspace, SCENE, SCENE_BYTES);
     write(workspace, SCRIPT, 10);
-    commit(workspace, "test scene");
-    run_git(workspace, &["push", "-q", "origin", "main"]);
-    run_git(workspace, &["checkout", "-q", "-b", BRANCH]);
+    commit(world, "test scene");
+    world.run_git(workspace, &["push", "-q", "origin", "main"]);
+    world.run_git(workspace, &["checkout", "-q", "-b", BRANCH]);
     for (number, scene) in [(2, BROKEN_SCENE_BYTES), (3, SCENE_BYTES), (4, SCENE_BYTES)] {
         let bug = format!("fix/GH-{number}");
-        run_git(workspace, &["checkout", "-q", "-b", &bug, BRANCH]);
+        world.run_git(workspace, &["checkout", "-q", "-b", &bug, BRANCH]);
         write(workspace, SCRIPT, 10 + number);
         if number == 2 {
             write(workspace, SCENE, scene);
         }
-        commit(workspace, &format!("fix(GH-{number}): le joueur manque"));
-        run_git(workspace, &["checkout", "-q", BRANCH]);
+        commit(world, &format!("fix(GH-{number}): le joueur manque"));
+        world.run_git(workspace, &["checkout", "-q", BRANCH]);
         let message = format!("Merge branch '{bug}' into {BRANCH}");
-        run_git(workspace, &["merge", "--no-ff", "-q", "-m", &message, &bug]);
+        world.run_git(workspace, &["merge", "--no-ff", "-q", "-m", &message, &bug]);
     }
-    run_git(workspace, &["push", "-q", "origin", BRANCH]);
-    run_git(workspace, &["checkout", "-q", "main"]);
+    world.run_git(workspace, &["push", "-q", "origin", BRANCH]);
+    world.run_git(workspace, &["checkout", "-q", "main"]);
 }
 
 fn diagnosis(category: &str, action: DoctorAction, params: Value) -> Value {
@@ -74,6 +76,18 @@ fn capped_world(tag: &str, diagnosis: Value) -> World {
         MALFORMED_REPLY,
         &[],
     );
+    escalate(world)
+}
+
+fn capped_world_on_real_git(tag: &str, diagnosis: Value) -> World {
+    escalate(world_on_real_git(
+        tag,
+        Investigation::Diagnosis(diagnosis),
+        0,
+    ))
+}
+
+fn escalate(world: World) -> World {
     broken_branch(&world);
     world.start_def(KEY, CAPPED);
     world.wait_flow(FlowStatus::Escalated);
@@ -91,12 +105,7 @@ fn called(world: &World, word: &str) -> bool {
 }
 
 fn show(world: &World, spec: &str) -> Vec<u8> {
-    let output = std::process::Command::new("git")
-        .args(["--git-dir", world.origin.to_str().unwrap(), "show", spec])
-        .output()
-        .unwrap();
-    assert!(output.status.success(), "git show {spec}");
-    output.stdout
+    world.show_in(&world.origin, spec)
 }
 
 fn evidence(world: &World, file: &str) -> Value {
@@ -106,17 +115,29 @@ fn evidence(world: &World, file: &str) -> Value {
     serde_json::from_str(&text).unwrap()
 }
 
+fn restore_diagnosis() -> Value {
+    diagnosis(
+        "test_infra_regression",
+        DoctorAction::RestoreTestInfra,
+        json!({ "files": [SCENE] }),
+    )
+}
+
 #[test]
 fn gh_227_the_scene_is_restored_the_test_rerun_and_the_cap_rearmed() {
-    let world = capped_world(
-        "converge-gh227",
-        diagnosis(
-            "test_infra_regression",
-            DoctorAction::RestoreTestInfra,
-            json!({ "files": [SCENE] }),
-        ),
-    );
-    let main_before = show(&world, "main");
+    let world = capped_world("converge-gh227", restore_diagnosis());
+    gh_227_restores_the_scene(&world);
+    assert!(world.git.as_ref().unwrap().unsupported().is_empty());
+}
+
+#[test]
+fn gh_227_the_scene_is_restored_the_test_rerun_and_the_cap_rearmed_on_real_git() {
+    let world = capped_world_on_real_git("converge-gh227-real", restore_diagnosis());
+    gh_227_restores_the_scene(&world);
+}
+
+fn gh_227_restores_the_scene(world: &World) {
+    let main_before = show(world, "main");
     let closed = world.investigate();
     assert_eq!(closed.status, DoctorIncidentStatus::Fixed, "{closed:?}");
     assert_eq!(closed.candidate.trigger, DoctorTrigger::BugsNotConverging);
@@ -124,20 +145,17 @@ fn gh_227_the_scene_is_restored_the_test_rerun_and_the_cap_rearmed() {
     assert!(closed.actions[0].ok, "{:?}", closed.actions);
     assert!(closed.rearmed_ms.is_some(), "{closed:?}");
 
-    let history = evidence(&world, "bug-history.json");
+    let history = evidence(world, "bug-history.json");
     assert_eq!(history.as_array().unwrap().len(), 3, "{history}");
-    let infra = evidence(&world, "test-infra.json");
+    let infra = evidence(world, "test-infra.json");
     let scene = &infra.as_array().unwrap()[0];
     assert_eq!(scene["path"], SCENE);
     assert_eq!(scene["before_bytes"], SCENE_BYTES);
     assert_eq!(scene["after_bytes"], BROKEN_SCENE_BYTES);
     assert_eq!(scene["suspect"], true);
 
-    assert_eq!(
-        show(&world, &format!("{BRANCH}:{SCENE}")).len(),
-        SCENE_BYTES
-    );
-    assert_eq!(show(&world, "main"), main_before);
+    assert_eq!(show(world, &format!("{BRANCH}:{SCENE}")).len(), SCENE_BYTES);
+    assert_eq!(show(world, "main"), main_before);
     let pushes: Vec<String> = world
         .cli
         .commands
@@ -158,8 +176,8 @@ fn gh_227_the_scene_is_restored_the_test_rerun_and_the_cap_rearmed() {
             "{push}"
         );
     }
-    assert!(called(&world, "bug-rearm"), "{:?}", calls(&world));
-    assert!(called(&world, "to-test"), "{:?}", calls(&world));
+    assert!(called(world, "bug-rearm"), "{:?}", calls(world));
+    assert!(called(world, "to-test"), "{:?}", calls(world));
     assert_eq!(world.engine.get(KEY).unwrap().status, FlowStatus::Aborted);
 }
 

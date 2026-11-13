@@ -1,3 +1,7 @@
+[build]
+# Caps rustc parallelism so two sessions building at once leave the machine usable (16 cores).
+jobs = 8
+
 [env]
 # Uncapped parallelism made the suite ~3.5x slower on Windows (process spawns, sockets, Defender).
 # `force = false` keeps an explicit RUST_TEST_THREADS from the shell winning.

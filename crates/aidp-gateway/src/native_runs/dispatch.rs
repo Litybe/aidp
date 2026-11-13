@@ -23,11 +23,9 @@ use crate::models::WorkspaceRequest;
 use crate::sessions::{Launch, Origin, SessionRecord, StartRequest};
 use aidp_agents::{resolve_provider, ProvidersConfig, ResolveRequest};
 use aidp_core::cost::{self, ModelTier, PriceTable};
-use aidp_core::git::GitCli;
 use aidp_core::models::constants::autonomy::AUTONOMY_PREAMBLE_V1;
 use aidp_core::models::prompt_form::PromptForm;
 use aidp_core::pipeline::{self, Pipeline};
-use aidp_core::process_runner::OsProcessRunner;
 use aidp_core::prompt::build_prompt_text_with_form;
 use aidp_core::run::{ComplexityBucket, StageUsage, UsageSource};
 use aidp_core::scope;
@@ -249,7 +247,7 @@ impl Dispatcher {
         let exempt = scope_guard::run_dir_exemption(&workspace, &view.run_dir);
         let baseline = job
             .guard_scope
-            .then(|| scope_guard::snapshot(&workspace, &GitCli, exempt.as_deref()));
+            .then(|| scope_guard::snapshot(&workspace, self.deps.git.as_ref(), exempt.as_deref()));
         std::fs::create_dir_all(&job.reply_dir)?;
         let mut run = if external {
             self.run_external(job)?
@@ -406,7 +404,13 @@ impl Dispatcher {
         workspace: &Path,
     ) -> anyhow::Result<Option<String>> {
         let rules = scope::rules_for(&self.store.state(), &job.stage.name)?;
-        let verdict = scope_guard::verify(baseline, &rules, workspace, &GitCli, &OsProcessRunner)?;
+        let verdict = scope_guard::verify(
+            baseline,
+            &rules,
+            workspace,
+            self.deps.git.as_ref(),
+            self.deps.runner.as_ref(),
+        )?;
         if verdict.is_clean() {
             return Ok(None);
         }
