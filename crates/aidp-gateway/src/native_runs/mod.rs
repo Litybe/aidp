@@ -47,10 +47,11 @@ use crate::sync::lock;
 use crate::threads;
 use aidp_core::clock::SystemClock;
 use aidp_core::cost::PriceTable;
-use aidp_core::git::GitCli;
+use aidp_core::git::{Git, GitCli};
 use aidp_core::id::SystemIdGen;
 use aidp_core::models::run_state::RunPorts;
 use aidp_core::pipeline::{self, Pipeline};
+use aidp_core::process_runner::{OsProcessRunner, ProcessRunner};
 use aidp_core::run::{self, INPUT_JIRA_KEY, INPUT_TARGET};
 use aidp_core::vault::Vault;
 use exec_loop::{run_lock_key, RunExec};
@@ -192,6 +193,10 @@ pub struct NativeDeps {
     pub poll_interval: Duration,
     /// The daemon's embedding model, lent to the knowledge blocks; without it they are lexical.
     pub model: Option<Arc<ModelService>>,
+    /// Runs the `git` commands of the scope guard and of the task isolation.
+    pub runner: Arc<dyn ProcessRunner>,
+    /// Reads the repository of a run when it starts and when a stage ends.
+    pub git: Arc<dyn Git>,
 }
 
 impl NativeDeps {
@@ -216,7 +221,16 @@ impl NativeDeps {
             skill_root,
             poll_interval: DEFAULT_POLL,
             model: None,
+            runner: Arc::new(OsProcessRunner),
+            git: Arc::new(GitCli),
         }
+    }
+
+    /// Replaces the process runner and the git adapter the runs use.
+    pub fn with_git(mut self, runner: Arc<dyn ProcessRunner>, git: Arc<dyn Git>) -> Self {
+        self.runner = runner;
+        self.git = git;
+        self
     }
 
     /// Lends the daemon's embedding model to the knowledge blocks of the runs.
@@ -368,12 +382,12 @@ impl NativeRunManager {
         let vault = run_vault(&request, &workspace, self.deps.default_vault.as_deref());
         let clock = SystemClock;
         let ids = SystemIdGen;
-        let git = GitCli;
+        let git = self.deps.git.clone();
         let prices = PriceTable::from_env_or_embedded();
         let ports = RunPorts {
             clock: &clock,
             ids: &ids,
-            git: &git,
+            git: git.as_ref(),
             prices: &prices,
         };
         let mut state = run::init_with_mode(

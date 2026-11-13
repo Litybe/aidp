@@ -8,6 +8,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use crate::fake_git::FakeGit;
 use crate::native_runs::fake_provider::{Behaviour, Call, ScriptedProvider, PROVIDER_ID};
 use aidp_agents::ProvidersConfig;
 use aidp_core::clock::SystemClock;
@@ -87,6 +88,15 @@ pub(crate) struct FakeAidp {
     pub(crate) comments: Mutex<Vec<String>>,
     /// Every `git` and `gh` command, program first.
     pub(crate) commands: Mutex<Vec<Vec<String>>>,
+    /// Answers every `git` command from memory when set; real `git` otherwise.
+    pub(crate) git: Option<Arc<FakeGit>>,
+}
+
+/// Which `git` the world runs on.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum GitMode {
+    Fake,
+    Real,
 }
 
 struct Finished {
@@ -121,7 +131,10 @@ impl ProcessRunner for FakeAidp {
         match spec.program.as_str() {
             "git" => {
                 self.commands.lock().unwrap().push(line);
-                OsProcessRunner.output(spec)
+                match &self.git {
+                    Some(git) => git.output(spec),
+                    None => OsProcessRunner.output(spec),
+                }
             }
             "gh" => {
                 self.commands.lock().unwrap().push(line);
@@ -176,6 +189,7 @@ pub(crate) struct World {
     pub(crate) harness_origin: PathBuf,
     pub(crate) workspace: PathBuf,
     pub(crate) origin: PathBuf,
+    pub(crate) git: Option<Arc<FakeGit>>,
     #[allow(dead_code)]
     pub(crate) config: Arc<Mutex<DoctorConfig>>,
     #[allow(dead_code)]
@@ -237,8 +251,39 @@ fn world_failing(tag: &str, investigation: Investigation, failures: usize) -> Wo
     world_full(tag, investigation, failures, MALFORMED_REPLY, &[])
 }
 
-/// A world whose rejected replies say `failure_reply`, with `seed` incidents already on disk.
+/// A world on the in-memory `git` whose rejected replies say `failure_reply`, with `seed`
+/// incidents already on disk.
 pub(crate) fn world_full(
+    tag: &str,
+    investigation: Investigation,
+    failures: usize,
+    failure_reply: &'static str,
+    seed: &[DoctorIncident],
+) -> World {
+    world_on(
+        GitMode::Fake,
+        tag,
+        investigation,
+        failures,
+        failure_reply,
+        seed,
+    )
+}
+
+/// The same world on the real `git` binary.
+pub(crate) fn world_on_real_git(tag: &str, investigation: Investigation, failures: usize) -> World {
+    world_on(
+        GitMode::Real,
+        tag,
+        investigation,
+        failures,
+        MALFORMED_REPLY,
+        &[],
+    )
+}
+
+fn world_on(
+    mode: GitMode,
     tag: &str,
     investigation: Investigation,
     failures: usize,
@@ -254,7 +299,16 @@ pub(crate) fn world_full(
         std::fs::create_dir_all(directory).unwrap();
     }
     let origin = root.child("origin.git");
-    GAME_FIXTURE.copy_with_origin_into(&workspace, &origin);
+    let fake = (mode == GitMode::Fake).then(|| Arc::new(FakeGit::new()));
+    match &fake {
+        Some(git) => git.seed(
+            &workspace,
+            Some(&origin),
+            MAIN_BRANCH,
+            &[(README_FILE, README_CONTENTS)],
+        ),
+        None => GAME_FIXTURE.copy_with_origin_into(&workspace, &origin),
+    }
     let env = EnvGuard::with(&[
         ("AIDP_VAULT", Some(vault.to_str().unwrap())),
         ("HOME", Some(home.to_str().unwrap())),
@@ -268,17 +322,17 @@ pub(crate) fn world_full(
     let provider = ScriptedProvider::new(None, move |call| {
         behaviour(call, &investigation, &implement_failures, failure_reply)
     });
-    let sessions = SessionManager::load_with_runner(
-        &state_dir,
-        bus.clone(),
-        projects.clone(),
-        Arc::new(OsProcessRunner),
-    )
-    .with_provider(PROVIDER_ID, provider.clone())
-    .with_providers_config(ProvidersConfig {
-        default: Some(PROVIDER_ID.to_string()),
-        ..ProvidersConfig::default()
-    });
+    let session_runner: Arc<dyn ProcessRunner> = match &fake {
+        Some(git) => git.clone(),
+        None => Arc::new(OsProcessRunner),
+    };
+    let sessions =
+        SessionManager::load_with_runner(&state_dir, bus.clone(), projects.clone(), session_runner)
+            .with_provider(PROVIDER_ID, provider.clone())
+            .with_providers_config(ProvidersConfig {
+                default: Some(PROVIDER_ID.to_string()),
+                ..ProvidersConfig::default()
+            });
     let skill_root = Path::new(env!("CARGO_MANIFEST_DIR")).join(SKILL_ROOT);
     let mut deps = NativeDeps::new(
         sessions.clone(),
@@ -290,9 +344,15 @@ pub(crate) fn world_full(
         Some(skill_root),
     );
     deps.poll_interval = Duration::from_millis(10);
+    if let Some(git) = &fake {
+        deps = deps.with_git(git.clone(), git.clone());
+    }
     let native = NativeRunManager::new(deps);
     let launcher = Arc::new(RunLauncher::new(sessions.clone(), native.clone()));
-    let cli = Arc::new(FakeAidp::default());
+    let cli = Arc::new(FakeAidp {
+        git: fake.clone(),
+        ..FakeAidp::default()
+    });
     let ports = Ports {
         sessions: Arc::new(
             ManagerSessions::new(sessions.clone(), projects.clone(), launcher)
@@ -315,7 +375,15 @@ pub(crate) fn world_full(
     );
     let harness_origin = root.child("harness-origin.git");
     let harness = root.child("harness");
-    HARNESS_FIXTURE.copy_with_origin_into(&harness, &harness_origin);
+    match &fake {
+        Some(git) => git.seed(
+            &harness,
+            Some(&harness_origin),
+            MAIN_BRANCH,
+            &[(HARNESS_FILE, HARNESS_CONTENTS)],
+        ),
+        None => HARNESS_FIXTURE.copy_with_origin_into(&harness, &harness_origin),
+    }
     let clone = harness.clone();
     let harness_repos: HarnessRepos =
         Arc::new(move |repo: &str| (repo == HARNESS_REPO).then(|| clone.clone()));
@@ -356,6 +424,7 @@ pub(crate) fn world_full(
         harness_origin,
         workspace,
         origin,
+        git: fake,
         config,
         extra_runs,
         root,
@@ -430,6 +499,39 @@ fn diagnosis_of(category: &str, action: &str, confidence: f64, patch: Option<&st
 }
 
 impl World {
+    /// Runs `git args` in `directory` on the git of the world, failing the test on an error.
+    pub(crate) fn run_git(&self, directory: &Path, arguments: &[&str]) {
+        match &self.git {
+            Some(git) => {
+                git.run(directory, arguments).unwrap();
+            }
+            None => run_git(directory, arguments),
+        }
+    }
+
+    /// The bytes of `revision:path` (or the commit text of `revision`) in the bare repository `origin`.
+    pub(crate) fn show_in(&self, origin: &Path, spec: &str) -> Vec<u8> {
+        match &self.git {
+            Some(git) => git.show(origin, spec),
+            None => {
+                let output = Command::new("git")
+                    .args(["--git-dir", origin.to_str().unwrap(), "show", spec])
+                    .output()
+                    .unwrap();
+                assert!(output.status.success(), "git show {spec}");
+                output.stdout
+            }
+        }
+    }
+
+    /// The branches of the bare repository `origin`, one per line.
+    pub(crate) fn branches_of(&self, origin: &Path) -> String {
+        match &self.git {
+            Some(git) => git.run(origin, &["branch", "--list"]).unwrap(),
+            None => branches(origin),
+        }
+    }
+
     pub(crate) fn start(&self) {
         self.start_def(KEY, FLOW);
     }
@@ -920,24 +1022,40 @@ fn branches(origin: &Path) -> String {
     String::from_utf8_lossy(&output.stdout).to_string()
 }
 
+fn harness_pr_diagnosis() -> Investigation {
+    Investigation::Diagnosis(diagnosis_of(
+        "harness_defect",
+        DoctorAction::OpenHarnessPr.as_str(),
+        0.8,
+        Some(GOOD_PATCH),
+    ))
+}
+
 #[test]
 fn a_harness_patch_becomes_a_pull_request_never_a_merge() {
-    let world = world(
-        "doctor-harness-pr",
-        Investigation::Diagnosis(diagnosis_of(
-            "harness_defect",
-            DoctorAction::OpenHarnessPr.as_str(),
-            0.8,
-            Some(GOOD_PATCH),
-        )),
+    let world = world("doctor-harness-pr", harness_pr_diagnosis());
+    a_harness_patch_opens_a_pull_request(&world);
+    assert!(world.git.as_ref().unwrap().unsupported().is_empty());
+}
+
+#[test]
+fn a_harness_patch_becomes_a_pull_request_never_a_merge_on_real_git() {
+    let world = world_on_real_git(
+        "doctor-harness-pr-real",
+        harness_pr_diagnosis(),
+        SESSIONS_OF_A_REJECTED_REPLY,
     );
+    a_harness_patch_opens_a_pull_request(&world);
+}
+
+fn a_harness_patch_opens_a_pull_request(world: &World) {
     world.start();
     world.wait_flow(FlowStatus::Failed);
 
     let closed = world.investigate();
     assert_eq!(closed.status, DoctorIncidentStatus::Fixed, "{closed:?}");
     assert_eq!(closed.pr_url.as_deref(), Some(PR_URL));
-    let remote = branches(&world.harness_origin);
+    let remote = world.branches_of(&world.harness_origin);
     assert!(remote.contains("doctor/GH-1_implement_0"), "{remote}");
     assert!(!remote.contains("gamedev"), "{remote}");
     let commands = world.cli.commands.lock().unwrap().clone();
@@ -964,13 +1082,12 @@ fn a_harness_patch_becomes_a_pull_request_never_a_merge() {
             .all(|line| !line.starts_with("gh pr merge") && !line.starts_with("git merge ")),
         "{joined:?}"
     );
-    let main = Command::new("git")
-        .args(["show", "main:crates/demo/lib.txt"])
-        .current_dir(&world.harness_origin)
-        .output()
-        .unwrap();
+    let main = world.show_in(
+        &world.harness_origin,
+        &format!("{MAIN_BRANCH}:{HARNESS_FILE}"),
+    );
     assert_eq!(
-        String::from_utf8_lossy(&main.stdout).trim(),
+        String::from_utf8_lossy(&main).trim(),
         "one",
         "main is untouched"
     );
@@ -998,7 +1115,7 @@ fn a_harness_patch_that_does_not_apply_is_noted_then_a_human() {
     );
     assert!(closed.note.unwrap().contains("does not apply"));
     assert!(closed.pr_url.is_none());
-    assert!(!branches(&world.harness_origin).contains("doctor/"));
+    assert!(!world.branches_of(&world.harness_origin).contains("doctor/"));
     let commands = world.cli.commands.lock().unwrap().clone();
     assert!(
         commands.iter().all(|line| line[0] != "gh"),
@@ -1007,4 +1124,15 @@ fn a_harness_patch_that_does_not_apply_is_noted_then_a_human() {
     assert!(commands
         .iter()
         .all(|line| !(line[0] == "git" && line.contains(&"push".to_string()))));
+}
+
+impl Drop for World {
+    fn drop(&mut self) {
+        if let Some(git) = &self.git {
+            let unsupported = git.unsupported();
+            if !std::thread::panicking() {
+                assert!(unsupported.is_empty(), "fake git: {unsupported:?}");
+            }
+        }
+    }
 }

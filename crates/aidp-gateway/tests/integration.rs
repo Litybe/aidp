@@ -8,6 +8,7 @@ mod crypto_template_primitives;
 mod dispatcher_pause;
 mod doctor_converge;
 mod doctor_flow;
+mod fake_git;
 mod flow_shutdown;
 mod game_code_flow;
 mod http_contract;
