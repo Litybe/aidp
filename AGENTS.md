@@ -38,7 +38,7 @@ Run from the repository root.
   `tests/integration.rs`), never in `tests/unit/`. The `it_` prefix only marks existing
   unit-mounted tests not yet moved there.
 - No test reads the real skill, the real vault or a file outside the repository:
-  `workspace_boundary_gate` fails otherwise. Tests take templates from `aidp_testkit::fixtures`
+  `repository_sources_respect_every_gate` fails otherwise. Tests take templates from `aidp_testkit::fixtures`
   (§5).
 - Before declaring done: `cargo fmt --all -- --check`,
   `cargo clippy --workspace --all-targets --all-features -- -D warnings`,

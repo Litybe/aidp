@@ -182,6 +182,9 @@ What makes it fast, and what must stay true:
 - **The fake `gh` of the `aidp gh` tests** is compiled once per source hash into `$CARGO_TARGET_TMPDIR/gh_shim_cache`, under a per-hash file lock, then copied into each test. It used to be rustc once per test (about 30 s each). Cold cache: 3 compiles; warm: the 24 `it_gh_` tests run in under 2 s.
 - On a network that intercepts TLS, `cargo install cargo-nextest` (or `cargo-hakari`) can fail with `CRYPT_E_NO_REVOCATION_CHECK`; the one-off workaround is `CARGO_HTTP_CHECK_REVOKE=false` on that command only.
 - Tests that loop over templates run them on a bounded `std::thread::scope` pool: at most 4 workers, one temp workspace each, no environment mutation inside a worker. Failures are collected and reported in a single panic that lists every failing template.
+- **Source rules live in one test**, `repository_sources_respect_every_gate`, which walks the repository once, reads files in parallel and reports every violation as `[rule] path:line`. Add a new rule there, not a new scanning test.
+- **Tests that need a git repository use `aidp_testkit::GitFixture`**: the template is built once under `target/aidp-git-fixture/` and copied per test, instead of running `git init`, `commit` and `push` in each test.
+- **Never call `wait_for` while a run sits at a gate**: wait for the `WaitingGate` status instead.
 - No cross-test cache is shared between these tests, because nextest runs each test in its own process. `rayon` is deliberately not a dependency.
 
 ## 5. Test levels
@@ -197,7 +200,7 @@ What makes it fast, and what must stay true:
 Tests reach `fixtures/` through `aidp_testkit::fixtures` (`skill_root()`, `templates_dir()`,
 `template(id)`, `mocks_dir()`, `template_inputs()`), never through a relative path of their own.
 
-`crates/aidp-core/tests/workspace_boundary_gate.rs` enforces this: every `include_str!`,
+`repository_sources_respect_every_gate` (`crates/aidp-core/tests/repository_source_gates.rs`) enforces this: every `include_str!`,
 `include_bytes!`, `#[path]` and `CARGO_MANIFEST_DIR` path must stay inside the repository, and none
 may name `templates`, `agents`, `commands`, `hooks`, `SKILL.md`, `USER-GUIDE.md` or `benchmark` at
 the repository root.

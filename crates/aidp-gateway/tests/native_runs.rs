@@ -6,7 +6,6 @@ pub mod fake_provider;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -27,7 +26,7 @@ use aidp_gateway::models::LocalLock;
 use aidp_gateway::native_runs::{http_routes, NativeDeps, NativeRunManager};
 use aidp_gateway::projects::Projects;
 use aidp_gateway::sessions::SessionManager;
-use aidp_testkit::{EnvGuard, TempWorkspace};
+use aidp_testkit::{EnvGuard, GitFixture, TempWorkspace};
 use fake_provider::{Behaviour, Call, Refusal, ScriptedProvider, BLOCKING_SIGNAL, PROVIDER_ID};
 use serde_json::Value;
 use tiny_http::Method;
@@ -90,6 +89,18 @@ const README: &str = "README.md";
 const FORBIDDEN_FILE: &str = "forbidden.txt";
 const ALLOWED_FILE: &str = "allowed/ok.txt";
 const KEEP_FILE: &str = "allowed/keep.txt";
+const KEEP_CONTENTS: &str = "keep
+";
+const NATIVE_IDENTITY_NAME: &str = "native";
+const NATIVE_IDENTITY_EMAIL: &str = "native@example.test";
+const WORKSPACE_FIXTURE: GitFixture<'static> = GitFixture {
+    files: &[(README, ORIGINAL_README), (KEEP_FILE, KEEP_CONTENTS)],
+    empty_directories: &[],
+    branch: None,
+    user_name: NATIVE_IDENTITY_NAME,
+    user_email: NATIVE_IDENTITY_EMAIL,
+    autocrlf_off: true,
+};
 const SETTLE: Duration = Duration::from_secs(45);
 const POLL: Duration = Duration::from_millis(20);
 const RUN_POLL: Duration = Duration::from_millis(10);
@@ -133,7 +144,12 @@ fn client_request_id_reuses_one_run_concurrently_after_restart_and_completion() 
     assert!(run_ids.iter().all(|run_id| run_id == &run_ids[0]));
     assert_eq!(harness.stack.manager.list().len(), 1);
     let run_id = &run_ids[0];
-    assert_eq!(harness.finish(run_id).status, NativeRunStatus::WaitingGate);
+    assert_eq!(
+        harness
+            .wait_for_status(run_id, NativeRunStatus::WaitingGate)
+            .status,
+        NativeRunStatus::WaitingGate
+    );
     harness.stack.manager.approve(run_id, GATE_STAGE).unwrap();
     assert_eq!(harness.finish(run_id).status, NativeRunStatus::Done);
     let restarted = harness.restarted_stack();
@@ -187,29 +203,8 @@ struct Harness {
     _env: EnvGuard,
 }
 
-fn run_git(directory: &Path, arguments: &[&str]) {
-    let output = Command::new("git")
-        .args(arguments)
-        .current_dir(directory)
-        .output()
-        .expect("git runs");
-    assert!(
-        output.status.success(),
-        "git {arguments:?} failed: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-}
-
 fn init_workspace(directory: &Path) {
-    std::fs::create_dir_all(directory.join("allowed")).unwrap();
-    std::fs::write(directory.join(README), ORIGINAL_README).unwrap();
-    std::fs::write(directory.join(KEEP_FILE), "keep\n").unwrap();
-    run_git(directory, &["init", "-q"]);
-    run_git(directory, &["config", "user.email", "native@example.test"]);
-    run_git(directory, &["config", "user.name", "native"]);
-    run_git(directory, &["config", "core.autocrlf", "false"]);
-    run_git(directory, &["add", "."]);
-    run_git(directory, &["commit", "-q", "-m", "initial"]);
+    WORKSPACE_FIXTURE.copy_into(directory);
 }
 
 fn fixture(name: &str) -> PathBuf {

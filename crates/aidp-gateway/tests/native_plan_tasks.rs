@@ -24,7 +24,7 @@ use aidp_gateway::models::LocalLock;
 use aidp_gateway::native_runs::{NativeDeps, NativeRunManager};
 use aidp_gateway::projects::Projects;
 use aidp_gateway::sessions::SessionManager;
-use aidp_testkit::{EnvGuard, TempWorkspace};
+use aidp_testkit::{EnvGuard, GitFixture, TempWorkspace};
 use serde::Serialize;
 use serde_json::Value;
 
@@ -70,17 +70,19 @@ const SERIALIZED_HEADING: &str = "Serialized with";
 const SERIALIZED_LINE: &str = "`T3` runs before `T4`";
 const SHARED_SECTION: &str = "Shared files to update now";
 const FAILED_PAUSE_REASON: &str = "task `implementation#T2` failed";
-const SRC_DIR: &str = "src";
 const KEEP_CONTENT: &str = "keep\n";
+const NATIVE_IDENTITY_NAME: &str = "native";
+const NATIVE_IDENTITY_EMAIL: &str = "native@example.test";
+const WORKSPACE_FIXTURE: GitFixture<'static> = GitFixture {
+    files: &[(README, ORIGINAL_README), (KEEP_FILE, KEEP_CONTENT)],
+    empty_directories: &[],
+    branch: None,
+    user_name: NATIVE_IDENTITY_NAME,
+    user_email: NATIVE_IDENTITY_EMAIL,
+    autocrlf_off: true,
+};
 const GIT: &str = "git";
-const GIT_INIT: [&str; 2] = ["init", "-q"];
-const GIT_CONFIG: &str = "config";
-const GIT_COMMIT: [&str; 4] = ["commit", "-q", "-m", "initial"];
-const GIT_ADD: [&str; 2] = ["add", "."];
 const GIT_STATUS: [&str; 3] = ["status", "--porcelain", "-uall"];
-const GIT_EMAIL: [&str; 2] = ["user.email", "native@example.test"];
-const GIT_NAME: [&str; 2] = ["user.name", "native"];
-const GIT_AUTOCRLF: [&str; 2] = ["core.autocrlf", "false"];
 const VAULT_DIR: &str = "vault";
 const HOME_DIR: &str = "home";
 const STATE_DIR: &str = "state";
@@ -174,29 +176,8 @@ fn row(stage: &str, id: &str) -> String {
     format!("{stage}{ROW_SEPARATOR}{id}")
 }
 
-fn run_git(directory: &Path, arguments: &[&str]) {
-    let output = Command::new(GIT)
-        .args(arguments)
-        .current_dir(directory)
-        .output()
-        .expect("git runs");
-    assert!(
-        output.status.success(),
-        "git {arguments:?} failed: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-}
-
 fn init_workspace(directory: &Path) {
-    std::fs::create_dir_all(directory.join(SRC_DIR)).unwrap();
-    std::fs::write(directory.join(README), ORIGINAL_README).unwrap();
-    std::fs::write(directory.join(KEEP_FILE), KEEP_CONTENT).unwrap();
-    run_git(directory, &GIT_INIT);
-    for [key, value] in [GIT_EMAIL, GIT_NAME, GIT_AUTOCRLF] {
-        run_git(directory, &[GIT_CONFIG, key, value]);
-    }
-    run_git(directory, &GIT_ADD);
-    run_git(directory, &GIT_COMMIT);
+    WORKSPACE_FIXTURE.copy_into(directory);
 }
 
 impl Harness {

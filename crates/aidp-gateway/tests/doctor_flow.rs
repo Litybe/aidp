@@ -34,7 +34,7 @@ use aidp_gateway::models::{DoctorCandidate, DoctorIncident, LocalLock, TicketFlo
 use aidp_gateway::native_runs::{NativeDeps, NativeRunManager};
 use aidp_gateway::projects::Projects;
 use aidp_gateway::sessions::SessionManager;
-use aidp_testkit::{EnvGuard, TempWorkspace};
+use aidp_testkit::{EnvGuard, GitFixture, TempWorkspace};
 use aidp_tickets::config::DoctorConfig;
 use serde_json::{json, Value};
 use tiny_http::Method;
@@ -52,6 +52,32 @@ const CAUSE: &str = "the implement reply was rejected twice by a transient provi
 const MCP_TIMEOUT_REPLY: &str = "MCP server unity-mcp: connection timed out (CONNECT_TIMEOUT)";
 const HARNESS_REPO: &str = "Litybe/aidp";
 const HARNESS_FILE: &str = "crates/demo/lib.txt";
+const MAIN_BRANCH: &str = "main";
+const README_FILE: &str = "README.md";
+const README_CONTENTS: &str = "game
+";
+const HARNESS_CONTENTS: &str = "one
+";
+const GAME_IDENTITY_NAME: &str = "game";
+const GAME_IDENTITY_EMAIL: &str = "game@example.test";
+const HARNESS_IDENTITY_NAME: &str = "h";
+const HARNESS_IDENTITY_EMAIL: &str = "h@example.test";
+const GAME_FIXTURE: GitFixture<'static> = GitFixture {
+    files: &[(README_FILE, README_CONTENTS)],
+    empty_directories: &[],
+    branch: Some(MAIN_BRANCH),
+    user_name: GAME_IDENTITY_NAME,
+    user_email: GAME_IDENTITY_EMAIL,
+    autocrlf_off: true,
+};
+const HARNESS_FIXTURE: GitFixture<'static> = GitFixture {
+    files: &[(HARNESS_FILE, HARNESS_CONTENTS)],
+    empty_directories: &[],
+    branch: Some(MAIN_BRANCH),
+    user_name: HARNESS_IDENTITY_NAME,
+    user_email: HARNESS_IDENTITY_EMAIL,
+    autocrlf_off: true,
+};
 pub(crate) const PR_URL: &str = "https://github.test/Litybe/aidp/pull/7";
 
 /// The `aidp` verbs the doctor spawns: every call is recorded and answered `{}`.
@@ -227,21 +253,8 @@ pub(crate) fn world_full(
     for directory in [&vault, &home, &state_dir, &workspace] {
         std::fs::create_dir_all(directory).unwrap();
     }
-    std::fs::write(workspace.join("README.md"), "game\n").unwrap();
-    run_git(&workspace, &["init", "-q", "-b", "main"]);
-    run_git(&workspace, &["config", "user.email", "game@example.test"]);
-    run_git(&workspace, &["config", "user.name", "game"]);
-    run_git(&workspace, &["add", "."]);
-    run_git(&workspace, &["commit", "-q", "-m", "initial"]);
     let origin = root.child("origin.git");
-    std::fs::create_dir_all(&origin).unwrap();
-    run_git(&origin, &["init", "-q", "--bare", "-b", "main"]);
-    run_git(
-        &workspace,
-        &["remote", "add", "origin", origin.to_str().unwrap()],
-    );
-    run_git(&workspace, &["push", "-q", "-u", "origin", "main"]);
-    run_git(&workspace, &["remote", "set-head", "origin", "main"]);
+    GAME_FIXTURE.copy_with_origin_into(&workspace, &origin);
     let env = EnvGuard::with(&[
         ("AIDP_VAULT", Some(vault.to_str().unwrap())),
         ("HOME", Some(home.to_str().unwrap())),
@@ -302,22 +315,7 @@ pub(crate) fn world_full(
     );
     let harness_origin = root.child("harness-origin.git");
     let harness = root.child("harness");
-    for directory in [&harness_origin, &harness] {
-        std::fs::create_dir_all(directory).unwrap();
-    }
-    std::fs::create_dir_all(harness.join("crates/demo")).unwrap();
-    std::fs::write(harness.join(HARNESS_FILE), "one\n").unwrap();
-    run_git(&harness_origin, &["init", "-q", "--bare", "-b", "main"]);
-    run_git(&harness, &["init", "-q", "-b", "main"]);
-    run_git(&harness, &["config", "user.email", "h@example.test"]);
-    run_git(&harness, &["config", "user.name", "h"]);
-    run_git(&harness, &["add", "."]);
-    run_git(&harness, &["commit", "-q", "-m", "initial"]);
-    run_git(
-        &harness,
-        &["remote", "add", "origin", harness_origin.to_str().unwrap()],
-    );
-    run_git(&harness, &["push", "-q", "-u", "origin", "main"]);
+    HARNESS_FIXTURE.copy_with_origin_into(&harness, &harness_origin);
     let clone = harness.clone();
     let harness_repos: HarnessRepos =
         Arc::new(move |repo: &str| (repo == HARNESS_REPO).then(|| clone.clone()));
